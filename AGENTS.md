@@ -49,6 +49,10 @@ MCP servers reach the agent from three sources: local stdio servers in `mcp.conf
 
 ## Project Structure
 
+This repo is a pnpm workspace monorepo. Each template under `templates/<name>/` and the publishable libraries under `packages/<name>/` are individual pnpm packages.
+
+### Inside a template (and most apps)
+
 ```
 app/                   # React frontend
   root.tsx             # HTML shell + global providers
@@ -63,6 +67,42 @@ actions/               # App operations (agent tools + auto-mounted HTTP endpoin
 .generated/            # Auto-generated types (action-types.d.ts) — gitignored
 .agents/skills/        # Agent skills — detailed guidance for patterns
 ```
+
+### Monorepo layout
+
+```
+packages/
+  core/                # @agent-native/core — framework runtime (actions, polling, auth, agent chat, run-manager)
+  dispatch/            # @agent-native/dispatch — workspace integrations control plane
+  scheduling/          # @agent-native/scheduling — scheduling primitives (used by calendar)
+  pinpoint/            # @agent-native/pinpoint — slide/pointer primitives (used by slides)
+  migrate/             # @agent-native/migrate — additive migration runner
+  shared-app-config/   # Single source of truth for first-party template metadata
+  docs/                # @agent-native/docs — public documentation site
+  frame/               # Shared chrome (sidebar, composer, etc.)
+  code-agents-ui/      # Shared UI for Agent-Native Code surfaces
+  desktop-app/         # Electron desktop shell (electron-builder publishes binaries)
+  mobile-app/          # Mobile shell
+
+templates/             # First-party apps. Public: calendar, content, slides, videos,
+                       #   clips, analytics, mail, dispatch, forms, design, brain.
+                       # Hidden but scaffoldable: scheduling, calls, meeting-notes, voice,
+                       #   code, migration, issues, recruiting, images, macros, starter.
+
+.agents/skills/        # Source of truth for agent skills (symlinked from .claude/skills/)
+.agents/commands/      # User-invocable slash commands
+.changeset/            # Pending changesets for the next npm release
+scripts/               # Build / dev / QA / guard scripts (run via `pnpm <name>`)
+```
+
+### Key scripts
+
+- `pnpm dev:all` / `pnpm dev:lazy` — run every template at once (or lazily on first request).
+- `pnpm dev:lazy:desktop` — same, wired up to the Electron shell.
+- `pnpm typecheck` / `pnpm fmt` / `pnpm test` — workspace-wide.
+- `pnpm prep` — runs `fmt`, `typecheck`, `test`, and every `guard:*` concurrently. Run this before pushing.
+- `pnpm guards` — runs all static guards (template-list, drizzle-push, unscoped queries, env credentials, env mutation, localhost fallback, google-auth redirects, db-tool scoping, generated artifacts, extension-no-public).
+- `pnpm changeset` — open the interactive changeset picker for any PR touching a publishable package.
 
 ## Skills
 
@@ -99,7 +139,14 @@ Agent skills in `.agents/skills/` provide detailed guidance. Read the relevant s
 | `shadcn-ui`            | shadcn/ui components, CLI, composition, theming, and registries |
 | `create-skill`         | Adding new skills for the agent                                 |
 | `extensions`           | Creating, editing, and managing sandboxed mini-app extensions   |
+| `extension-points`     | Rendering extensions inside other apps via named UI slots       |
 | `capture-learnings`    | Recording corrections and patterns                              |
+| `babysit-pr`           | Monitor a PR, fix feedback and CI failures until green          |
+| `ship`                 | Commit, run prep, push, check CI, and address PR feedback       |
+| `ship-desktop`         | Build, install, and launch the desktop app locally              |
+| `qa`                   | Autonomous Playwright QA sweep across templates                 |
+| `new-branch`           | User-invoked only — stash, update main, create fresh branch     |
+| `mvp-followup`         | What to do next after a feature pass without bloat              |
 
 ## All-Agent Support
 
@@ -164,7 +211,7 @@ Run `agent-native setup-agents` to create all symlinks (done automatically by `a
   for a new UI.
 - **Template UX stays clean, minimal, and intuitive** — this is a high priority across all templates. Treat every important screen as a focused working surface, not a place to accumulate fixes as extra visible controls. When acting on feedback, especially broad prompts like "fix what you agree with," judge each suggestion through visual hierarchy, user intent, and progressive disclosure before changing the UI. Prefer clarifying primary actions, reducing competing elements, tightening layout, and moving secondary or rare actions into menus, sheets, tabs, or advanced sections. Do not solve feedback by adding more buttons, toolbars, badges, panels, helper text, filters, or always-visible options to important screens unless that added surface is genuinely the clearest path for the main workflow. If a fix would make a core screen busier, look for a cleaner interaction model or ask before adding clutter.
 - **Progressive disclosure by default** — UIs should reveal complexity gradually, not dump every option on screen at once. Lead with the primary action and most-used info; hide the rest behind reveals. Concrete patterns: shadcn `Collapsible` / `Accordion` for grouped settings, `Popover` for secondary actions (share, filters, color pickers, "more options"), `DropdownMenu` overflow (`⋯`) for tertiary toolbar items, `Sheet` / side drawer for full-detail editing of a row, `HoverCard` or expand-on-click for card details, "Show advanced" toggles for optional form fields, tabs to split a long surface into focused sections. Anti-patterns we keep regressing into: a settings page that dumps 20 fields in one flat column, a form that shows every optional field upfront, a toolbar where every button has equal visual weight, a card that prints every metadata field instead of summary + expandable details, a dialog the size of the screen because the form has 15 fields, an empty state that scaffolds the full UI instead of one clear CTA. Rule of thumb: if a first-time user wouldn't need it in the first 5 seconds, collapse it. When in doubt, default to hiding — it's much cheaper to expose later than to declutter a busy screen.
-- **Public template list is a strict allow-list — never widen it without flipping `hidden:false` first.** The single source of truth is `packages/shared-app-config/templates.ts` (entries with `hidden: false`). Today the public allow-list is exactly: **calendar, content, slides, videos, clips, analytics, mail, dispatch, forms, design, brain** — plus `starter` for the CLI only. The featured/default set is narrower: **calendar, content, slides, clips, analytics, mail, dispatch, forms, design, brain** — plus `starter` for the CLI/default-app fallback. Videos is scaffoldable by explicit slug, but it is not featured on the homepage, `/templates`, docs sidebar, CLI picker, or desktop/mobile default tabs. Hidden templates (calls, meeting-notes, voice, scheduling, issues, recruiting, images, macros) MUST NOT appear on the homepage, in the docs sidebar, in docs pages, or in the CLI catalog. Surfaces that hardcode their own list — `packages/docs/app/components/TemplateCard.tsx`, `packages/docs/app/components/docsNavItems.ts`, docs pages `packages/core/docs/content/template-*.md`, and the CLI duplicate `packages/core/src/cli/templates-meta.ts` — must only reference allow-listed slugs. To make a hidden template public: flip `hidden: false` in `packages/shared-app-config/templates.ts` AND `packages/core/src/cli/templates-meta.ts`, then add it to the surfaces above. To hide one: flip `hidden: true` in both files; the guard will then point you at every surface that still mentions it. `scripts/guard-template-list.mjs` (CI + `pnpm prep`) enforces this — adding a slug that isn't in the allow-list will fail the build. _This guard exists because agents kept re-adding the hidden templates (calls, meeting-notes, voice, scheduling, issues, recruiting, images, macros) to the homepage and sidebar during overnight sweeps. Do not disable it._
+- **Public template list is a strict allow-list — never widen it without flipping `hidden:false` first.** The single source of truth is `packages/shared-app-config/templates.ts` (entries with `hidden: false`). Today the public allow-list is exactly: **calendar, content, slides, videos, clips, analytics, mail, dispatch, forms, design, brain** — plus `starter` for the CLI only. The featured/default set is narrower: **calendar, content, slides, clips, analytics, mail, dispatch, forms, design, brain** — plus `starter` for the CLI/default-app fallback. Videos is scaffoldable by explicit slug, but it is not featured on the homepage, `/templates`, docs sidebar, CLI picker, or desktop/mobile default tabs. Hidden templates (calls, meeting-notes, voice, scheduling, issues, recruiting, images, macros, code, migration) MUST NOT appear on the homepage, in the docs sidebar, in docs pages, or in the CLI catalog. Surfaces that hardcode their own list — `packages/docs/app/components/TemplateCard.tsx`, `packages/docs/app/components/docsNavItems.ts`, docs pages `packages/core/docs/content/template-*.md`, and the CLI duplicate `packages/core/src/cli/templates-meta.ts` — must only reference allow-listed slugs. To make a hidden template public: flip `hidden: false` in `packages/shared-app-config/templates.ts` AND `packages/core/src/cli/templates-meta.ts`, then add it to the surfaces above. To hide one: flip `hidden: true` in both files; the guard will then point you at every surface that still mentions it. `scripts/guard-template-list.mjs` (CI + `pnpm prep`) enforces this — adding a slug that isn't in the allow-list will fail the build. _This guard exists because agents kept re-adding the hidden templates (calls, meeting-notes, voice, scheduling, issues, recruiting, images, macros) to the homepage and sidebar during overnight sweeps. Do not disable it._
 - **No breaking database changes — ever.** Hosted templates share their prod DB across every deploy context (preview, branch, prod). Any destructive SQL that runs in any build will overwrite live user data. Symptoms we've already hit in production: users losing accounts, dashboards silently emptied, sessions invalidated. Hard rules:
   - **Schema edits must be strictly additive.** Add new columns/tables, never rename or drop. If a column is wrong, add the replacement alongside it, dual-write from the application, migrate readers, and only retire the old column once every deploy that reads it is gone. Same for tables.
   - **Never rename an existing table or column** in a single step — not via Drizzle, not via raw SQL, not via `drizzle-kit push`. A rename looks like drop+create to the diff tool and wipes the table.
