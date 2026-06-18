@@ -1,3 +1,5 @@
+// guard:allow-unscoped -- schema migrations and data backfills run system-wide
+// during startup, not in a user-scoped request path.
 import { runMigrations } from "@agent-native/core/db";
 
 export default runMigrations(
@@ -257,6 +259,41 @@ CREATE INDEX IF NOT EXISTS plan_reports_status_updated_idx ON plan_reports(statu
     {
       version: 25,
       sql: `CREATE INDEX IF NOT EXISTS plan_reports_plan_reporter_status_idx ON plan_reports(plan_id, reporter_email, status)`,
+    },
+    {
+      version: 26,
+      sql: `CREATE INDEX IF NOT EXISTS plan_shares_resource_principal_idx ON plan_shares(resource_id, principal_type, principal_id)`,
+    },
+    {
+      version: 27,
+      sql: `CREATE INDEX IF NOT EXISTS plan_comments_plan_created_idx ON plan_comments(plan_id, created_at)`,
+    },
+    {
+      version: 28,
+      sql: `ALTER TABLE plan_comments ADD COLUMN IF NOT EXISTS deleted_at TEXT;
+ALTER TABLE plan_comments ADD COLUMN IF NOT EXISTS deleted_by TEXT;
+CREATE INDEX IF NOT EXISTS plan_comments_plan_deleted_created_idx ON plan_comments(plan_id, deleted_at, created_at)`,
+    },
+    {
+      version: 29,
+      sql: {
+        postgres: `ALTER TABLE plans ADD COLUMN IF NOT EXISTS recap_idempotency_key TEXT;
+CREATE INDEX IF NOT EXISTS plans_recap_idempotency_key_idx ON plans(recap_idempotency_key)`,
+        sqlite: `ALTER TABLE plans ADD COLUMN recap_idempotency_key TEXT;
+CREATE INDEX IF NOT EXISTS plans_recap_idempotency_key_idx ON plans(recap_idempotency_key)`,
+      },
+    },
+    {
+      version: 30,
+      sql: `CREATE UNIQUE INDEX IF NOT EXISTS plans_recap_idempotency_key_unique_idx
+ON plans(owner_email, COALESCE(org_id, ''), recap_idempotency_key)
+WHERE kind = 'recap' AND recap_idempotency_key IS NOT NULL`,
+    },
+    {
+      version: 31,
+      sql: `ALTER TABLE plans ADD COLUMN IF NOT EXISTS deleted_at TEXT;
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS deleted_by TEXT;
+CREATE INDEX IF NOT EXISTS plans_owner_deleted_updated_idx ON plans(owner_email, deleted_at, updated_at)`,
     },
   ],
   { table: "plans_migrations" },

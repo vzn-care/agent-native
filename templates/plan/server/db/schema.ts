@@ -51,6 +51,11 @@ export const plans = table("plans", {
   // URL of the source PR, issue, or page that triggered this recap (e.g. the
   // GitHub PR URL). Nullable — only populated when the caller supplies it.
   sourceUrl: text("source_url"),
+  // Stable key used by PR Visual Recap publish retries to replace the recap
+  // created by an earlier attempt instead of creating duplicate recap rows.
+  recapIdempotencyKey: text("recap_idempotency_key"),
+  deletedAt: text("deleted_at"),
+  deletedBy: text("deleted_by"),
   ...ownableColumns(),
 });
 
@@ -96,6 +101,8 @@ export const planComments = table("plan_comments", {
   resolvedBy: text("resolved_by"),
   resolvedAt: text("resolved_at"),
   consumedAt: text("consumed_at"),
+  deletedAt: text("deleted_at"),
+  deletedBy: text("deleted_by"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

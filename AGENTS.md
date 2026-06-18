@@ -60,7 +60,12 @@ step is still pending. Use `🔴` only when blocked on user input.
   cross-source research, prefer the shared `provider-api-catalog`,
   `provider-api-docs`, and `provider-api-request` action pattern from
   `@agent-native/core/provider-api` instead of hardcoding one action per
-  provider endpoint/filter.
+  provider endpoint/filter. This is a framework tenet: first-class actions are
+  ergonomic shortcuts, not artificial capability limits. When the upstream API
+  can express an endpoint, filter, pagination mode, or payload, agents should
+  have a safe way to call it directly through the provider API substrate. If an
+  app stores provider credentials on resource/share rows, add a scoped resolver
+  that preserves those access checks before exposing raw provider requests.
 - All AI work goes through the agent chat. UIs do not call LLMs directly.
 - Application state belongs in SQL `application_state` so the agent can know
   the current navigation, selection, and focused object.
@@ -155,6 +160,8 @@ Read the relevant skill before making changes in that area:
 - `client-methods` for browser/client APIs that must use named helpers instead
   of raw REST calls.
 - `delegate-to-agent` for LLM/agent delegation.
+- `harness-agents` for full agent runtimes like Claude Code, Codex, Pi,
+  Cursor, or Mastra.
 - `self-modifying-code` for source edits by the agent.
 - `server-plugins` for `/_agent-native/*` routes and plugins.
 - `authentication`, `onboarding`, `secrets` for setup/auth/credentials.
