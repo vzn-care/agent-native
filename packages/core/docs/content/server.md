@@ -124,6 +124,8 @@ export default defineEventHandler(async (event) => {
 
 `getDb` is created per app via `createGetDb(schema)` in `server/db/index.ts`, so custom routes import it from the template (`../../db/index.js`), not from `@agent-native/core/db`; see [Database — Where the DB Client Lives](/docs/database#db-client). Do not run unscoped `db.select().from(ownableTable)` in custom routes.
 
+Establishing request context with `session.orgId` is also where multi-tenant policy is enforced on the server. The framework gives you the org identity and the `accessFilter` / `assertAccess` guards; **which** org type or tenant is entitled to a route, and **which** records may cross an org boundary, is application policy you enforce here and in your `authPlugin` — not a framework setting. Keep route-level reads/writes **default-deny** so an app shared across tenants in one workspace never leaks across orgs by accident. For the deployment-shape-vs-policy split, typed orgs, and the entitlement matrix, see [Multi-App Workspaces — Shared apps, tenant-specific apps, and entitlements](/docs/multi-app-workspace#tenant-app-policy).
+
 ## Server Plugins {#server-plugins}
 
 Plugins live in `server/plugins/` and run at startup. Use them for migrations, provider setup, recurring jobs, integration adapters, and framework plugin configuration.

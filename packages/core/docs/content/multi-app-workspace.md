@@ -148,6 +148,73 @@ For enterprise-specific rules (allow-list domains, SSO enforcement, extra role c
 
 Active organization flows automatically: `session.orgId` → `AGENT_ORG_ID` → SQL row scoping, so data tagged with `org_id` is invisible to other orgs even to the agent. See [Security & Data Scoping](/docs/security) for the full model.
 
+## Shared apps, tenant-specific apps, and entitlements {#tenant-app-policy}
+
+A common question: "some tenants should see shared apps, other tenants should see tenant-specific apps — does that need a new architecture outside agent-native?" The short answer is **no**. The single-workspace shape already carries this mix; what it does not do for you is decide _which tenant gets which app_. That decision is **application policy** you layer on top of the framework's existing workspace, org, sharing, and action primitives.
+
+Keep the two layers distinct:
+
+- **`workspace` is the deployment shape.** It is how many agent-native apps share one origin, one database, one auth session, and the `apps/<name>` + `packages/shared` override order. It is deliberately silent about org _types_, who is entitled to which app, and which records cross an org boundary.
+- **Org type, app entitlement, and cross-org visibility are application policy.** The framework gives you `organizations`, `org_members`, `session.orgId`, SQL scoping, access helpers, and sharing primitives. _Which_ org type may open _which_ app, and _which_ rows are visible across orgs, is product logic you write in workspace/app code on top of those primitives.
+
+### Typed orgs are app logic, not a framework construct {#typed-orgs}
+
+Domain-specific org types — `practice`, `lab`, `clinic`, `agency`, whatever your product needs — are **not** a new framework concept and do not require extending the org system. Model them in app logic:
+
+- Store the type as an app column (e.g. an `org_profiles.kind` row keyed by `org_id`, or a typed-settings row) rather than expecting a built-in "org type" field.
+- Resolve the active tenant the normal way through `session.orgId`, and keep all reads/writes inside the existing `org_id` SQL scoping model so a typed org is still just an isolated tenant.
+- Branch on the type in actions and UI — gate entitlements, default views, and available actions on the looked-up `kind`. The `organizations` / `org_members` tables and the `session.orgId → AGENT_ORG_ID → SQL` pipeline stay exactly as documented in [Multi-Tenancy](/docs/multi-tenancy) and [Authentication](/docs/authentication#organizations).
+
+### Tenant-specific apps use the existing override order {#tenant-specific-apps}
+
+When one tenant needs a different version of an app, you do not fork the workspace. Use the same precedence already described in [What you override where](#layering): app-local files in `apps/<name>/` win over workspace shared defaults in `packages/shared/`, which win over the framework default. A tenant-specific app is just an app whose local overrides (routes, actions, skills, `AGENTS.md`) diverge from the shared baseline, while everything common still flows from `packages/shared`.
+
+### Shared apps stay in one workspace with explicit grants {#shared-apps}
+
+Apps that several tenants share can live in the **same** workspace — you do not need a separate deploy per tenant to share an app. Isolation between tenants comes from the org scoping and from **explicit grants and visibility rules**, not from broad implicit access:
+
+- Per-tenant data stays separated by `org_id` even though the app code is shared.
+- Cross-tenant access is opt-in: grant it with the sharing primitives or an explicit entitlement row, and keep the schema **default-deny** so nothing leaks until a rule says otherwise.
+
+### Controlled cross-org records {#cross-org-records}
+
+When a record genuinely needs to be visible across orgs (a shared catalog, a referral, a parent-org rollup), do it through the framework's [access helpers](/docs/security#access-guards) (`accessFilter`, `resolveAccess`, `assertAccess`) and the [sharing primitives](/docs/sharing) (`share-resource`, `set-resource-visibility`, `org`/`public` visibility). Keep the application schema and authorization rules **default-deny**: a row is private to its owning org until an explicit grant or visibility change opens it. This is the same model templates already use for per-user and per-org data — cross-org is just another explicit grant, not a hole in the scoping.
+
+### The entitlement matrix lives in workspace/app code {#entitlement-matrix}
+
+"Some tenants see shared apps, some tenants see tenant-specific apps" needs **no framework-level customization** beyond defining the entitlement matrix yourself. Express it as data + checks in workspace/app code:
+
+- A small entitlement table (or typed-settings rows) mapping `org_id` (or org `kind`) → the set of apps and features it may use.
+- An entitlement check in each app's auth/route layer and in the workspace launcher UI so an org only sees and can open the apps it is entitled to.
+- The framework's `workspaceApp` audience/path config and `authPlugin` are where you enforce the gate; the matrix itself is ordinary app data.
+
+## Recommendation: framework vs. policy vs. separate architecture {#recommendation}
+
+Separate the three layers when you plan this out:
+
+**Framework-supported patterns (already available in agent-native).** You get these without inventing anything:
+
+- One workspace hosting both shared and tenant-specific apps behind a single origin, database, and auth session.
+- The `apps/<name>` → `packages/shared` → framework override order for tenant-specific behavior.
+- Built-in `organizations` / `org_members`, `session.orgId`, and `org_id` SQL scoping for tenant isolation.
+- `accessFilter` / `resolveAccess` / `assertAccess` and the sharing primitives for controlled, explicit cross-org access with default-deny defaults.
+- `workspaceApp` audience/path settings and a shared `authPlugin` for gating access per app.
+
+**Domain-specific policy (the product must implement).** The framework will not decide these for you:
+
+- Typed orgs (`practice`, `lab`, …) modeled as app data on top of the built-in org tables.
+- The entitlement matrix mapping orgs/org-types to the apps and features they may use.
+- The cross-org sharing rules that say which records may cross a boundary, and the default-deny authorization checks that enforce them.
+- Any tenant-specific app overrides under `apps/<name>/`.
+
+**When you actually need a different architecture.** Stay in one workspace unless you hit a hard-isolation requirement that policy alone cannot satisfy:
+
+- Regulatory or contractual isolation that mandates a **separate database** (or separate encryption boundary) per tenant — the shared-database default no longer fits.
+- A tenant that must be **deployed separately** (own origin, own release cadence, own infra blast radius) rather than co-hosted.
+- Isolation guarantees you are unwilling to express as default-deny rules in a shared schema, where a single misconfigured query is too high a risk.
+
+In those cases reach for [per-app independent deploys](#per-app-independent-deploy) or separate per-tenant databases (you keep the workspace pattern but lose the shared-state story — see [Shared database, shared credentials](#shared-database-shared-credentials)). Everything short of that is policy on top of the single-workspace architecture, not a new one.
+
 ## Shared MCP servers {#shared-mcp}
 
 The recommended options for sharing MCP servers across workspace apps, in order of preference:

@@ -104,6 +104,12 @@ The framework provides a built-in organization system. This is the framework's o
 
 The active org is tracked on the session as `session.orgId`, and switching orgs changes the data the user and agent see. Data scoping itself happens further down the stack — see [Security & Data Scoping](/docs/security#data-scoping) for the full `session.orgId → AGENT_ORG_ID → SQL` pipeline and the access guards. The [Multi-Tenancy](/docs/multi-tenancy) docs cover the org-management surface.
 
+### Typed orgs and app entitlements are application policy {#typed-orgs}
+
+Domain-specific org types — `practice`, `lab`, `clinic`, `agency` — are **not** a new framework construct, and the org system does not need extending to support them. Model them in app logic on top of the built-in `organizations` and `org_members` tables: store the type as your own app column (e.g. an `org_profiles.kind` row keyed by `org_id`), resolve the active tenant through `session.orgId` as usual, and keep every read/write inside the existing `org_id` SQL scoping model. Branch on the looked-up type in actions and UI to gate which apps and features that org may use.
+
+Likewise, _which_ org (or org type) is entitled to _which_ app is application policy, not an auth-layer feature. Enforce it in your `authPlugin` / route guards plus a workspace entitlement table; the framework gives you the org identity and scoping, you define the entitlement matrix. For the deployment-vs-policy split — shared apps, tenant-specific apps, and the entitlement matrix in one workspace — see [Multi-App Workspaces — Shared apps, tenant-specific apps, and entitlements](/docs/multi-app-workspace#tenant-app-policy).
+
 ## Static MCP Bearer Tokens {#access-tokens}
 
 `ACCESS_TOKEN` and `ACCESS_TOKENS` are not browser auth and do not make an app private. They remain only as static bearer credentials for MCP/connect clients that cannot use the OAuth flow.

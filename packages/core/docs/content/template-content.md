@@ -231,6 +231,8 @@ Documents are private by default. You can change visibility to `org` or `public`
 
 See the `sharing` skill.
 
+This is also how Content behaves as a **shared app across tenants**: the same app can serve many orgs out of one workspace because every document is scoped by `org_id` and private by default. Other orgs see a doc only through an explicit grant or an `org`/`public` visibility change — broad implicit cross-tenant access is never the default. When one tenant needs a customized Content (different actions, routes, or `AGENTS.md`), make it a **tenant-specific app** with app-local overrides under `apps/<name>/` while shared defaults stay in `packages/shared/`, following the existing [override order](/docs/multi-app-workspace#layering). Which org type may open Content, and which apps each tenant is entitled to, is application policy — see [Multi-App Workspaces — Shared apps, tenant-specific apps, and entitlements](/docs/multi-app-workspace#tenant-app-policy).
+
 ### Teams
 
 A dedicated team page at `/team` (see `app/routes/_app.team.tsx`) uses the framework's `TeamPage` component for creating orgs and managing members.

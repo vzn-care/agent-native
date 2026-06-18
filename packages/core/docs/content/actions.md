@@ -221,6 +221,8 @@ export default defineAction({
 
 For list and read actions, use `accessFilter` to scope the query to the current user and org. For actions that update or delete a specific row, use `assertAccess` to confirm the caller is allowed before writing. See [Security](/docs/security#access-guards) and [Sharing](/docs/sharing) for the full helper API.
 
+These same helpers are where app-level tenant policy lives — the framework does not need extending to support typed orgs, shared-vs-tenant-specific apps, or cross-org records. Keep actions **default-deny**: scope every read through `accessFilter` and gate every write through `assertAccess` so a row stays private to its owning org until an explicit grant or visibility change opens it. When a record must be visible across orgs, open it deliberately with the sharing primitives (`share-resource`, `set-resource-visibility`) rather than relaxing the filter. Entitlement decisions — which org type may call which action, which app a tenant is allowed to use — belong in your own checks (read the org's type from an app column, consult an entitlement table) on top of `ctx.userEmail` / `ctx.orgId`, not in a new framework mechanism. See [Multi-App Workspaces — Shared apps, tenant-specific apps, and entitlements](/docs/multi-app-workspace#tenant-app-policy).
+
 ## Calling it from the UI {#ui}
 
 Two hooks, both in `@agent-native/core/client`. Types are inferred from your `defineAction` schemas — no manual type declarations.

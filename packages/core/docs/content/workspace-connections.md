@@ -152,6 +152,8 @@ The `credentialRefs` array points at vault keys; it is not credential storage. F
 
 Connection rows are scoped to the active org when one is present. Without an org, they are scoped to the authenticated user. Grant rows use the same scope.
 
+This grant model is the same shape app-level tenant policy should follow elsewhere. An app being shared across tenants in one workspace does not imply broad implicit access to every tenant's connections: access is granted **explicitly** per app and scoped per org, default-deny until a grant exists. When you need controlled cross-org reuse, add an explicit grant rather than widening scope — the same way controlled cross-org records use the sharing primitives. Which org type or tenant is entitled to which connected provider is application policy layered on top of these grants, not a new framework construct. See [Multi-App Workspaces — Shared apps, tenant-specific apps, and entitlements](/docs/multi-app-workspace#tenant-app-policy).
+
 **Legacy `allowedApps` field:** `allowedApps: []` means every app in the same scope may use the connection; `allowedApps: ["dispatch"]` grants access through the legacy field. Use explicit `workspace_connection_grants` rows for new setup — they make revocation, audit, and per-app readiness easier. `revokeWorkspaceConnectionGrant(connectionId, appId)` removes an explicit grant but does not change legacy `allowedApps`.
 
 Use `summarizeWorkspaceConnectionProviderForApp()` and `summarizeWorkspaceConnectionProviderReadiness()` for app-facing status instead of hand-rolling grant checks. The shared summaries return `grantState`, `grantAvailability`, safe credential ref names, per-app connection rows, and readiness fields such as `readyConnectionCount` and `missingRequiredCredentialKeys`.

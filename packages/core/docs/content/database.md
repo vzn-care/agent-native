@@ -84,6 +84,8 @@ Never import from `drizzle-orm/sqlite-core` or `drizzle-orm/pg-core` directly. A
 
 Tables that store user-facing data must include an `owner_email` column so the framework's SQL-level scoping can filter rows to the authenticated user — see [Security](/docs/security#data-scoping). Tables that also support sharing with other users or orgs should spread `...ownableColumns()` instead, which adds `owner_email`, `org_id`, and `visibility` in one call — see [Sharing](/docs/sharing#building).
 
+This `org_id` scoping is also what makes a single shared database safe for multi-tenant and multi-app workspaces: rows are **default-deny** across orgs, visible to another org only through an explicit grant or visibility change. The shared database is the deployment default; whether a record may cross an org boundary, and which org type or app may read it, is application policy you express in your schema and authorization rules — not a framework setting. Domain-specific org types (`practice`, `lab`, …) and per-app entitlements are modeled as your own app columns on top of `org_id`, not as new framework constructs. See [Multi-App Workspaces — Shared apps, tenant-specific apps, and entitlements](/docs/multi-app-workspace#tenant-app-policy). If a tenant genuinely requires a separate database for hard isolation, that is the point at which you move beyond the shared-database default.
+
 For reads and writes, use Drizzle's query builder and portable operators from `drizzle-orm`:
 
 ```ts

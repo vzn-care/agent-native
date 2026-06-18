@@ -65,6 +65,10 @@ The active org flows automatically: `session.orgId` — resolved by `getOrgConte
 
 As a safety net, also wrap your app shell in `<RequireActiveOrg>` from `@agent-native/core/client/org`. It blocks the wrapped area with a "Create your organization" pane (and accept-invite CTAs for pending invitations) if auto-create failed or the account predates it. Place it **inside** the agent sidebar so the setup checklist, chat, and CLI stay usable during setup.
 
+### Typed orgs and entitlements are app policy
+
+Domain-specific org types (`practice`, `lab`, `clinic`, …) are **not** a framework construct and the org system does not need extending. Model them as app data on top of the built-in `organizations` / `org_members` tables: store the type in your own app column keyed by `org_id`, resolve the active tenant through `session.orgId`, keep all reads/writes inside the existing `org_id` SQL scoping, and branch on the looked-up type in actions/UI. Likewise, _which_ org type or tenant is entitled to _which_ app is app policy — enforce it in the `authPlugin` / route guards plus an entitlement table, not in a new framework mechanism. Shared apps can serve many tenants from one workspace with **default-deny** org scoping and explicit grants; tenant-specific variants use app-local overrides under `apps/<name>/`. See [Multi-App Workspaces — Shared apps, tenant-specific apps, and entitlements](/docs/multi-app-workspace#tenant-app-policy).
+
 ## A2A Identity
 
 Set `A2A_SECRET` (same value) on all apps that must verify each other's identity.
