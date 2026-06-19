@@ -1,9 +1,57 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # Agent-Native Framework
 
 This repository builds apps where the AI agent and UI are equal partners:
 everything the UI can do, the agent can do through the same SQL data and action
 surface. Keep this file small. Put detailed workflows in `.agents/skills/*` and
 read the relevant skill before changing that area.
+
+## Commands
+
+pnpm 10 + Node 22 monorepo (`pnpm-workspace.yaml`). Run from the repo root.
+
+- Install/build: `pnpm install` (auto-builds publishable packages via
+  `postinstall`); `pnpm build` builds all workspaces.
+- Dev (lazy, recommended): `pnpm dev --apps mail,calendar` exposes specific
+  templates behind a gateway; default exposes only core. Append `:desktop` /
+  `--electron` for the Electron shell. `pnpm dev:eager` builds everything up
+  front. A single template can also run standalone: `pnpm --filter mail dev`
+  (uses the `agent-native` CLI).
+- Lint (the full gate): `pnpm lint` = `fmt:check` + `oxlint` + `typecheck`.
+  Format with `pnpm fmt`; fix imports with `pnpm fix:imports`. Linter is oxlint
+  (`.oxlintrc.json`), not ESLint.
+- Typecheck: `pnpm typecheck` (parallel across workspaces via
+  `scripts/workspace-run.ts`).
+- Test (all): `pnpm test`. Tests use Vitest. Run one workspace:
+  `pnpm --filter @agent-native/core test`. Run one file/pattern:
+  `pnpm --filter @agent-native/core exec vitest run src/path/to.test.ts`
+  (drop `run` to watch).
+- Guards: `pnpm guards` runs the repo invariant checks (no `drizzle-kit push`,
+  no unscoped ownable queries, no env-credential literals, template-list
+  integrity, etc.). Individual guards are the `guard:*` scripts.
+- Pre-push gate: `pnpm prep` runs `fmt:check`, `typecheck`, `test`, and `guards`
+  concurrently — run this before opening a PR.
+- Changesets: `pnpm changeset:add` for any publishable package change (see
+  Packages And Releases below). `pnpm changeset:status` shows pending bumps.
+
+## Monorepo Layout
+
+- `packages/core` — the framework runtime + the `agent-native` CLI that every
+  template's `dev`/`build`/`typecheck`/`action` scripts call. Most framework
+  behavior lives here.
+- `packages/*` — publishable/runtime packages: `dispatch`, `scheduling`,
+  `pinpoint`, `embedding`, `migrate`, `shared-app-config` (template allow-list),
+  `desktop-app`/`mobile-app`/`frame` (shells), `code-agents-ui`, `docs`, `skills`.
+- `templates/*` — standalone agent-native apps (mail, calendar, brain, slides,
+  plan, forms, analytics, content, design, dispatch, clips, videos, macros,
+  assets, starter). Each is a full app, cloned not scaffolded.
+- `scripts/` — dev launchers (`dev-lazy.ts`, `dev-all.ts`), the
+  `workspace-run.ts` test/typecheck fan-out, and all `guard-*` / `sync-*` checks.
+- Skills referenced throughout this file live in `.agents/skills/` (the Skill
+  Index below) and `packages/skills`.
 
 ## Always-On Rules
 

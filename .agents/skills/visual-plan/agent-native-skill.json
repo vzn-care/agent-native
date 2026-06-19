@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "source": "agent-native",
+  "appSkillId": "visual-plans",
+  "displayName": "Agent-Native Plan",
+  "skillName": "visual-plan",
+  "contentHash": "1e250a60cb6c49f4",
+  "mcpUrl": "https://plan.agent-native.com/_agent-native/mcp",
+  "installedAt": "2026-06-14T17:27:12.135Z",
+  "updateCommand": "npx @agent-native/core@latest skills update visual-plan"
+}
