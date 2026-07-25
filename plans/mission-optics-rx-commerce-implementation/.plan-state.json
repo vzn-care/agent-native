@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "planId": "plan-ce8922fe0a074041",
+  "markdownBlockIds": [
+    "overview",
+    "architecture-heading",
+    "done-heading",
+    "markdown-99314c7c",
+    "flow-heading",
+    "actions-heading",
+    "filemap-heading",
+    "configurator-heading",
+    "events-heading",
+    "qa-heading",
+    "staffing-heading",
+    "metrics-heading",
+    "launch-heading",
+    "markdown-1329864c"
+  ],
+  "markdownBlocks": [
+    {
+      "id": "overview",
+      "hash": "208d24a8284b8b4e"
+    },
+    {
+      "id": "architecture-heading",
+      "hash": "1e6c786162596167"
+    },
+    {
+      "id": "done-heading",
+      "hash": "66c7829c0ad1424b"
+    },
+    {
+      "id": "markdown-99314c7c",
+      "hash": "53e2fa50a0d53309"
+    },
+    {
+      "id": "flow-heading",
+      "hash": "a03bfabfa8f3928e"
+    },
+    {
+      "id": "actions-heading",
+      "hash": "341c9288f1ec849c"
+    },
+    {
+      "id": "filemap-heading",
+      "hash": "3ea8d643783d28d2"
+    },
+    {
+      "id": "configurator-heading",
+      "hash": "ade8f385abe69266"
+    },
+    {
+      "id": "events-heading",
+      "hash": "5395b770401f600a"
+    },
+    {
+      "id": "qa-heading",
+      "hash": "a6a83f87821f3722"
+    },
+    {
+      "id": "staffing-heading",
+      "hash": "57fcac518c809cfe"
+    },
+    {
+      "id": "metrics-heading",
+      "hash": "200ba5247a34e938"
+    },
+    {
+      "id": "launch-heading",
+      "hash": "4952415c4ec33da2"
+    },
+    {
+      "id": "markdown-1329864c",
+      "hash": "9ebada26f5968f49"
+    }
+  ]
+}

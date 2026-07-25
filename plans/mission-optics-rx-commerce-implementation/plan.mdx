@@ -1,0 +1,1691 @@
+---
+# Visual plan: open https://plan.agent-native.com/plans/plan-ce8922fe0a074041 in a browser for the canvas and review UI.
+visualUrl: "https://plan.agent-native.com/plans/plan-ce8922fe0a074041"
+title: "Mission Optics Rx Commerce Platform — Shopify-First Implementation Plan"
+brief: "Build one Mission-owned Rx configuration, quoting, prescription, and fulfillment platform; ship Shopify as the first thin commerce adapter; prove financial, optical, and operational integrity in a controlled 90-day pilot."
+version: 1
+---
+
+# Mission Optics Rx Commerce Platform — Shopify-First Implementation Plan
+
+## Objective
+
+A shopper on a sunglass brand’s product page selects **Add prescription lenses**, completes a Mission-hosted lens configuration, and checks out through the brand’s existing Shopify cart. Shopify remains authoritative for payment, tax, discounts, refunds, and the commercial order. Mission remains authoritative for optical eligibility, prescription records, lens pricing logic, manufacturing instructions, lab release, remakes, and fulfillment.
+
+The first release must prove this complete journey with one pilot brand and a bounded catalog while establishing reusable contracts for future WooCommerce, BigCommerce, Commerce Layer, and headless adapters.
+
+<Callout id="architecture-decision" tone="decision">
+
+**Committed architecture:** build the Mission Rx service first and Shopify as
+an adapter. Core Rx types must contain no Shopify-specific identifiers.
+Prescription values and documents never enter commerce metadata, storefront
+analytics, or ordinary logs.
+
+</Callout>
+
+## Target architecture
+
+<Diagram id="architecture-diagram" caption={"The commerce platform owns the transaction; Mission owns the optical case and fulfillment decision."} frame="show">
+
+```html
+<div class="diagram-panel architecture" data-rough><section class="diagram-card"><div class="diagram-pill">Brand storefront</div><div class="diagram-node">Shopify product page</div><div class="diagram-node">Mission Rx card launcher</div><div class="diagram-muted">Theme app extension and native cart</div></section><section class="diagram-card mission"><div class="diagram-pill">Mission core</div><div class="diagram-node">Rx configuration actions</div><div class="diagram-node">Lens rules and price books</div><div class="diagram-node">Encrypted prescription vault</div><div class="diagram-node">Immutable signed quote</div><div class="diagram-node">Fulfillment orchestration</div></section><section class="diagram-card"><div class="diagram-pill">Integration boundary</div><div class="diagram-node">Commerce adapter contract</div><div class="diagram-node">Webhook inbox and outbox</div><div class="diagram-node">Shopify adapter</div><div class="diagram-muted">Future: WooCommerce, BigCommerce, Commerce Layer</div></section><section class="diagram-card span"><div class="diagram-pill">Authoritative downstream systems</div><div class="systems"><div class="diagram-box">Shopify<br><span class="diagram-muted">cart, checkout, payment, order, refund</span></div><div class="diagram-box">Mission lab engine<br><span class="diagram-muted">production, QA, shipment, remake</span></div></div></section></div>
+```
+
+```css
+.architecture {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  padding: 16px;
+}
+.architecture .diagram-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
+.architecture .mission {
+  border-width: 2px;
+  border-color: var(--wf-accent);
+}
+.architecture .span {
+  grid-column: 1 / -1;
+}
+.architecture .systems {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.architecture .diagram-node,
+.architecture .diagram-box {
+  padding: 10px 12px;
+}
+@media (max-width: 760px) {
+  .architecture {
+    grid-template-columns: 1fr;
+  }
+  .architecture .span {
+    grid-column: auto;
+  }
+  .architecture .systems {
+    grid-template-columns: 1fr;
+  }
+}
+```
+
+</Diagram>
+
+## Definition of done
+
+<Checklist
+  id="done-checklist"
+  items={[
+    {
+      id: "done-one",
+      label:
+        "One pilot Shopify store completes product page → Rx configuration → paid order → lab job → shipment without manual database intervention.",
+    },
+    {
+      id: "done-two",
+      label:
+        "Every bound frame/lens/service SKU, quantity, and gross merchandise amount matches the immutable Mission execution plan; Shopify discount, tax, shipping, refund, and captured-total allocations are recorded separately.",
+    },
+    {
+      id: "done-three",
+      label:
+        "Duplicate or out-of-order events never create a duplicate quote, cart package, order binding, fulfillment case, outbox effect, or lab job.",
+    },
+    {
+      id: "done-four",
+      label:
+        "Incomplete, expired, mismatched, tampered, financially held, or optically unapproved configurations fail closed before manufacturing.",
+    },
+    {
+      id: "done-five",
+      label:
+        "No prescription values, documents, patient identifiers, or sensitive optical warnings appear in Shopify or ordinary logs.",
+    },
+    {
+      id: "done-six",
+      label:
+        "A fake non-Shopify adapter passes the shared conformance suite before the core is called platform-neutral; adapter two then implements the same contract.",
+    },
+  ]}
+/>
+
+## Scope and non-goals
+
+### In scope for the first production pilot
+
+- Single Shopify brand and one primary market/currency.
+- Approximately 10–25 frame variants and a deliberately bounded lens catalog.
+- Plano versus Rx choice, prescription upload/manual-entry workflow, PD collection, compatible lens options, price, and customer-safe review.
+- Theme App Extension, hosted configurator, native Shopify cart lines/components, checkout validation, order capture, cancellation/refund synchronization, fulfillment writeback, and tracking.
+- Merchant setup for store connection, catalog mapping, price-book assignment, brand policy, and support diagnostics.
+- Reliable event processing, reconciliation, quarantine, audit, and operational runbooks.
+
+### Explicitly deferred
+
+- A unique commerce variant for every prescription combination.
+- Multi-platform production launch before the Shopify pilot passes.
+- Advanced insurance adjudication, patient benefits, or payer billing.
+- Automated manufacturing release for cases that require optician review.
+- Full global markets, multi-currency, localization, and tax-policy expansion.
+- Consumer virtual try-on and digital-twin work, except for carrying stable frame identifiers needed later.
+
+## Systems of record
+
+<Table
+  id="ownership-table"
+  columns={["Concern", "Authoritative system", "Rule"]}
+  rows={[
+    [
+      "Frame catalog and inventory",
+      "Shopify / merchant catalog",
+      "Mission stores mappings, not a duplicate merchant catalog.",
+    ],
+    [
+      "Cart, checkout, tax, discount, payment",
+      "Shopify",
+      "Mission supplies validated commercial components and a signed quote.",
+    ],
+    [
+      "Prescription and optical measurements",
+      "Mission Rx Vault",
+      "Only opaque references leave Mission.",
+    ],
+    [
+      "Compatibility and lens options",
+      "Mission Rx Rules",
+      "Rules are versioned and reproduced for audit/remake.",
+    ],
+    [
+      "Commercial quote",
+      "Mission",
+      "Immutable, expiring, currency-specific, and signed.",
+    ],
+    [
+      "Financial order and refund",
+      "Shopify",
+      "Mission mirrors status and never invents a financial refund.",
+    ],
+    [
+      "Production and remake",
+      "Mission fulfillment",
+      "Every release records configuration, prescription, and rules versions.",
+    ],
+    [
+      "Shipment and customer tracking",
+      "Mission → Shopify",
+      "Mission writes fulfillment/tracking back to the merchant’s order.",
+    ],
+  ]}
+  density="compact"
+/>
+
+## End-to-end product and order flow
+
+<Mermaid
+  id="flow-sequence"
+  source={
+    "sequenceDiagram\n  participant Shopper\n  participant Store as Shopify Storefront\n  participant Core as Mission Rx Core\n  participant Adapter as Shopify Adapter\n  participant Lab as Mission Lab Engine\n  Shopper->>Store: Select frame and Add prescription lenses\n  Store->>Core: Start configuration with store and variant context\n  Core-->>Shopper: Compatible options and customer-safe guidance\n  Shopper->>Core: Submit selections and prescription reference\n  Core->>Core: Validate rules and create immutable quote\n  Core-->>Store: Signed cart execution plan\n  Store->>Adapter: Add frame and finite lens/service components\n  Adapter-->>Store: Bound native cart package\n  Store->>Store: Server-side checkout validation\n  Shopper->>Store: Pay through native checkout\n  Store-->>Adapter: Order/fulfillment webhook\n  Adapter->>Adapter: Verify, enqueue, deduplicate, and re-fetch order\n  Adapter->>Core: Capture authoritative order and validate quote\n  Core->>Core: Release or quarantine fulfillment case\n  Core->>Lab: Create exactly one lab job\n  Lab-->>Core: Production and shipment updates\n  Core->>Adapter: Fulfillment and tracking update\n  Adapter->>Store: Update merchant order"
+  }
+  caption="The paid order is re-fetched and revalidated before Mission creates a lab job."
+/>
+
+<RichText id="roadmap-heading" title="90-day delivery roadmap">
+
+## 90-day delivery roadmap
+
+The work is organized around vertical slices. Each gate must work end to end before the next scope increase.
+
+**Architecture spikes in Days 1–7:** first prove that a Shopify Cart and Checkout Validation Function can fail closed across standard and accelerated checkout using the proposed self-contained token and no Mission network call. In parallel, prove that the selected lab interface can idempotently create, retrieve, and cancel one test job. Do not build the full configurator until both spikes pass.
+
+</RichText>
+
+<Table
+  id="roadmap-table"
+  columns={["Timing", "Primary outcome", "Exit gate"]}
+  rows={[
+    [
+      "Days 1–15",
+      "Contracts, security classification, tenant/store model, optical catalog, and Shopify development setup",
+      "Architecture decision records approved; no platform IDs in core types; field classification complete.",
+    ],
+    [
+      "Days 16–30",
+      "Working vertical slice for one frame and one lens package",
+      "Configure → quote → cart → test order → one lab job completes with exact price reconciliation.",
+    ],
+    [
+      "Days 31–45",
+      "Rules, price books, prescription workflow, configurator states, and merchant mappings",
+      "10–25 frames can be mapped; supported/unsupported prescription matrix passes.",
+    ],
+    [
+      "Days 46–60",
+      "Checkout validation, event reliability, cancellation/refund/remake, fulfillment writeback, and operator tools",
+      "Two test stores pass operational simulation with duplicate/out-of-order events and no manual DB changes.",
+    ],
+    [
+      "Days 61–75",
+      "Security review, accessibility, mobile/theme compatibility, runbooks, training, and shadow-mode pilot",
+      "Launch checklist passes; support can diagnose, replay, quarantine, and reconcile cases.",
+    ],
+    [
+      "Days 76–90",
+      "Controlled live traffic with one brand",
+      "Clean production orders, exact totals, zero duplicate lab jobs, and documented go/no-go decision.",
+    ],
+  ]}
+/>
+
+<RichText id="workstream-zero-heading" title={"Workstream 0 — Product, optical, and commercial contracts"}>
+
+## Workstream 0 — Product, optical, and commercial contracts
+
+**Owners:** product/program lead and optical/Rx domain lead. **Timing:** Days 1–15.
+
+### Committed financial comparison basis
+
+Mission quote lines represent gross frame/lens/service merchandise amounts in the checkout currency **before Shopify discounts, tax, and shipping**. The adapter compares each bound commercial component SKU, quantity, and gross unit amount to the signed execution plan. Shopify remains authoritative for discount allocation, tax allocation, shipping, payment fees, refunds, and final captured total; Mission records those allocations separately rather than requiring the whole Shopify order total to equal the pre-tax quote.
+
+### Committed Shopify catalog ownership
+
+The Mission app provisions or verifies a finite set of hidden lens/service products and variants per merchant. Mission owns the intended SKU mapping, component role, expected price, shipping requirement, and configuration digest. The merchant approves tax and discount policy. A scheduled health check detects edits, deletions, publication mistakes, or price drift and disables new Rx checkout until repaired.
+
+</RichText>
+
+<Checklist
+  id="workstream-zero"
+  items={[
+    {
+      id: "w0-terminology",
+      label: "Approve canonical terminology and states",
+      note: "RxConfiguration, PrescriptionCase, RxQuote, CartBinding, OrderBinding, FulfillmentCase, RemakeCase.",
+    },
+    {
+      id: "w0-options",
+      label: "Classify every shopper selection",
+      note: "Mark it as commerce-priced, Mission-only optical data, customer-visible summary, or restricted clinical data.",
+    },
+    {
+      id: "w0-rules",
+      label: "Build the pilot compatibility matrix",
+      note: "Frame constraints, Rx ranges, lens design, material/index, coatings, tint, polarization, edge cases, and manual-review rules.",
+    },
+    {
+      id: "w0-pricing",
+      label: "Approve finite commercial SKUs and brand price book",
+      note: "Frame plus lens design/material/coating/tint/service components; never a variant per prescription.",
+    },
+    {
+      id: "w0-exceptions",
+      label: "Define fail-closed and quarantine policies",
+      note: "Expired quote, missing prescription, incompatible frame, altered cart, unsupported Rx, order edit, refund, cancellation, and remake.",
+    },
+    {
+      id: "w0-pilot",
+      label:
+        "Name the pilot merchant, catalog, market, and accountable approvers",
+      note: "Include product, optical, engineering, merchant, lab operations, security/privacy, and launch authority.",
+    },
+  ]}
+/>
+
+<RichText id="model-heading" title="Canonical data model">
+
+## Canonical data model
+
+All customer and merchant records are tenant-scoped. Configuration, prescription, quote, cart, order, and fulfillment keep separate state machines and revisions. The schema is additive and provider-neutral.
+
+A single `RxConfiguration` represents **one physical pair** and cart quantity must remain one. A shopper requesting two pairs receives two configuration IDs, even when selections are identical.
+
+`rx_configurations.selections` contains only typed, non-prescription commercial lens choices. Sphere, cylinder, axis, add, prism, PD, segment height, documents, and patient identifiers are structurally confined to the prescription domain.
+
+Rules, price books, manufacturing instructions, and customer-safe summaries are stored as immutable append-only snapshots or content-addressed artifacts—not mutable records labeled with an old version.
+
+Required database constraints include unique provider delivery per store, unique external order binding per store, one active cart binding per quote revision, one fulfillment case per order package, one lab-job effect per fulfillment revision, and one outbox event per aggregate revision/event type. Idempotency records also bind request key to body digest and original result.
+
+</RichText>
+
+<DataModel
+  id="data-model"
+  entities={[
+    {
+      id: "tenants",
+      name: "tenants",
+      fields: [
+        {
+          name: "id",
+          type: "uuid",
+          pk: true,
+        },
+        {
+          name: "name",
+          type: "text",
+        },
+        {
+          name: "status",
+          type: "text",
+        },
+      ],
+    },
+    {
+      id: "store_connections",
+      name: "store_connections",
+      fields: [
+        {
+          name: "id",
+          type: "uuid",
+          pk: true,
+        },
+        {
+          name: "tenant_id",
+          type: "uuid",
+          fk: "tenants.id",
+        },
+        {
+          name: "provider",
+          type: "text",
+        },
+        {
+          name: "external_store_ref",
+          type: "text",
+        },
+        {
+          name: "capabilities",
+          type: "jsonb",
+        },
+        {
+          name: "status",
+          type: "text",
+        },
+      ],
+    },
+    {
+      id: "catalog_bindings",
+      name: "catalog_bindings",
+      fields: [
+        {
+          name: "id",
+          type: "uuid",
+          pk: true,
+        },
+        {
+          name: "store_connection_id",
+          type: "uuid",
+          fk: "store_connections.id",
+        },
+        {
+          name: "mission_sku",
+          type: "text",
+        },
+        {
+          name: "external_product_ref",
+          type: "text",
+        },
+        {
+          name: "external_variant_ref",
+          type: "text",
+        },
+        {
+          name: "role",
+          type: "text",
+        },
+      ],
+    },
+    {
+      id: "prescription_cases",
+      name: "prescription_cases",
+      fields: [
+        {
+          name: "id",
+          type: "uuid",
+          pk: true,
+        },
+        {
+          name: "tenant_id",
+          type: "uuid",
+          fk: "tenants.id",
+        },
+        {
+          name: "encrypted_record_ref",
+          type: "text",
+          nullable: true,
+        },
+        {
+          name: "revision",
+          type: "integer",
+        },
+        {
+          name: "status",
+          type: "text",
+        },
+        {
+          name: "review_reason",
+          type: "text",
+          nullable: true,
+        },
+      ],
+    },
+    {
+      id: "rx_configurations",
+      name: "rx_configurations",
+      fields: [
+        {
+          name: "id",
+          type: "uuid",
+          pk: true,
+        },
+        {
+          name: "tenant_id",
+          type: "uuid",
+          fk: "tenants.id",
+        },
+        {
+          name: "store_connection_id",
+          type: "uuid",
+          fk: "store_connections.id",
+        },
+        {
+          name: "prescription_case_id",
+          type: "uuid",
+          fk: "prescription_cases.id",
+          nullable: true,
+        },
+        {
+          name: "frame_sku",
+          type: "text",
+        },
+        {
+          name: "selections",
+          type: "jsonb",
+        },
+        {
+          name: "ruleset_version",
+          type: "text",
+        },
+        {
+          name: "revision",
+          type: "integer",
+        },
+        {
+          name: "status",
+          type: "text",
+        },
+      ],
+    },
+    {
+      id: "rx_quotes",
+      name: "rx_quotes",
+      fields: [
+        {
+          name: "id",
+          type: "uuid",
+          pk: true,
+        },
+        {
+          name: "configuration_id",
+          type: "uuid",
+          fk: "rx_configurations.id",
+        },
+        {
+          name: "configuration_revision",
+          type: "integer",
+        },
+        {
+          name: "currency",
+          type: "text",
+        },
+        {
+          name: "market",
+          type: "text",
+        },
+        {
+          name: "total_minor",
+          type: "bigint",
+        },
+        {
+          name: "ruleset_version",
+          type: "text",
+        },
+        {
+          name: "expires_at",
+          type: "timestamptz",
+        },
+        {
+          name: "signature_digest",
+          type: "text",
+        },
+        {
+          name: "status",
+          type: "text",
+        },
+      ],
+    },
+    {
+      id: "quote_lines",
+      name: "quote_lines",
+      fields: [
+        {
+          name: "id",
+          type: "uuid",
+          pk: true,
+        },
+        {
+          name: "quote_id",
+          type: "uuid",
+          fk: "rx_quotes.id",
+        },
+        {
+          name: "mission_sku",
+          type: "text",
+        },
+        {
+          name: "role",
+          type: "text",
+        },
+        {
+          name: "quantity",
+          type: "integer",
+        },
+        {
+          name: "unit_amount_minor",
+          type: "bigint",
+        },
+      ],
+    },
+    {
+      id: "cart_bindings",
+      name: "cart_bindings",
+      fields: [
+        {
+          name: "id",
+          type: "uuid",
+          pk: true,
+        },
+        {
+          name: "quote_id",
+          type: "uuid",
+          fk: "rx_quotes.id",
+        },
+        {
+          name: "store_connection_id",
+          type: "uuid",
+          fk: "store_connections.id",
+        },
+        {
+          name: "external_cart_ref",
+          type: "text",
+        },
+        {
+          name: "external_lines",
+          type: "jsonb",
+        },
+        {
+          name: "revision",
+          type: "integer",
+        },
+        {
+          name: "status",
+          type: "text",
+        },
+      ],
+    },
+    {
+      id: "order_bindings",
+      name: "order_bindings",
+      fields: [
+        {
+          name: "id",
+          type: "uuid",
+          pk: true,
+        },
+        {
+          name: "cart_binding_id",
+          type: "uuid",
+          fk: "cart_bindings.id",
+        },
+        {
+          name: "external_order_ref",
+          type: "text",
+        },
+        {
+          name: "captured_total_minor",
+          type: "bigint",
+        },
+        {
+          name: "status",
+          type: "text",
+        },
+      ],
+    },
+    {
+      id: "fulfillment_cases",
+      name: "fulfillment_cases",
+      fields: [
+        {
+          name: "id",
+          type: "uuid",
+          pk: true,
+        },
+        {
+          name: "order_binding_id",
+          type: "uuid",
+          fk: "order_bindings.id",
+        },
+        {
+          name: "lab_job_ref",
+          type: "text",
+          nullable: true,
+        },
+        {
+          name: "configuration_revision",
+          type: "integer",
+        },
+        {
+          name: "prescription_revision",
+          type: "integer",
+        },
+        {
+          name: "status",
+          type: "text",
+        },
+        {
+          name: "quarantine_reason",
+          type: "text",
+          nullable: true,
+        },
+      ],
+    },
+    {
+      id: "webhook_inbox",
+      name: "webhook_inbox",
+      fields: [
+        {
+          name: "id",
+          type: "uuid",
+          pk: true,
+        },
+        {
+          name: "store_connection_id",
+          type: "uuid",
+          fk: "store_connections.id",
+        },
+        {
+          name: "provider_delivery_ref",
+          type: "text",
+        },
+        {
+          name: "event_type",
+          type: "text",
+        },
+        {
+          name: "payload_ref",
+          type: "text",
+        },
+        {
+          name: "status",
+          type: "text",
+        },
+        {
+          name: "attempts",
+          type: "integer",
+        },
+      ],
+    },
+    {
+      id: "outbox_events",
+      name: "outbox_events",
+      fields: [
+        {
+          name: "id",
+          type: "uuid",
+          pk: true,
+        },
+        {
+          name: "aggregate_type",
+          type: "text",
+        },
+        {
+          name: "aggregate_id",
+          type: "uuid",
+        },
+        {
+          name: "event_type",
+          type: "text",
+        },
+        {
+          name: "payload",
+          type: "jsonb",
+        },
+        {
+          name: "published_at",
+          type: "timestamptz",
+          nullable: true,
+        },
+      ],
+    },
+  ]}
+  relations={[
+    {
+      from: "store_connections",
+      to: "tenants",
+      kind: "1-n",
+    },
+    {
+      from: "catalog_bindings",
+      to: "store_connections",
+      kind: "1-n",
+    },
+    {
+      from: "prescription_cases",
+      to: "tenants",
+      kind: "1-n",
+    },
+    {
+      from: "rx_configurations",
+      to: "tenants",
+      kind: "1-n",
+    },
+    {
+      from: "rx_configurations",
+      to: "store_connections",
+      kind: "1-n",
+    },
+    {
+      from: "rx_configurations",
+      to: "prescription_cases",
+      kind: "1-1",
+    },
+    {
+      from: "rx_quotes",
+      to: "rx_configurations",
+      kind: "1-n",
+    },
+    {
+      from: "quote_lines",
+      to: "rx_quotes",
+      kind: "1-n",
+    },
+    {
+      from: "cart_bindings",
+      to: "rx_quotes",
+      kind: "1-n",
+    },
+    {
+      from: "cart_bindings",
+      to: "store_connections",
+      kind: "1-n",
+    },
+    {
+      from: "order_bindings",
+      to: "cart_bindings",
+      kind: "1-1",
+    },
+    {
+      from: "fulfillment_cases",
+      to: "order_bindings",
+      kind: "1-1",
+    },
+    {
+      from: "webhook_inbox",
+      to: "store_connections",
+      kind: "1-n",
+    },
+  ]}
+/>
+
+## Shared action surface
+
+Implement application operations once. The configurator, merchant UI, support UI, and agents call the same actions. Reserve custom routes for Shopify OAuth, signed embed sessions, prescription uploads, and webhook intake.
+
+<Table
+  id="actions-table"
+  columns={["Action", "Purpose", "Critical guard"]}
+  rows={[
+    [
+      "create-rx-configuration",
+      "Start one case for a store and frame variant",
+      "Resolve the catalog mapping server-side.",
+    ],
+    [
+      "update-rx-configuration",
+      "Apply a selection or prescription reference",
+      "Require expected revision; re-run compatibility.",
+    ],
+    [
+      "get-compatible-rx-options",
+      "Return only currently valid next choices",
+      "Never trust options supplied by the browser.",
+    ],
+    [
+      "quote-rx-configuration",
+      "Create immutable commercial lines and total",
+      "Bind configuration revision, rules version, market, currency, expiry, and signature.",
+    ],
+    [
+      "create-cart-execution-plan",
+      "Translate quote lines into provider-neutral cart instructions",
+      "Return only opaque refs and safe summaries.",
+    ],
+    [
+      "register-cart-binding",
+      "Persist native cart and line references",
+      "Idempotency key plus body digest.",
+    ],
+    [
+      "validate-cart-binding",
+      "Verify package integrity at cart/checkout",
+      "Fail closed on stale, missing, mismatched, or altered components.",
+    ],
+    [
+      "capture-commerce-order",
+      "Normalize paid order and bind it once",
+      "Re-fetch authoritative order from provider.",
+    ],
+    [
+      "release-fulfillment-case",
+      "Create one lab job or quarantine",
+      "Require prescription, quote, order, and rule-version checks.",
+    ],
+    [
+      "record-shipment",
+      "Record shipment and enqueue platform writeback",
+      "Outbox event in the same transaction.",
+    ],
+    [
+      "cancel-or-remake-rx-order",
+      "Apply approved operational policy",
+      "Never create financial refunds independently.",
+    ],
+    [
+      "reconcile-commerce-order",
+      "Repair missed or divergent state",
+      "Safe to run repeatedly.",
+    ],
+  ]}
+  density="compact"
+/>
+
+<RichText id="adapter-heading" title="Commerce adapter contract">
+
+## Commerce adapter contract
+
+The adapter is split between a storefront bridge and an authenticated administration adapter. Unsupported capabilities must resolve to an explicit fallback or installation failure; core code does not branch on provider names.
+
+The final contract must additionally cover validation-token materialization and limits, cart package normalization, order edits, holds/releases, cancellation and refund normalization, fulfillment splits, capability-version provenance, and plan-tier restrictions. Replace ambiguous booleans with strategy enums where behavior differs materially.
+
+Before calling the core platform-neutral, implement an executable fake non-Shopify adapter and run the complete conformance suite against it. A minimal WooCommerce contract spike after the Shopify pilot is the first cross-language proof.
+
+</RichText>
+
+<AnnotatedCode
+  id="adapter-code"
+  filename="packages/commerce-adapter/src/contracts.ts"
+  language="ts"
+  code={
+    'export interface StorefrontCartBridge {\n  getContext(): Promise<StorefrontContext>;\n  executeCartPlan(plan: CartExecutionPlan): Promise<NormalizedCart>;\n  inspectCart(): Promise<NormalizedCart>;\n  subscribe(listener: (event: CartEvent) => void): () => void;\n}\n\nexport interface CommerceAdminAdapter {\n  readonly platform: CommercePlatform;\n  discoverCapabilities(connection: StoreConnection): Promise<CommerceCapabilities>;\n  ensureCatalogBindings(input: CatalogBindingInput): Promise<CatalogBinding[]>;\n  normalizeWebhook(request: RawWebhook): Promise<CanonicalCommerceEvent>;\n  fetchOrder(externalOrderId: string): Promise<NormalizedOrder>;\n  writeFulfillment(input: FulfillmentUpdate): Promise<void>;\n  reconcile(input: ReconciliationInput): Promise<ReconciliationResult>;\n}\n\nexport type CommerceCapabilities = {\n  embedSurface: "app-block" | "plugin" | "script" | "hosted";\n  cartStrategy: "components" | "bundle" | "fixed-package" | "external-quote";\n  serverCheckoutValidation: boolean;\n  acceleratedCheckoutCoverage: boolean;\n  fulfillmentWriteback: boolean;\n  refundsReadable: boolean;\n};'
+  }
+  annotations={[
+    {
+      lines: "1-6",
+      label: "Storefront boundary",
+      note: "The shared configurator emits a signed execution plan; this bridge performs only native cart operations.",
+    },
+    {
+      lines: "8-16",
+      label: "Server boundary",
+      note: "Credentials, webhook normalization, authoritative order retrieval, and fulfillment writeback remain inside each adapter.",
+    },
+    {
+      lines: "18-25",
+      label: "Capability negotiation",
+      note: "Platform differences are data and explicit strategies, not provider-specific branches inside Rx logic.",
+    },
+  ]}
+/>
+
+## Proposed implementation structure
+
+These paths are a proposed greenfield structure. They should be mapped to the chosen Mission repository before implementation begins.
+
+<FileTree
+  id="filemap"
+  entries={[
+    {
+      path: "apps/rx-configurator",
+      change: "added",
+      note: "Shared hosted shopper flow and embed shell.",
+    },
+    {
+      path: "apps/rx-merchant-admin",
+      change: "added",
+      note: "Store onboarding, mappings, policy, price book, and diagnostics.",
+    },
+    {
+      path: "apps/rx-operations",
+      change: "added",
+      note: "Quarantine, manual review, replay, reconciliation, remakes, and support.",
+    },
+    {
+      path: "actions/rx",
+      change: "added",
+      note: "Canonical configuration, validation, quoting, and prescription actions.",
+    },
+    {
+      path: "actions/commerce",
+      change: "added",
+      note: "Cart binding, order capture, adapter capability, and reconciliation actions.",
+    },
+    {
+      path: "actions/fulfillment",
+      change: "added",
+      note: "Release, lab-job, shipment, cancellation, and remake actions.",
+    },
+    {
+      path: "packages/rx-domain",
+      change: "added",
+      note: "Provider-neutral types, state machines, rule evaluation, and quote integrity.",
+    },
+    {
+      path: "packages/rx-contracts",
+      change: "added",
+      note: "Versioned action/event/embed schemas and generated SDK types.",
+    },
+    {
+      path: "packages/commerce-adapter",
+      change: "added",
+      note: "Ports, normalized models, capability negotiation, and conformance fixtures.",
+    },
+    {
+      path: "integrations/shopify",
+      change: "added",
+      note: "OAuth, theme extension, cart bridge, validation Function, webhooks, and fulfillment.",
+    },
+    {
+      path: "server/webhooks/shopify",
+      change: "added",
+      note: "Raw-body verification and durable inbox insertion only.",
+    },
+    {
+      path: "workers/commerce-events",
+      change: "added",
+      note: "Idempotent processing, retry, dead-letter, and replay.",
+    },
+    {
+      path: "workers/reconciliation",
+      change: "added",
+      note: "Scheduled Shopify/order/fulfillment drift repair.",
+    },
+    {
+      path: "db/schema",
+      change: "added",
+      note: "Tenant-scoped provider-neutral SQL records and additive migrations.",
+    },
+    {
+      path: "tests/adapter-conformance",
+      change: "added",
+      note: "Shared contract suite run by every commerce adapter.",
+    },
+    {
+      path: "docs/runbooks",
+      change: "added",
+      note: "Merchant onboarding, quarantine, reconciliation, cancellation, remake, and incident procedures.",
+    },
+  ]}
+/>
+
+## Workstream 1 — Shared shopper configurator
+
+**Owners:** frontend/product engineer and optical lead. **Timing:** Days 16–45.
+
+Use one Mission-hosted configurator with a small versioned embedding SDK. The host supplies store, product variant, locale, and currency context. The configurator returns a signed one-time cart execution plan containing only finite commercial components and opaque references.
+
+<Checklist
+  id="configurator-checklist"
+  items={[
+    {
+      id: "cfg-session",
+      label: "Implement short-lived embed session and strict origin allow-list",
+    },
+    {
+      id: "cfg-state",
+      label:
+        "Implement resumable configuration state with optimistic concurrency",
+    },
+    {
+      id: "cfg-rules",
+      label: "Drive every step from server-returned compatible choices",
+    },
+    {
+      id: "cfg-prescription",
+      label:
+        "Support approved prescription entry/upload paths using short-lived upload URLs",
+    },
+    {
+      id: "cfg-review",
+      label: "Show customer-safe review, pricing, expiry, and correction flow",
+    },
+    {
+      id: "cfg-errors",
+      label:
+        "Design actionable unsupported, expired, unavailable, upload-failed, and manual-review states",
+    },
+    {
+      id: "cfg-mobile",
+      label:
+        "Pass mobile, keyboard, screen-reader, slow-network, and reload/resume testing",
+    },
+    {
+      id: "cfg-telemetry",
+      label:
+        "Instrument start, step completion, validation failure, quote, add-to-cart, abandonment, and recovery without clinical values",
+    },
+  ]}
+/>
+
+<RichText id="shopify-heading" title={"Workstream 2 — Shopify reference adapter"}>
+
+## Workstream 2 — Shopify reference adapter
+
+**Owners:** Shopify engineer and backend engineer. **Timing:** Days 16–60.
+
+Ship the multi-merchant version as a public Shopify app, even if distribution is initially limited to invited brands. The product-page app block is the primary launcher; a global app embed provides the fallback for quick-add, cart drawers, and themes whose product section cannot host app blocks.
+
+Checkout enforcement must not depend on a live call to Mission. The Cart and Checkout Validation Function verifies a self-contained signed cart token containing only store, case, allowed component IDs and quantities, configuration/catalog version, key ID, and expiry. The Days 1–7 spike must establish Function input materialization, payload limits, signature algorithm, key rotation overlap, and the exact fail-closed behavior when token data is missing or malformed. Mission continuously verifies that the merchant has activated the validation rule in fail-closed mode.
+
+**Outage policy:** if Mission is unavailable, shoppers cannot start or change a configuration. A cart with an already-issued unexpired valid token can still pass Shopify’s local validation. Any paid order not yet captured by Mission remains quarantined and is recovered through webhook retry/reconciliation. Manufacturing never fails open.
+
+</RichText>
+
+<Checklist
+  id="shopify-checklist"
+  items={[
+    {
+      id: "shop-install",
+      label:
+        "Implement public-app OAuth installation, minimum required scopes, uninstall cleanup, and credential/key rotation",
+    },
+    {
+      id: "shop-theme",
+      label: "Build Theme App Extension for the product page",
+      note: "Standard path must require no direct theme source edits.",
+    },
+    {
+      id: "shop-embed",
+      label: "Build a global app-embed fallback",
+      note: "Cover quick-add, cart drawers, and themes whose product section cannot host app blocks.",
+    },
+    {
+      id: "shop-mapping",
+      label:
+        "Build merchant mapping for Rx-eligible frame variants and finite lens/service variants",
+    },
+    {
+      id: "shop-cart",
+      label: "Execute one bound frame-plus-lens cart package",
+      note: "Ship real component SKUs first; treat Cart Transform as a later presentation optimization.",
+    },
+    {
+      id: "shop-metadata",
+      label:
+        "Write only opaque Mission refs and a customer-safe lens summary to line attributes",
+      note: "Private properties remain merchant-visible; they must still contain no prescription data.",
+    },
+    {
+      id: "shop-token",
+      label: "Define and rotate the self-contained signed validation token",
+      note: "Include store, case, allowed component IDs/quantities, catalog/configuration version, and expiry—never prescription values.",
+    },
+    {
+      id: "shop-validation",
+      label: "Build Cart and Checkout Validation Function",
+      note: "Validate locally without a Mission network call; block missing, altered, expired, duplicated, or inconsistent packages across supported checkout paths.",
+    },
+    {
+      id: "shop-health",
+      label:
+        "Continuously verify that merchant checkout validation is active and fail-closed",
+      note: "Alert and prevent manufacturing release if activation or runtime-failure policy drifts.",
+    },
+    {
+      id: "shop-webhooks",
+      label:
+        "Subscribe to order, edit, cancellation, refund, fulfillment, app-uninstall, and mandatory privacy events",
+    },
+    {
+      id: "shop-graphql",
+      label:
+        "Use the GraphQL Admin API and re-fetch authoritative orders and fulfillment orders before Mission capture",
+    },
+    {
+      id: "shop-routing",
+      label:
+        "Register/configure Mission fulfillment-service locations and document frame-versus-lens routing",
+      note: "Handle split fulfillment orders, multiple locations, partial shipments, and cancellation requests explicitly.",
+    },
+    {
+      id: "shop-fulfillment",
+      label:
+        "Write fulfillment, partial shipment, tracking, and cancellation decisions back to Shopify",
+    },
+    {
+      id: "shop-admin",
+      label:
+        "Ship merchant setup, validation health, catalog health, and fulfillment-routing diagnostics",
+    },
+    {
+      id: "shop-edge",
+      label:
+        "Test direct/accelerated checkout, cart edits, frame removal, quantity changes, discount/tax behavior, Shop Pay, partial refund, remake, order edit, and uninstall/reinstall",
+    },
+  ]}
+/>
+
+## Workstream 3 — Reliable events and reconciliation
+
+**Owners:** backend/platform engineers. **Timing:** Days 31–60.
+
+<Mermaid
+  id="events-diagram"
+  source={
+    "flowchart TD\n  A[Raw platform webhook] --> B{Signature valid?}\n  B -- No --> C[Reject and audit]\n  B -- Yes --> D[Insert webhook inbox by unique delivery ID]\n  D --> E[Return 2xx]\n  D --> F[Worker atomically claims event]\n  F --> G[Fetch current platform object]\n  G --> H[Apply idempotent state transition]\n  H --> I[Commit outbox event in same transaction]\n  I --> J[Publish lab or platform update]\n  F --> K[Retry and dead-letter on failure]\n  L[Scheduled reconciliation] --> G"
+  }
+  caption={
+    "Webhook intake is deliberately short; all consequential work happens after durable insertion."
+  }
+/>
+
+<Checklist
+  id="events-checklist"
+  items={[
+    {
+      id: "evt-raw",
+      label:
+        "Verify signatures using the raw request body and connection-scoped secret",
+    },
+    {
+      id: "evt-unique",
+      label: "Enforce unique provider delivery IDs and idempotency records",
+    },
+    {
+      id: "evt-claim",
+      label:
+        "Use atomic worker claims with retry/backoff and dead-letter state",
+    },
+    {
+      id: "evt-outbox",
+      label: "Commit state changes and outbound events atomically",
+    },
+    {
+      id: "evt-replay",
+      label: "Provide safe operator replay with audit trail and preview",
+    },
+    {
+      id: "evt-reconcile",
+      label: "Schedule cart/order/fulfillment reconciliation and surface drift",
+    },
+    {
+      id: "evt-redact",
+      label:
+        "Redact sensitive values from payload views, logs, traces, and alerting",
+    },
+  ]}
+/>
+
+<RichText id="security-heading" title={"Workstream 4 — Security, privacy, and audit"}>
+
+## Workstream 4 — Security, privacy, and audit
+
+**Owners:** security/privacy reviewer, backend lead, optical/program lead. **Timing:** begins Day 1; launch gate at Day 75.
+
+`PrescriptionCase` must identify the protected subject through a Mission-owned subject reference, consent/authorization state, jurisdiction, retention policy, and optional authenticated-customer claim. By default, the brand sees only receipt/readiness status and a customer-safe summary; prescription values and documents are limited to authorized Mission optical reviewers and production roles. Cross-device claim, export, deletion, merchant access, and reviewer-release policy must be approved before storage infrastructure is finalized.
+
+</RichText>
+
+<Checklist
+  id="security-checklist"
+  items={[
+    {
+      id: "sec-classify",
+      label:
+        "Classify every field as public commerce, internal operational, restricted optical, or prescription/document data",
+    },
+    {
+      id: "sec-tenant",
+      label: "Enforce tenant/store access at every read and write boundary",
+    },
+    {
+      id: "sec-encrypt",
+      label:
+        "Encrypt sensitive database fields and object storage; isolate keys and environments",
+    },
+    {
+      id: "sec-upload",
+      label:
+        "Use short-lived upload URLs, malware scanning, content-type/size checks, and non-guessable object names",
+    },
+    {
+      id: "sec-logs",
+      label:
+        "Prohibit prescription values and document URLs in logs, analytics, support exports, and commerce metadata",
+    },
+    {
+      id: "sec-auth",
+      label:
+        "Use least-privilege platform scopes, scoped service identities, secret rotation, and revocation",
+    },
+    {
+      id: "sec-audit",
+      label:
+        "Audit configuration changes, prescription review, quote creation, order capture, quarantine release, remakes, and operator replay",
+    },
+    {
+      id: "sec-retention",
+      label:
+        "Approve retention, deletion, consent, data-export, incident, and business-associate responsibilities with counsel/security",
+    },
+    {
+      id: "sec-test",
+      label:
+        "Run automated egress scans proving restricted fields do not leave approved Mission stores",
+    },
+  ]}
+/>
+
+<RichText id="operations-heading" title={"Workstream 5 — Lab fulfillment and operations"}>
+
+## Workstream 5 — Lab fulfillment and operations
+
+**Owners:** fulfillment engineer, optical lead, lab operations, support lead. **Timing:** Days 31–75.
+
+A lab job may be created only when all release predicates are true: the authoritative Shopify order exists; the merchant-approved financial state is satisfied; fraud/risk and cancellation holds are clear; bound commercial lines match the signed plan; the prescription case is approved; the optical configuration is approved; frame/lens availability is confirmed; the latest order edit/refund/cancellation has been processed; and the manufacturing release policy permits work to begin. Otherwise the fulfillment case remains quarantined with an explicit reason.
+
+Post-payment edits never mutate the original configuration or quote. They create a new revision and require revalidation; cancellation, partial refund, chargeback, frame substitution, production cutoff, and remake transitions are defined in the state machine and runbook.
+
+</RichText>
+
+<Checklist
+  id="operations-checklist"
+  items={[
+    {
+      id: "ops-instructions",
+      label:
+        "Version manufacturing instructions independently from customer-facing summaries",
+    },
+    {
+      id: "ops-release",
+      label: "Require an explicit pre-manufacturing release gate",
+    },
+    {
+      id: "ops-quarantine",
+      label: "Implement quarantine reasons and operator resolution paths",
+    },
+    {
+      id: "ops-lab-idempotent",
+      label:
+        "Make lab-job creation idempotent and record the external lab reference",
+    },
+    {
+      id: "ops-cancel",
+      label: "Define cancellation cutoffs before and after production begins",
+    },
+    {
+      id: "ops-remake",
+      label:
+        "Model remakes as linked operational cases without rewriting the original order",
+    },
+    {
+      id: "ops-refund",
+      label:
+        "Ingest and reconcile merchant refunds without independently issuing financial changes",
+    },
+    {
+      id: "ops-status",
+      label: "Map lab statuses to a stable customer-safe fulfillment model",
+    },
+    {
+      id: "ops-runbook",
+      label:
+        "Write runbooks for missing Rx, mismatch, frame unavailable, quote divergence, lab rejection, duplicate event, and tracking failure",
+    },
+  ]}
+/>
+
+## Workstream 6 — Verification and adapter conformance
+
+**Owner:** QA/automation engineer with engineering, optical, merchant, and lab sign-off.
+
+<Table
+  id="qa-table"
+  columns={["Test layer", "Required coverage"]}
+  rows={[
+    [
+      "Domain unit tests",
+      "Rule evaluation, option dependencies, price book, quote expiry/signature, state transitions, and revision conflicts.",
+    ],
+    [
+      "Optical matrix",
+      "Supported and unsupported prescriptions across pilot frames, lens designs, indices, coatings, tints, and manual-review conditions.",
+    ],
+    [
+      "Contract tests",
+      "Every action/event schema, idempotency key/body digest, adapter capabilities, normalization, and error/fallback behavior.",
+    ],
+    [
+      "Shopify integration",
+      "Theme block, cart components, checkout validation, accelerated checkout, discounts, tax, refunds, fulfillment, uninstall/reinstall.",
+    ],
+    [
+      "Reliability",
+      "Duplicate, missing, delayed, and out-of-order webhooks; worker crash; rate limit; timeout; dead letter; reconciliation recovery.",
+    ],
+    [
+      "Security",
+      "Tenant isolation, authorization, upload abuse, secret rotation, sensitive-data egress, log redaction, and audit completeness.",
+    ],
+    [
+      "Experience",
+      "Mobile, accessibility, loading, resume, quote expiry, unsupported Rx, upload failure, and customer correction.",
+    ],
+    [
+      "End-to-end",
+      "Fresh merchant install → mapping → shopper order → quarantine/release → lab → shipment → tracking → cancellation/refund/remake.",
+    ],
+  ]}
+  density="compact"
+/>
+
+<RichText id="conformance-heading" title="Adapter conformance scenarios">
+
+### Adapter conformance scenarios
+
+The suite must include quantity greater than one, configuration cloning per physical pair, token key rotation, materialized-validation data missing or oversized, catalog SKU drift, discount/tax/shipping allocation, chargeback, post-payment edit, frame substitution, Mission outage, Shopify outage, and a fake non-Shopify adapter. A passing interface-only mock is insufficient; the fake adapter must persist native-like cart/order state and replay provider events.
+
+</RichText>
+
+<Checklist
+  id="conformance-checklist"
+  items={[
+    {
+      id: "conf-one",
+      label:
+        "Execute the same signed cart plan twice; native cart remains singular and correct.",
+    },
+    {
+      id: "conf-two",
+      label:
+        "Remove or change the frame; dependent Rx package becomes invalid and checkout is blocked.",
+    },
+    {
+      id: "conf-three",
+      label:
+        "Change product, currency, market, or configuration revision; stale quote is rejected.",
+    },
+    {
+      id: "conf-four",
+      label:
+        "Merge anonymous and logged-in carts; bindings remain attributable and safe.",
+    },
+    {
+      id: "conf-five",
+      label:
+        "Deliver order/refund/cancellation events twice and out of order; final state remains correct.",
+    },
+    {
+      id: "conf-six",
+      label:
+        "Kill a worker after the platform fetch and after the database commit; retry creates no duplicate side effect.",
+    },
+    {
+      id: "conf-seven",
+      label:
+        "Miss the webhook entirely; reconciliation captures or quarantines the order.",
+    },
+    {
+      id: "conf-eight",
+      label:
+        "Scan platform cart, order, webhook, logs, and analytics; no restricted prescription data is present.",
+    },
+  ]}
+/>
+
+## Staffing and governance
+
+<Table
+  id="staffing-table"
+  columns={["Role", "Pilot allocation", "Accountability"]}
+  rows={[
+    [
+      "Product/program lead",
+      "1.0",
+      "Scope, merchant workflow, schedule, metrics, decisions, and launch gates.",
+    ],
+    [
+      "Optical/Rx domain lead",
+      "0.75–1.0",
+      "Compatibility rules, prescription review, exceptions, manufacturing readiness, and optical sign-off.",
+    ],
+    [
+      "Backend/platform engineers",
+      "2.0",
+      "Canonical service, SQL, rules/quotes, integrations, reliability, security, and observability.",
+    ],
+    [
+      "Shopify engineer",
+      "1.0",
+      "App installation, theme extension, cart, validation Function, Admin UX, webhooks, and fulfillment.",
+    ],
+    [
+      "Frontend/product engineer",
+      "1.0",
+      "Shared configurator, SDK, accessibility, localization readiness, and analytics.",
+    ],
+    [
+      "QA/automation engineer",
+      "1.0",
+      "Optical matrix, contract/integration/E2E tests, release evidence, and adapter conformance.",
+    ],
+    [
+      "Implementation/customer success",
+      "0.5–1.0",
+      "Merchant catalog mapping, onboarding, training, support, and pilot feedback.",
+    ],
+    [
+      "Security/privacy and UX specialists",
+      "Fractional",
+      "Threat/privacy review, counsel coordination, design critique, and launch approval.",
+    ],
+  ]}
+/>
+
+## Pilot metrics and launch gates
+
+<Table
+  id="metrics-table"
+  columns={["Category", "Initial target / gate"]}
+  rows={[
+    [
+      "Financial integrity",
+      "100% match between signed plan and bound gross merchandise SKU/quantity/unit amounts; separately reconcile Shopify discount, tax, shipping, payment, refund, and captured-total allocations.",
+    ],
+    [
+      "Safety",
+      "Zero unsupported prescriptions accepted for automatic production; zero manufacturing releases when any financial, optical, inventory, edit, cancellation, or integrity predicate is unresolved.",
+    ],
+    [
+      "Idempotency",
+      "Zero duplicate cart packages, order bindings, fulfillment cases, lab jobs, or outbound fulfillment effects.",
+    ],
+    [
+      "Reliability",
+      "At least 99.9% event processing without manual repair; all missed events recoverable through reconciliation.",
+    ],
+    [
+      "Performance",
+      "Quote p95 under 750 ms after rule data is loaded; lab-job creation p95 within two minutes of all release predicates becoming true.",
+    ],
+    [
+      "Cart execution",
+      "More than 99% of valid signed plans add the intended native cart package successfully.",
+    ],
+    [
+      "Shopper funnel",
+      "Establish baseline, then target at least 60% completion among shoppers who start the configurator.",
+    ],
+    [
+      "Operations",
+      "Track manual interventions and support tickets per 100 Rx orders; no production launch without safe non-engineering recovery tools.",
+    ],
+    [
+      "Merchant onboarding",
+      "A new pilot catalog can be mapped and health-checked from documented inputs without source-code changes.",
+    ],
+    [
+      "Portability",
+      "The fake non-Shopify adapter passes the conformance suite; adapter two begins only after signed-demand gate.",
+    ],
+  ]}
+  density="compact"
+/>
+
+## Launch checklist
+
+<Checklist
+  id="launch-checklist"
+  items={[
+    {
+      id: "launch-optical",
+      label:
+        "Optical matrix approved; unsupported combinations fail closed with actionable guidance.",
+    },
+    {
+      id: "launch-financial",
+      label:
+        "Quote, native cart, captured order, refund, and Mission records reconcile exactly.",
+    },
+    {
+      id: "launch-reliability",
+      label:
+        "Webhook handling is idempotent, observable, replayable, and reconciliation-tested.",
+    },
+    {
+      id: "launch-security",
+      label:
+        "Sensitive-field egress scan passes; tenant/auth/upload/audit reviews are complete.",
+    },
+    {
+      id: "launch-fulfillment",
+      label:
+        "Every accepted case carries versioned manufacturing instructions and required approvals.",
+    },
+    {
+      id: "launch-merchant",
+      label:
+        "Merchant installation and product mapping work without standard-path theme source edits.",
+    },
+    {
+      id: "launch-experience",
+      label:
+        "Mobile, accessibility, slow-network, expired quote, prescription-later, and accelerated checkout paths pass.",
+    },
+    {
+      id: "launch-operations",
+      label:
+        "Support can quarantine, resolve, replay, reconcile, cancel, and start a remake without direct database access.",
+    },
+    {
+      id: "launch-rollback",
+      label:
+        "Feature flag, kill switch, storefront fallback, and order-recovery procedures are rehearsed.",
+    },
+    {
+      id: "launch-approval",
+      label:
+        "Product, optical, engineering, lab operations, merchant, security/privacy, and support owners sign the go-live record.",
+    },
+  ]}
+/>
+
+## Post-pilot adapter roadmap
+
+Before selecting adapter two, inventory the actual commerce platforms used by 100–200 qualified Mission prospects. Weight signed demand, GMV, geography, implementation uniformity, and support burden—not global store count alone.
+
+1. **WooCommerce** when reachable merchant demand outweighs its plugin/theme/hosting variability.
+2. **BigCommerce** when Mission values a cleaner SaaS adapter and mid-market/headless capability.
+3. **Commerce Layer** for Mission-owned B2B, headless, spatial, or white-label channels where Mission intentionally owns the transaction path.
+4. **Adobe Commerce or Salesforce Commerce** only for an anchor enterprise engagement that funds bespoke packaging and support.
+5. **Wix and Squarespace** through the hosted configurator/fallback strategy when qualified demand justifies their more constrained surfaces.
+
+The investment gate for any adapter is three committed design partners or one anchor account that covers build and first-year support.
+
+### Open Questions
+
+<QuestionForm
+  id="open-questions"
+  questions={[
+    {
+      id: "q-pilot",
+      title: "Which merchant should be the production pilot?",
+      subtitle:
+        "The plan assumes one cooperative brand with 10–25 frames, one primary market, and authority to test fulfillment and refund flows.",
+      mode: "freeform",
+      placeholder:
+        "Brand/store, expected launch window, catalog size, and owner...",
+      required: true,
+    },
+    {
+      id: "q-prescription",
+      title: "Which prescription intake paths belong in the pilot?",
+      subtitle:
+        "This affects configurator scope, operational staffing, and security review.",
+      mode: "multi",
+      options: [
+        {
+          id: "q-prescription-upload",
+          label: "Upload prescription document",
+          detail: "Use short-lived uploads and manual/automated review.",
+          recommended: true,
+        },
+        {
+          id: "q-prescription-manual",
+          label: "Manual entry",
+          detail:
+            "Requires field-level validation and a clear verification policy.",
+          recommended: true,
+        },
+        {
+          id: "q-prescription-later",
+          label: "Send prescription later",
+          detail: "Creates an ordered but quarantined case until received.",
+          recommended: true,
+        },
+        {
+          id: "q-prescription-saved",
+          label: "Use saved Mission prescription",
+          detail:
+            "Include only if authenticated customer records already exist.",
+        },
+      ],
+      required: true,
+    },
+    {
+      id: "q-market",
+      title: "What market scope should the first pilot support?",
+      subtitle:
+        "The recommended first cut minimizes pricing and reconciliation variables.",
+      mode: "single",
+      options: [
+        {
+          id: "q-market-one",
+          label: "One market and currency",
+          detail:
+            "Proves the architecture before Markets and currency expansion.",
+          recommended: true,
+        },
+        {
+          id: "q-market-multi",
+          label: "Multiple currencies/markets",
+          detail:
+            "Adds price-book, presentment, rounding, tax, and reconciliation complexity.",
+        },
+      ],
+      required: true,
+    },
+    {
+      id: "q-lab",
+      title:
+        "Which existing lab/Rx fulfillment interface should create the production job?",
+      subtitle:
+        "The integration can target an existing Mission engine, a temporary orchestration action, or a partner API, but the owner and contract must be named before Day 16.",
+      mode: "freeform",
+      placeholder:
+        "System/API name, technical owner, current documentation, and test environment...",
+      required: true,
+    },
+    {
+      id: "q-adapter-two",
+      title: "What should trigger the second commerce adapter?",
+      mode: "single",
+      options: [
+        {
+          id: "q-adapter-demand",
+          label: "Signed-demand gate",
+          detail:
+            "Three design partners or one anchor account funds build and support.",
+          recommended: true,
+        },
+        {
+          id: "q-adapter-calendar",
+          label: "Calendar commitment",
+          detail:
+            "Start WooCommerce or BigCommerce immediately after Shopify regardless of demand.",
+        },
+      ],
+      required: true,
+    },
+  ]}
+  submitLabel="Send implementation decisions"
+/>
