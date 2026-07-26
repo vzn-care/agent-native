@@ -8,6 +8,10 @@ import {
 // startup so the dashboard / analysis share actions know where to dispatch.
 import "../db/index.js";
 import * as schema from "../db/schema.js";
+import {
+  repairPersistedFirstPartyDashboardQueries,
+  repairUnboundedFirstPartyPanelsAcrossDashboards,
+} from "../lib/first-party-dashboard-repair.js";
 
 /**
  * Every Drizzle table exported from schema.ts. Filters out type-only and
@@ -568,6 +572,8 @@ const runAnalyticsMigrations = runMigrations(
       severity TEXT NOT NULL DEFAULT 'warning',
       channels TEXT NOT NULL DEFAULT '["inbox"]',
       email_recipients TEXT NOT NULL DEFAULT '[]',
+      slack_webhook_url TEXT,
+      webhook_url TEXT,
       enabled BOOLEAN NOT NULL DEFAULT true,
       last_evaluated_at TEXT,
       last_triggered_at TEXT,
@@ -592,6 +598,8 @@ const runAnalyticsMigrations = runMigrations(
       severity TEXT NOT NULL DEFAULT 'warning',
       channels TEXT NOT NULL DEFAULT '["inbox"]',
       email_recipients TEXT NOT NULL DEFAULT '[]',
+      slack_webhook_url TEXT,
+      webhook_url TEXT,
       enabled INTEGER NOT NULL DEFAULT 1,
       last_evaluated_at TEXT,
       last_triggered_at TEXT,
@@ -706,6 +714,602 @@ const runAnalyticsMigrations = runMigrations(
       name: "analytics-db-admin-connections-org-updated-idx",
       sql: `CREATE INDEX IF NOT EXISTS analytics_db_admin_connections_org_updated_idx ON analytics_db_admin_connections (org_id, updated_at)`,
     },
+    // --- v83+: error capture (Sentry-style exception tracking). Grouped
+    //   issues + individual occurrences linked to session replays. See
+    //   server/db/schema-errors.ts and server/lib/error-capture.ts.
+    {
+      version: 83,
+      name: "error-issues-table",
+      sql: {
+        postgres: `CREATE TABLE IF NOT EXISTS error_issues (
+      id TEXT PRIMARY KEY,
+      fingerprint TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'Error',
+      title TEXT NOT NULL,
+      culprit TEXT,
+      level TEXT NOT NULL DEFAULT 'error',
+      status TEXT NOT NULL DEFAULT 'unresolved',
+      first_seen_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      event_count INTEGER NOT NULL DEFAULT 0,
+      users_affected INTEGER NOT NULL DEFAULT 0,
+      sample_event_id TEXT,
+      last_session_recording_id TEXT,
+      assignee TEXT,
+      app TEXT,
+      template TEXT,
+      created_at TEXT NOT NULL DEFAULT (now()::text),
+      updated_at TEXT NOT NULL DEFAULT (now()::text),
+      owner_email TEXT NOT NULL DEFAULT 'local@localhost',
+      org_id TEXT,
+      visibility TEXT NOT NULL DEFAULT 'private'
+    )`,
+        sqlite: `CREATE TABLE IF NOT EXISTS error_issues (
+      id TEXT PRIMARY KEY,
+      fingerprint TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'Error',
+      title TEXT NOT NULL,
+      culprit TEXT,
+      level TEXT NOT NULL DEFAULT 'error',
+      status TEXT NOT NULL DEFAULT 'unresolved',
+      first_seen_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      event_count INTEGER NOT NULL DEFAULT 0,
+      users_affected INTEGER NOT NULL DEFAULT 0,
+      sample_event_id TEXT,
+      last_session_recording_id TEXT,
+      assignee TEXT,
+      app TEXT,
+      template TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      owner_email TEXT NOT NULL DEFAULT 'local@localhost',
+      org_id TEXT,
+      visibility TEXT NOT NULL DEFAULT 'private'
+    )`,
+      },
+    },
+    {
+      version: 84,
+      name: "error-issue-shares-table",
+      sql: {
+        postgres: `CREATE TABLE IF NOT EXISTS error_issue_shares (
+      id TEXT PRIMARY KEY,
+      resource_id TEXT NOT NULL,
+      principal_type TEXT NOT NULL,
+      principal_id TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'viewer',
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (now()::text)
+    )`,
+        sqlite: `CREATE TABLE IF NOT EXISTS error_issue_shares (
+      id TEXT PRIMARY KEY,
+      resource_id TEXT NOT NULL,
+      principal_type TEXT NOT NULL,
+      principal_id TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'viewer',
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+      },
+    },
+    {
+      version: 85,
+      name: "error-events-table",
+      sql: {
+        postgres: `CREATE TABLE IF NOT EXISTS error_events (
+      id TEXT PRIMARY KEY,
+      issue_id TEXT NOT NULL,
+      fingerprint TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'Error',
+      message TEXT NOT NULL DEFAULT '',
+      culprit TEXT,
+      level TEXT NOT NULL DEFAULT 'error',
+      stack TEXT NOT NULL DEFAULT '[]',
+      raw_stack TEXT,
+      handled BOOLEAN NOT NULL DEFAULT true,
+      url TEXT,
+      user_id TEXT,
+      anonymous_id TEXT,
+      user_key TEXT,
+      session_id TEXT,
+      client_recording_id TEXT,
+      session_recording_id TEXT,
+      release TEXT,
+      environment TEXT,
+      tags TEXT NOT NULL DEFAULT '{}',
+      extra TEXT NOT NULL DEFAULT '{}',
+      breadcrumbs TEXT NOT NULL DEFAULT '[]',
+      occurred_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (now()::text),
+      owner_email TEXT NOT NULL DEFAULT 'local@localhost',
+      org_id TEXT
+    )`,
+        sqlite: `CREATE TABLE IF NOT EXISTS error_events (
+      id TEXT PRIMARY KEY,
+      issue_id TEXT NOT NULL,
+      fingerprint TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'Error',
+      message TEXT NOT NULL DEFAULT '',
+      culprit TEXT,
+      level TEXT NOT NULL DEFAULT 'error',
+      stack TEXT NOT NULL DEFAULT '[]',
+      raw_stack TEXT,
+      handled INTEGER NOT NULL DEFAULT 1,
+      url TEXT,
+      user_id TEXT,
+      anonymous_id TEXT,
+      user_key TEXT,
+      session_id TEXT,
+      client_recording_id TEXT,
+      session_recording_id TEXT,
+      release TEXT,
+      environment TEXT,
+      tags TEXT NOT NULL DEFAULT '{}',
+      extra TEXT NOT NULL DEFAULT '{}',
+      breadcrumbs TEXT NOT NULL DEFAULT '[]',
+      occurred_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      owner_email TEXT NOT NULL DEFAULT 'local@localhost',
+      org_id TEXT
+    )`,
+      },
+    },
+    {
+      version: 86,
+      name: "error-issues-scope-fingerprint-idx",
+      sql: `CREATE UNIQUE INDEX IF NOT EXISTS error_issues_scope_fingerprint_idx ON error_issues (owner_email, org_id, fingerprint)`,
+    },
+    {
+      version: 87,
+      name: "error-issues-scope-last-seen-idx",
+      sql: `CREATE INDEX IF NOT EXISTS error_issues_scope_last_seen_idx ON error_issues (owner_email, org_id, last_seen_at)`,
+    },
+    {
+      version: 88,
+      name: "error-issues-scope-status-idx",
+      sql: `CREATE INDEX IF NOT EXISTS error_issues_scope_status_idx ON error_issues (org_id, owner_email, status, last_seen_at)`,
+    },
+    {
+      version: 89,
+      name: "error-events-issue-occurred-idx",
+      sql: `CREATE INDEX IF NOT EXISTS error_events_issue_occurred_idx ON error_events (issue_id, occurred_at)`,
+    },
+    {
+      version: 90,
+      name: "error-events-scope-occurred-idx",
+      sql: `CREATE INDEX IF NOT EXISTS error_events_scope_occurred_idx ON error_events (owner_email, org_id, occurred_at)`,
+    },
+    {
+      version: 91,
+      name: "error-issue-shares-resource-idx",
+      sql: `CREATE INDEX IF NOT EXISTS error_issue_shares_resource_idx ON error_issue_shares (resource_id)`,
+    },
+    // --- v92+: uptime monitoring (synthetic HTTP checks + alerting). See
+    //   server/db/schema-monitoring.ts and server/lib/uptime-monitors.ts.
+    {
+      version: 92,
+      name: "uptime-monitors-table",
+      sql: {
+        postgres: `CREATE TABLE IF NOT EXISTS monitors (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      url TEXT NOT NULL,
+      method TEXT NOT NULL DEFAULT 'GET',
+      request_headers TEXT NOT NULL DEFAULT '{}',
+      request_body TEXT,
+      interval_seconds INTEGER NOT NULL DEFAULT 300,
+      timeout_ms INTEGER NOT NULL DEFAULT 10000,
+      expected_status TEXT NOT NULL DEFAULT '{"mode":"class","classes":["2xx"]}',
+      assertions TEXT NOT NULL DEFAULT '[]',
+      follow_redirects BOOLEAN NOT NULL DEFAULT true,
+      severity TEXT NOT NULL DEFAULT 'critical',
+      channels TEXT NOT NULL DEFAULT '["inbox"]',
+      email_recipients TEXT NOT NULL DEFAULT '[]',
+      cooldown_minutes INTEGER NOT NULL DEFAULT 15,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      last_status TEXT,
+      last_checked_at TEXT,
+      last_success_at TEXT,
+      last_error TEXT,
+      last_latency_ms INTEGER,
+      last_status_code INTEGER,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (now()::text),
+      updated_at TEXT NOT NULL DEFAULT (now()::text),
+      owner_email TEXT NOT NULL DEFAULT 'local@localhost',
+      org_id TEXT,
+      visibility TEXT NOT NULL DEFAULT 'private'
+    )`,
+        sqlite: `CREATE TABLE IF NOT EXISTS monitors (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      url TEXT NOT NULL,
+      method TEXT NOT NULL DEFAULT 'GET',
+      request_headers TEXT NOT NULL DEFAULT '{}',
+      request_body TEXT,
+      interval_seconds INTEGER NOT NULL DEFAULT 300,
+      timeout_ms INTEGER NOT NULL DEFAULT 10000,
+      expected_status TEXT NOT NULL DEFAULT '{"mode":"class","classes":["2xx"]}',
+      assertions TEXT NOT NULL DEFAULT '[]',
+      follow_redirects INTEGER NOT NULL DEFAULT 1,
+      severity TEXT NOT NULL DEFAULT 'critical',
+      channels TEXT NOT NULL DEFAULT '["inbox"]',
+      email_recipients TEXT NOT NULL DEFAULT '[]',
+      cooldown_minutes INTEGER NOT NULL DEFAULT 15,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      last_status TEXT,
+      last_checked_at TEXT,
+      last_success_at TEXT,
+      last_error TEXT,
+      last_latency_ms INTEGER,
+      last_status_code INTEGER,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      owner_email TEXT NOT NULL DEFAULT 'local@localhost',
+      org_id TEXT,
+      visibility TEXT NOT NULL DEFAULT 'private'
+    )`,
+      },
+    },
+    {
+      version: 93,
+      name: "uptime-monitor-check-results-table",
+      sql: {
+        postgres: `CREATE TABLE IF NOT EXISTS monitor_check_results (
+      id TEXT PRIMARY KEY,
+      monitor_id TEXT NOT NULL,
+      checked_at TEXT NOT NULL,
+      ok BOOLEAN NOT NULL,
+      status TEXT NOT NULL DEFAULT 'up',
+      status_code INTEGER,
+      latency_ms INTEGER,
+      error TEXT,
+      failed_assertions TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL DEFAULT (now()::text),
+      owner_email TEXT NOT NULL DEFAULT 'local@localhost',
+      org_id TEXT,
+      visibility TEXT NOT NULL DEFAULT 'private'
+    )`,
+        sqlite: `CREATE TABLE IF NOT EXISTS monitor_check_results (
+      id TEXT PRIMARY KEY,
+      monitor_id TEXT NOT NULL,
+      checked_at TEXT NOT NULL,
+      ok INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'up',
+      status_code INTEGER,
+      latency_ms INTEGER,
+      error TEXT,
+      failed_assertions TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      owner_email TEXT NOT NULL DEFAULT 'local@localhost',
+      org_id TEXT,
+      visibility TEXT NOT NULL DEFAULT 'private'
+    )`,
+      },
+    },
+    {
+      version: 94,
+      name: "uptime-monitor-incidents-table",
+      sql: {
+        postgres: `CREATE TABLE IF NOT EXISTS monitor_incidents (
+      id TEXT PRIMARY KEY,
+      monitor_id TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      resolved_at TEXT,
+      status TEXT NOT NULL DEFAULT 'down',
+      severity TEXT NOT NULL DEFAULT 'critical',
+      cause TEXT NOT NULL DEFAULT '',
+      last_error TEXT,
+      notification_id TEXT,
+      notification_delivered BOOLEAN NOT NULL DEFAULT false,
+      checks_failed INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (now()::text),
+      owner_email TEXT NOT NULL DEFAULT 'local@localhost',
+      org_id TEXT,
+      visibility TEXT NOT NULL DEFAULT 'private'
+    )`,
+        sqlite: `CREATE TABLE IF NOT EXISTS monitor_incidents (
+      id TEXT PRIMARY KEY,
+      monitor_id TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      resolved_at TEXT,
+      status TEXT NOT NULL DEFAULT 'down',
+      severity TEXT NOT NULL DEFAULT 'critical',
+      cause TEXT NOT NULL DEFAULT '',
+      last_error TEXT,
+      notification_id TEXT,
+      notification_delivered INTEGER NOT NULL DEFAULT 0,
+      checks_failed INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      owner_email TEXT NOT NULL DEFAULT 'local@localhost',
+      org_id TEXT,
+      visibility TEXT NOT NULL DEFAULT 'private'
+    )`,
+      },
+    },
+    {
+      version: 95,
+      name: "uptime-monitors-scope-enabled-idx",
+      sql: `CREATE INDEX IF NOT EXISTS monitors_scope_enabled_idx ON monitors (org_id, owner_email, enabled)`,
+    },
+    {
+      version: 96,
+      name: "uptime-monitors-due-idx",
+      sql: `CREATE INDEX IF NOT EXISTS monitors_due_idx ON monitors (enabled, last_status, last_checked_at)`,
+    },
+    {
+      version: 97,
+      name: "uptime-monitor-check-results-monitor-idx",
+      sql: `CREATE INDEX IF NOT EXISTS monitor_check_results_monitor_idx ON monitor_check_results (monitor_id, checked_at)`,
+    },
+    {
+      version: 98,
+      name: "uptime-monitor-check-results-checked-idx",
+      sql: `CREATE INDEX IF NOT EXISTS monitor_check_results_checked_idx ON monitor_check_results (checked_at)`,
+    },
+    {
+      version: 99,
+      name: "uptime-monitor-incidents-monitor-idx",
+      sql: `CREATE INDEX IF NOT EXISTS monitor_incidents_monitor_idx ON monitor_incidents (monitor_id, started_at)`,
+    },
+    {
+      version: 100,
+      name: "uptime-monitor-incidents-open-idx",
+      sql: `CREATE INDEX IF NOT EXISTS monitor_incidents_open_idx ON monitor_incidents (monitor_id, resolved_at)`,
+    },
+    {
+      version: 101,
+      name: "error-issues-personal-fingerprint-unique-idx",
+      sql: `CREATE UNIQUE INDEX IF NOT EXISTS error_issues_personal_fingerprint_unique_idx ON error_issues (owner_email, fingerprint) WHERE org_id IS NULL`,
+    },
+    {
+      version: 102,
+      name: "error-issues-org-fingerprint-unique-idx",
+      sql: `CREATE UNIQUE INDEX IF NOT EXISTS error_issues_org_fingerprint_unique_idx ON error_issues (owner_email, org_id, fingerprint) WHERE org_id IS NOT NULL`,
+    },
+    // --- v103+: public status pages (owner-authored, publicly shareable uptime
+    //   status pages). See server/db/schema-monitoring.ts (`statusPages`) and
+    //   server/lib/status-pages.ts.
+    {
+      version: 103,
+      name: "status-pages-table",
+      sql: {
+        postgres: `CREATE TABLE IF NOT EXISTS status_pages (
+      id TEXT PRIMARY KEY,
+      slug TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      published BOOLEAN NOT NULL DEFAULT false,
+      show_uptime_bars BOOLEAN NOT NULL DEFAULT true,
+      show_overall_uptime BOOLEAN NOT NULL DEFAULT true,
+      show_response_time BOOLEAN NOT NULL DEFAULT false,
+      density TEXT NOT NULL DEFAULT 'comfortable',
+      alignment TEXT NOT NULL DEFAULT 'left',
+      monitors TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL DEFAULT (now()::text),
+      updated_at TEXT NOT NULL DEFAULT (now()::text),
+      owner_email TEXT NOT NULL DEFAULT 'local@localhost',
+      org_id TEXT,
+      visibility TEXT NOT NULL DEFAULT 'private'
+    )`,
+        sqlite: `CREATE TABLE IF NOT EXISTS status_pages (
+      id TEXT PRIMARY KEY,
+      slug TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      published INTEGER NOT NULL DEFAULT 0,
+      show_uptime_bars INTEGER NOT NULL DEFAULT 1,
+      show_overall_uptime INTEGER NOT NULL DEFAULT 1,
+      show_response_time INTEGER NOT NULL DEFAULT 0,
+      density TEXT NOT NULL DEFAULT 'comfortable',
+      alignment TEXT NOT NULL DEFAULT 'left',
+      monitors TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      owner_email TEXT NOT NULL DEFAULT 'local@localhost',
+      org_id TEXT,
+      visibility TEXT NOT NULL DEFAULT 'private'
+    )`,
+      },
+    },
+    {
+      version: 104,
+      name: "status-pages-slug-unique-idx",
+      sql: `CREATE UNIQUE INDEX IF NOT EXISTS status_pages_slug_unique_idx ON status_pages (slug)`,
+    },
+    {
+      version: 105,
+      name: "status-pages-scope-updated-idx",
+      sql: `CREATE INDEX IF NOT EXISTS status_pages_scope_updated_idx ON status_pages (owner_email, org_id, updated_at)`,
+    },
+    {
+      version: 106,
+      name: "uptime-monitors-slack-webhook-url",
+      sql: `ALTER TABLE monitors ADD COLUMN IF NOT EXISTS slack_webhook_url TEXT`,
+    },
+    {
+      version: 107,
+      name: "uptime-monitors-webhook-url",
+      sql: `ALTER TABLE monitors ADD COLUMN IF NOT EXISTS webhook_url TEXT`,
+    },
+    {
+      version: 108,
+      name: "analytics-alert-rules-slack-webhook-url",
+      sql: `ALTER TABLE analytics_alert_rules ADD COLUMN IF NOT EXISTS slack_webhook_url TEXT`,
+    },
+    {
+      version: 109,
+      name: "analytics-alert-rules-webhook-url",
+      sql: `ALTER TABLE analytics_alert_rules ADD COLUMN IF NOT EXISTS webhook_url TEXT`,
+    },
+    {
+      version: 110,
+      name: "dashboards-updated-by",
+      sql: `ALTER TABLE dashboards ADD COLUMN IF NOT EXISTS updated_by TEXT`,
+    },
+    {
+      version: 111,
+      name: "dashboard-revisions-table",
+      sql: {
+        postgres: `CREATE TABLE IF NOT EXISTS dashboard_revisions (
+      id TEXT PRIMARY KEY,
+      dashboard_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      config TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (now()::text),
+      created_by TEXT,
+      owner_email TEXT NOT NULL DEFAULT 'local@localhost',
+      org_id TEXT
+    )`,
+        sqlite: `CREATE TABLE IF NOT EXISTS dashboard_revisions (
+      id TEXT PRIMARY KEY,
+      dashboard_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      config TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_by TEXT,
+      owner_email TEXT NOT NULL DEFAULT 'local@localhost',
+      org_id TEXT
+    )`,
+      },
+    },
+    {
+      version: 112,
+      name: "dashboard-revisions-dashboard-created-idx",
+      sql: `CREATE INDEX IF NOT EXISTS dashboard_revisions_dashboard_created_idx ON dashboard_revisions (dashboard_id, created_at)`,
+    },
+    {
+      version: 113,
+      name: "analysis-revisions-table",
+      sql: {
+        postgres: `CREATE TABLE IF NOT EXISTS analysis_revisions (
+      id TEXT PRIMARY KEY,
+      analysis_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      question TEXT NOT NULL DEFAULT '',
+      instructions TEXT NOT NULL DEFAULT '',
+      data_sources TEXT NOT NULL DEFAULT '[]',
+      result_markdown TEXT NOT NULL DEFAULT '',
+      result_data TEXT,
+      created_at TEXT NOT NULL DEFAULT (now()::text),
+      created_by TEXT,
+      owner_email TEXT NOT NULL DEFAULT 'local@localhost',
+      org_id TEXT
+    )`,
+        sqlite: `CREATE TABLE IF NOT EXISTS analysis_revisions (
+      id TEXT PRIMARY KEY,
+      analysis_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      question TEXT NOT NULL DEFAULT '',
+      instructions TEXT NOT NULL DEFAULT '',
+      data_sources TEXT NOT NULL DEFAULT '[]',
+      result_markdown TEXT NOT NULL DEFAULT '',
+      result_data TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_by TEXT,
+      owner_email TEXT NOT NULL DEFAULT 'local@localhost',
+      org_id TEXT
+    )`,
+      },
+    },
+    {
+      version: 114,
+      name: "analysis-revisions-analysis-created-idx",
+      sql: `CREATE INDEX IF NOT EXISTS analysis_revisions_analysis_created_idx ON analysis_revisions (analysis_id, created_at)`,
+    },
+    {
+      version: 115,
+      name: "uptime-monitors-timeout-10s",
+      sql: {
+        postgres: `
+        ALTER TABLE monitors ALTER COLUMN timeout_ms SET DEFAULT 10000;
+        UPDATE monitors
+        SET timeout_ms = 10000, updated_at = COALESCE(NULLIF(updated_at, ''), now()::text)
+        WHERE timeout_ms IS NULL OR timeout_ms < 10000 OR timeout_ms = 15000
+      `,
+        sqlite: `
+        UPDATE monitors
+        SET timeout_ms = 10000, updated_at = COALESCE(NULLIF(updated_at, ''), datetime('now'))
+        WHERE timeout_ms IS NULL OR timeout_ms < 10000 OR timeout_ms = 15000
+      `,
+      },
+    },
+    {
+      version: 116,
+      name: "uptime-monitor-check-diagnostics",
+      sql: `ALTER TABLE monitor_check_results ADD COLUMN IF NOT EXISTS diagnostics TEXT NOT NULL DEFAULT '{}'`,
+    },
+    {
+      version: 117,
+      name: "uptime-monitor-incident-notification-delivered",
+      sql: {
+        postgres: `ALTER TABLE monitor_incidents ADD COLUMN IF NOT EXISTS notification_delivered BOOLEAN NOT NULL DEFAULT false`,
+        sqlite: `ALTER TABLE monitor_incidents ADD COLUMN IF NOT EXISTS notification_delivered INTEGER NOT NULL DEFAULT 0`,
+      },
+    },
+    {
+      version: 118,
+      name: "error-events-session-recording-filter-idx",
+      sql: `CREATE INDEX IF NOT EXISTS error_events_session_recording_filter_idx ON error_events (session_recording_id, owner_email, org_id, issue_id)`,
+    },
+    {
+      version: 119,
+      name: "error-events-user-id-filter-idx",
+      sql: `CREATE INDEX IF NOT EXISTS error_events_user_id_filter_idx ON error_events (user_id, owner_email, org_id, issue_id)`,
+    },
+    {
+      version: 120,
+      name: "error-events-user-key-filter-idx",
+      sql: `CREATE INDEX IF NOT EXISTS error_events_user_key_filter_idx ON error_events (user_key, owner_email, org_id, issue_id)`,
+    },
+    {
+      version: 121,
+      name: "analytics-events-org-path-event-idx",
+      sql: `CREATE INDEX IF NOT EXISTS analytics_events_org_path_event_idx ON analytics_events (org_id, path, event_name)`,
+    },
+    {
+      version: 122,
+      name: "dashboard-revisions-org-dashboard-idx",
+      sql: `CREATE INDEX IF NOT EXISTS dashboard_revisions_org_dashboard_idx ON dashboard_revisions (org_id, dashboard_id)`,
+    },
+    {
+      version: 123,
+      name: "dashboard-report-capture-diagnostics",
+      sql: `
+        ALTER TABLE dashboard_report_subscriptions ADD COLUMN IF NOT EXISTS last_capture_at TEXT;
+        ALTER TABLE dashboard_report_subscriptions ADD COLUMN IF NOT EXISTS last_capture_mode TEXT;
+        ALTER TABLE dashboard_report_subscriptions ADD COLUMN IF NOT EXISTS last_capture_error TEXT;
+      `,
+    },
+    // First-party dashboard panel result cache. Same shape/pattern as
+    // bigquery_cache above, short TTL (set in first-party-analytics-cache.ts)
+    // since this is the app's own live data, not an immutable warehouse
+    // result. See first-party-analytics-cache.ts for why this exists: panel
+    // queries had no cache at all, so every dashboard render and every daily
+    // report screenshot recomputed from scratch and stacked concurrent load
+    // on the same rows, which is what was blowing report/panel timeouts.
+    {
+      version: 124,
+      name: "first-party-analytics-cache-table",
+      sql: `CREATE TABLE IF NOT EXISTS first_party_analytics_cache (
+      key TEXT PRIMARY KEY,
+      sql TEXT NOT NULL,
+      result TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    )`,
+    },
+    {
+      version: 125,
+      name: "first-party-analytics-cache-expires-idx",
+      sql: `CREATE INDEX IF NOT EXISTS first_party_analytics_cache_expires_at_idx ON first_party_analytics_cache (expires_at)`,
+    },
   ],
   { table: "analytics_migrations" },
 );
@@ -722,6 +1326,32 @@ const runAnalyticsMigrations = runMigrations(
  */
 export default async (nitroApp: any): Promise<void> => {
   await runAnalyticsMigrations(nitroApp);
+  try {
+    if (await repairPersistedFirstPartyDashboardQueries()) {
+      console.info(
+        "[db] Repaired bounded recurring-user queries on the canonical first-party dashboard.",
+      );
+    }
+  } catch (err) {
+    console.warn(
+      "[db] Failed to repair canonical first-party dashboard queries (non-fatal):",
+      err instanceof Error ? err.message : err,
+    );
+  }
+  try {
+    const repairedCount =
+      await repairUnboundedFirstPartyPanelsAcrossDashboards();
+    if (repairedCount > 0) {
+      console.info(
+        `[db] Repaired ${repairedCount} dashboard(s) with unbounded first-party panel SQL.`,
+      );
+    }
+  } catch (err) {
+    console.warn(
+      "[db] Failed to repair unbounded first-party panels across dashboards (non-fatal):",
+      err instanceof Error ? err.message : err,
+    );
+  }
   try {
     const summary = await ensureAdditiveColumns({
       db: getDbExec(),

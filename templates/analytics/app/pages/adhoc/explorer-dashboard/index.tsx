@@ -1,17 +1,19 @@
+import { generateTabId } from "@agent-native/core/client/agent-chat";
+import { agentNativePath } from "@agent-native/core/client/api-path";
 import {
-  PresenceBar,
   useCollaborativeDoc,
-  generateTabId,
   emailToColor,
   emailToName,
+  type CollabUser,
+} from "@agent-native/core/client/collab";
+import {
   useSession,
   useChangeVersions,
   useActionMutation,
-  agentNativePath,
   callAction,
-  useT,
-  type CollabUser,
-} from "@agent-native/core/client";
+} from "@agent-native/core/client/hooks";
+import { useT } from "@agent-native/core/client/i18n";
+import { PresenceBar } from "@agent-native/toolkit/collab-ui";
 import {
   DndContext,
   DragOverlay,
@@ -38,16 +40,20 @@ import {
   IconEye,
   IconEyeOff,
   IconGripVertical,
+  IconHistory,
 } from "@tabler/icons-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, useEffect, useCallback } from "react";
 import { useSearchParams, useNavigate } from "react-router";
 import { toast } from "sonner";
 
+import { DashboardHistoryPanel } from "@/components/dashboard/DashboardHistoryPanel";
+import { DashboardMetadata } from "@/components/dashboard/DashboardMetadata";
 import {
   DashboardTitleSkeleton,
   useSetPageTitle,
 } from "@/components/layout/HeaderActions";
+import { ResourceLoadError } from "@/components/ResourceLoadError";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -70,6 +76,7 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuLabel,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
@@ -80,6 +87,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useDashboardChatContext } from "@/hooks/use-dashboard-chat-context";
 import {
   resourceCanEdit,
   resourceCanManage,
@@ -109,6 +117,10 @@ const TAB_ID = generateTabId();
 
 type FetchedExplorerDashboard = {
   data: ExplorerDashboardData;
+  ownerEmail: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
   archivedAt: string | null;
   hiddenAt: string | null;
   hiddenBy: string | null;
@@ -128,28 +140,28 @@ function ExplorerDashboardDragPreview({ title }: { title: string | null }) {
 async function fetchDashboard(
   id: string,
 ): Promise<FetchedExplorerDashboard | null> {
-  try {
-    const raw: any = await callAction(
-      "get-explorer-dashboard",
-      { id },
-      { method: "GET" },
-    );
-    if (!raw) return null;
-    return {
-      data: {
-        name: raw.name ?? "Untitled Dashboard",
-        charts: raw.charts ?? [],
-      },
-      archivedAt: typeof raw.archivedAt === "string" ? raw.archivedAt : null,
-      hiddenAt: typeof raw.hiddenAt === "string" ? raw.hiddenAt : null,
-      hiddenBy: typeof raw.hiddenBy === "string" ? raw.hiddenBy : null,
-      role: typeof raw.role === "string" ? raw.role : undefined,
-      canEdit: typeof raw.canEdit === "boolean" ? raw.canEdit : undefined,
-      canManage: typeof raw.canManage === "boolean" ? raw.canManage : undefined,
-    };
-  } catch {
-    return null;
-  }
+  const raw: any = await callAction(
+    "get-explorer-dashboard",
+    { id },
+    { method: "GET" },
+  );
+  if (!raw) return null;
+  return {
+    data: {
+      name: raw.name ?? "Untitled Dashboard",
+      charts: raw.charts ?? [],
+    },
+    ownerEmail: typeof raw.ownerEmail === "string" ? raw.ownerEmail : null,
+    createdAt: typeof raw.createdAt === "string" ? raw.createdAt : null,
+    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : null,
+    updatedBy: typeof raw.updatedBy === "string" ? raw.updatedBy : null,
+    archivedAt: typeof raw.archivedAt === "string" ? raw.archivedAt : null,
+    hiddenAt: typeof raw.hiddenAt === "string" ? raw.hiddenAt : null,
+    hiddenBy: typeof raw.hiddenBy === "string" ? raw.hiddenBy : null,
+    role: typeof raw.role === "string" ? raw.role : undefined,
+    canEdit: typeof raw.canEdit === "boolean" ? raw.canEdit : undefined,
+    canManage: typeof raw.canManage === "boolean" ? raw.canManage : undefined,
+  };
 }
 
 async function saveDashboard(id: string, data: ExplorerDashboardData) {
@@ -160,18 +172,10 @@ async function saveDashboard(id: string, data: ExplorerDashboardData) {
 }
 
 async function fetchSavedConfigs(): Promise<SavedConfig[]> {
-  try {
-    const rows = await callAction(
-      "list-explorer-configs",
-      {},
-      { method: "GET" },
-    );
-    return (Array.isArray(rows) ? rows : [])
-      .filter((c: any) => c.id !== "_autosave")
-      .map((c: any) => ({ id: c.id, name: c.name }));
-  } catch {
-    return [];
-  }
+  const rows = await callAction("list-explorer-configs", {}, { method: "GET" });
+  return (Array.isArray(rows) ? rows : [])
+    .filter((c: any) => c.id !== "_autosave")
+    .map((c: any) => ({ id: c.id, name: c.name }));
 }
 
 export default function ExplorerDashboardPage() {
@@ -182,6 +186,16 @@ export default function ExplorerDashboardPage() {
   const dashboardId = searchParams.get("id");
 
   const [dashboard, setDashboard] = useState<ExplorerDashboardData | null>(
+    null,
+  );
+  const [dashboardOwner, setDashboardOwner] = useState<string | null>(null);
+  const [dashboardCreatedAt, setDashboardCreatedAt] = useState<string | null>(
+    null,
+  );
+  const [dashboardUpdatedAt, setDashboardUpdatedAt] = useState<string | null>(
+    null,
+  );
+  const [dashboardUpdatedBy, setDashboardUpdatedBy] = useState<string | null>(
     null,
   );
   const [archivedAt, setArchivedAt] = useState<string | null>(null);
@@ -195,11 +209,20 @@ export default function ExplorerDashboardPage() {
   const [addChartOpen, setAddChartOpen] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [dashboardActionsOpen, setDashboardActionsOpen] = useState(false);
   const [activeDragChartId, setActiveDragChartId] = useState<string | null>(
     null,
   );
   const canEdit = resourceCanEdit(resourceAccess);
   const canManage = resourceCanManage(resourceAccess);
+  const { selectedPanelId, selectPanelForChat } = useDashboardChatContext({
+    id: dashboardId,
+    kind: "explorer",
+    title: dashboard?.name,
+    panelCount: dashboard?.charts.length,
+    canEdit,
+  });
   const { mutateAsync: hideDashboardAction, isPending: unhidePending } =
     useActionMutation("hide-dashboard");
 
@@ -265,11 +288,12 @@ export default function ExplorerDashboardPage() {
     [collabDocId],
   );
 
-  const { data: savedConfigs = [] } = useQuery({
+  const savedConfigsQuery = useQuery({
     queryKey: ["explorer-configs"],
     queryFn: fetchSavedConfigs,
     staleTime: 30_000,
   });
+  const savedConfigs = savedConfigsQuery.data ?? [];
 
   // Refetch the dashboard whenever the `dashboards` source bumps OR any agent
   // action runs — the same "agent writes show up without a manual refresh"
@@ -303,6 +327,10 @@ export default function ExplorerDashboardPage() {
     if (!dashboardId) return;
     setLoaded(false);
     setDashboard(null);
+    setDashboardOwner(null);
+    setDashboardCreatedAt(null);
+    setDashboardUpdatedAt(null);
+    setDashboardUpdatedBy(null);
     setHiddenAt(null);
     setHiddenBy(null);
     setResourceAccess(null);
@@ -314,6 +342,10 @@ export default function ExplorerDashboardPage() {
     const d = dashboardQuery.data;
     if (d) {
       setDashboard(d.data);
+      setDashboardOwner(d.ownerEmail);
+      setDashboardCreatedAt(d.createdAt);
+      setDashboardUpdatedAt(d.updatedAt);
+      setDashboardUpdatedBy(d.updatedBy);
       setArchivedAt(d.archivedAt);
       setHiddenAt(d.hiddenAt);
       setHiddenBy(d.hiddenBy);
@@ -327,6 +359,10 @@ export default function ExplorerDashboardPage() {
         name: t("explorerDashboard.untitledDashboard"),
         charts: [],
       });
+      setDashboardOwner(null);
+      setDashboardCreatedAt(null);
+      setDashboardUpdatedAt(null);
+      setDashboardUpdatedBy(null);
       setArchivedAt(null);
       setHiddenAt(null);
       setHiddenBy(null);
@@ -527,6 +563,16 @@ export default function ExplorerDashboardPage() {
     );
   }
 
+  if (dashboardQuery.isError) {
+    return (
+      <ResourceLoadError
+        message={t("sidebar.dashboardsLoadFailed")}
+        retryLabel={t("sidebar.retry")}
+        onRetry={() => void dashboardQuery.refetch()}
+      />
+    );
+  }
+
   if (!loaded) {
     return <DashboardSkeleton />;
   }
@@ -608,8 +654,11 @@ export default function ExplorerDashboardPage() {
               {t("explorerDashboard.addChart")}
             </Button>
           ) : null}
-          {canEdit || canManage ? (
-            <DropdownMenu>
+          {dashboardId || canEdit || canManage ? (
+            <DropdownMenu
+              open={dashboardActionsOpen}
+              onOpenChange={setDashboardActionsOpen}
+            >
               <Tooltip>
                 <TooltipTrigger asChild>
                   <DropdownMenuTrigger asChild>
@@ -627,11 +676,38 @@ export default function ExplorerDashboardPage() {
                   {t("explorerDashboard.moreActions")}
                 </TooltipContent>
               </Tooltip>
-              <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuContent align="end" className="w-72">
+                {dashboardId ? (
+                  <>
+                    <DropdownMenuLabel className="font-normal">
+                      <DashboardMetadata
+                        createdAt={dashboardCreatedAt}
+                        createdBy={dashboardOwner}
+                        updatedAt={dashboardUpdatedAt}
+                        updatedBy={dashboardUpdatedBy}
+                      />
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onSelect={(event) => {
+                        event.preventDefault();
+                        setDashboardActionsOpen(false);
+                        setHistoryOpen(true);
+                      }}
+                    >
+                      <IconHistory className="mr-2 h-3.5 w-3.5" />
+                      {t("dashboard.historyTitle")}
+                    </DropdownMenuItem>
+                  </>
+                ) : null}
+                {dashboardId && canEdit && !archivedAt ? (
+                  <DropdownMenuSeparator />
+                ) : null}
                 {canEdit && !archivedAt ? (
                   <DropdownMenuItem
                     onSelect={(event) => {
                       event.preventDefault();
+                      setDashboardActionsOpen(false);
                       void handleArchive();
                     }}
                   >
@@ -646,6 +722,7 @@ export default function ExplorerDashboardPage() {
                   <DropdownMenuItem
                     onSelect={(event) => {
                       event.preventDefault();
+                      setDashboardActionsOpen(false);
                       setConfirmDeleteOpen(true);
                     }}
                     className="text-destructive focus:text-destructive"
@@ -656,6 +733,14 @@ export default function ExplorerDashboardPage() {
                 ) : null}
               </DropdownMenuContent>
             </DropdownMenu>
+          ) : null}
+          {dashboardId ? (
+            <DashboardHistoryPanel
+              dashboardId={dashboardId}
+              open={historyOpen}
+              onOpenChange={setHistoryOpen}
+              canRestore={canEdit && !archivedAt}
+            />
           ) : null}
           {canManage ? (
             <AlertDialog
@@ -757,6 +842,8 @@ export default function ExplorerDashboardPage() {
                     navigate(`/dashboards/explorer?config=${chart.configId}`)
                   }
                   editable={canEdit}
+                  selectedForChat={selectedPanelId === chart.id}
+                  selectPanelForChat={selectPanelForChat}
                 />
               ))}
             </div>
@@ -775,7 +862,14 @@ export default function ExplorerDashboardPage() {
               <DialogTitle>{t("explorerDashboard.addChart")}</DialogTitle>
             </DialogHeader>
             <div className="max-h-[400px] overflow-auto space-y-1">
-              {savedConfigs.length === 0 ? (
+              {savedConfigsQuery.isError ? (
+                <ResourceLoadError
+                  inline
+                  message={t("commandPalette.loadFailed")}
+                  retryLabel={t("sidebar.retry")}
+                  onRetry={() => void savedConfigsQuery.refetch()}
+                />
+              ) : savedConfigs.length === 0 ? (
                 <p className="text-sm text-muted-foreground py-4 text-center">
                   {t("explorerDashboard.noSavedExplorerCharts")}
                 </p>

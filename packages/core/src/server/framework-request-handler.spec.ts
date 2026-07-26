@@ -6,6 +6,11 @@ import {
   markDefaultPluginProvided,
   trackPluginInit,
 } from "./framework-request-handler.js";
+import {
+  getRequestUserEmail,
+  hasRequestContext,
+  runWithRequestContext,
+} from "./request-context.js";
 
 vi.mock("../deploy/route-discovery.js", () => ({
   getMissingDefaultPlugins: vi.fn(async () => []),
@@ -15,16 +20,27 @@ function createNitroApp() {
   return { h3: { "~middleware": [] as any[] } };
 }
 
-async function dispatch(nitroApp: any, pathname: string) {
+async function dispatch(
+  nitroApp: any,
+  pathname: string,
+  onEvent?: (event: any) => void,
+) {
+  const url = new URL(`http://example.test${pathname}`);
   const event = {
     method: "GET",
-    url: new URL(`http://example.test${pathname}`),
+    url,
     path: pathname,
     context: {},
+    // h3 v2's own getMethod/getRequestHeader read from `event.req` (a real
+    // web-standard Request) — the CSRF middleware that `getH3App()` now
+    // registers globally on every nitroApp calls both, so the fake event
+    // needs a real Request even though these tests never assert on it.
+    req: new Request(url, { method: "GET" }),
     // Minimal h3-v2 response shape so handlers that call setResponseStatus /
     // setResponseHeader (e.g. the init-failure 503 fallback) work under test.
     res: { status: 200, headers: new Headers() },
   };
+  onEvent?.(event);
   let index = 0;
   const next = async (): Promise<unknown> => {
     const middleware = nitroApp.h3["~middleware"][index++];
@@ -35,11 +51,15 @@ async function dispatch(nitroApp: any, pathname: string) {
 }
 
 async function dispatchViaGeneratedMiddleware(nitroApp: any, pathname: string) {
+  const url = new URL(`http://example.test${pathname}`);
   const event = {
     method: "GET",
-    url: new URL(`http://example.test${pathname}`),
+    url,
     path: pathname,
     context: {},
+    // See `dispatch()` above — the globally-registered CSRF middleware needs
+    // a real h3-v2 `event.req`.
+    req: new Request(url, { method: "GET" }),
   };
   const route = {
     data: {
@@ -61,6 +81,45 @@ describe("framework request handler", () => {
     delete process.env.APP_BASE_PATH;
     delete process.env.VITE_APP_BASE_PATH;
     vi.restoreAllMocks();
+  });
+
+  it("runs a hand-written /api route inside an identity-free RequestContext", async () => {
+    // The privilege-escalation regression: a hand-written `/api/*` route has no
+    // ALS store of its own, so `getRequestUserEmail()` used to answer with the
+    // deploy's AGENT_USER_EMAIL and admin-check the caller as that identity.
+    vi.stubEnv("AGENT_USER_EMAIL", "deploy-admin@example.com");
+    const nitroApp = createNitroApp();
+    getH3App(nitroApp);
+
+    let sawContext: boolean | undefined;
+    let sawEmail: string | undefined = "unset";
+    nitroApp.h3["~middleware"].push((_event: any, next: () => unknown) => {
+      sawContext = hasRequestContext();
+      sawEmail = getRequestUserEmail();
+      return next();
+    });
+
+    await dispatch(nitroApp, "/api/coach/users/someone@example.com");
+
+    expect(sawContext).toBe(true);
+    expect(sawEmail).toBeUndefined();
+    vi.unstubAllEnvs();
+  });
+
+  it("lets a handler's own request context shadow the boundary store", async () => {
+    const nitroApp = createNitroApp();
+    getH3App(nitroApp);
+
+    let sawEmail: string | undefined;
+    nitroApp.h3["~middleware"].push((_event: any, next: () => unknown) =>
+      runWithRequestContext({ userEmail: "alice@example.com" }, () => {
+        sawEmail = getRequestUserEmail();
+        return next();
+      }),
+    );
+
+    await dispatch(nitroApp, "/api/coach/users");
+    expect(sawEmail).toBe("alice@example.com");
   });
 
   it("dispatches bare framework routes with a mount-relative pathname", async () => {
@@ -203,6 +262,24 @@ describe("framework request handler", () => {
     ).resolves.toEqual({
       mountPrefix: "/starter/.well-known/agent-card.json",
       mountedPathname: "/starter/.well-known/agent-card.json",
+      pathname: "/",
+      path: "/",
+    });
+  });
+
+  it("dispatches the public MCP alias under APP_BASE_PATH", async () => {
+    process.env.APP_BASE_PATH = "/starter";
+    const nitroApp = createNitroApp();
+    getH3App(nitroApp).use("/mcp", (event: any) => ({
+      mountPrefix: event.context._mountPrefix,
+      mountedPathname: event.context._mountedPathname,
+      pathname: event.url.pathname,
+      path: event.path,
+    }));
+
+    await expect(dispatch(nitroApp, "/starter/mcp")).resolves.toEqual({
+      mountPrefix: "/starter/mcp",
+      mountedPathname: "/starter/mcp",
       pathname: "/",
       path: "/",
     });
@@ -411,11 +488,15 @@ describe("framework request handler", () => {
     pathname: string,
     opts: { runRequestHooks: boolean },
   ) {
+    const url = new URL(`http://example.test${pathname}`);
     const event = {
       method: "GET",
-      url: new URL(`http://example.test${pathname}`),
+      url,
       path: pathname,
       context: {},
+      // See `dispatch()` above — the globally-registered CSRF middleware
+      // needs a real h3-v2 `event.req`.
+      req: new Request(url, { method: "GET" }),
       res: { status: 200, headers: new Headers() },
     };
     // Nitro bridges the `request` hook to h3's `config.onRequest`, which h3
@@ -487,6 +568,71 @@ describe("framework request handler", () => {
 
     await expect(pending).resolves.toEqual({ ok: true });
   });
+
+  it.each([
+    {
+      trackedPath: "/.well-known/agent-card.json",
+      requestPath: "/.well-known/agent-card.json",
+    },
+    {
+      trackedPath: "/_agent-native/a2a",
+      requestPath: "/_agent-native/a2a/processor",
+    },
+  ])(
+    "delivers $requestPath when its agent-chat route registers during async init",
+    async ({ trackedPath, requestPath }) => {
+      const nitroApp = createHookableNitroApp();
+      let registerRoute!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        registerRoute = () => {
+          getH3App(nitroApp).use(trackedPath, () => ({ ok: true }));
+          resolve();
+        };
+      });
+      trackPluginInit(nitroApp, ready, { paths: [trackedPath] });
+
+      const pending = dispatchProductionOrder(nitroApp, requestPath, {
+        runRequestHooks: true,
+      });
+      await Promise.resolve();
+      registerRoute();
+
+      await expect(pending).resolves.toEqual({ ok: true });
+    },
+  );
+
+  it.each([
+    {
+      trackedPath: "/.well-known/agent-card.json",
+      requestPath: "/.well-known/agent-card.json",
+    },
+    {
+      trackedPath: "/_agent-native/a2a",
+      requestPath: "/_agent-native/a2a/processor",
+    },
+  ])(
+    "returns a retryable 503 when $requestPath initialization fails",
+    async ({ trackedPath, requestPath }) => {
+      const nitroApp = createNitroApp();
+      let fail!: (err: Error) => void;
+      const ready = new Promise<void>((_resolve, reject) => {
+        fail = reject;
+      });
+      trackPluginInit(nitroApp, ready, { paths: [trackedPath] });
+
+      fail(new Error("db unreachable"));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      let response: any;
+      const result = await dispatch(nitroApp, requestPath, (event) => {
+        response = event.res;
+      });
+
+      expect(response.status).toBe(503);
+      expect(JSON.stringify(result)).toContain("initializing or unavailable");
+    },
+  );
 
   it("does not treat similar non-prefixed paths as framework routes", async () => {
     process.env.APP_BASE_PATH = "/docs";

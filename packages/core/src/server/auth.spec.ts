@@ -4,10 +4,12 @@ import {
   DEFAULT_SSR_CACHE_CONTROL,
   DEFAULT_SSR_CDN_CACHE_CONTROL,
   DEFAULT_SSR_NETLIFY_CDN_CACHE_CONTROL,
+  DISABLED_SSR_CACHE_HEADERS,
+  SSR_CACHE_ENV_VAR,
 } from "../shared/cache-control.js";
 
-// The login page is the public homepage of every app and is CDN-cached on the
-// same short-fresh / long-SWR policy as the rest of the server shell. Its HTML
+// The explicit login page is CDN-cached on the same long-fresh / long-SWR
+// policy as the rest of the server shell. Its HTML
 // is intentionally env-INDEPENDENT — it always renders the configured sign-in
 // method (e.g. a Google-only app always renders a working Google button), and
 // per-user / per-config state is resolved client-side after load. So a cached
@@ -55,6 +57,15 @@ describe("server/auth", () => {
         await import("./better-auth-instance.js");
 
       expect(shouldSkipEmailVerification()).toBe(false);
+    }, 15_000);
+
+    it("is enabled by default for Netlify deploy previews", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("AGENT_NATIVE_BUILD_DEPLOY_CONTEXT", "deploy-preview");
+      const { shouldSkipEmailVerification } =
+        await import("./better-auth-instance.js");
+
+      expect(shouldSkipEmailVerification()).toBe(true);
     }, 15_000);
 
     it("is enabled by AUTH_SKIP_EMAIL_VERIFICATION=1", async () => {
@@ -550,7 +561,7 @@ describe("server/auth", () => {
         .find((arg: unknown) => typeof arg === "function");
       expect(guard).toBeTypeOf("function");
 
-      const result = await guard(createMockEvent({ path: "/demo" }));
+      const result = await guard(createMockEvent({ path: "/demo/login" }));
       expect(result).toBeInstanceOf(Response);
       expect((result as Response).status).toBe(200);
       expectLoginHtmlCacheHeaders(result as Response);
@@ -560,6 +571,46 @@ describe("server/auth", () => {
       expect(html).not.toContain("This app is private");
       expect(html).not.toContain("Private deployment");
       expect(html).not.toContain("ACCESS_TOKEN");
+    });
+
+    it("honors the deployment-wide SSR cache override on the login shell", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("APP_BASE_PATH", "/demo");
+      vi.stubEnv(SSR_CACHE_ENV_VAR, "off");
+      vi.doMock("./better-auth-instance.js", () => ({
+        getBetterAuth: vi.fn(async () => ({
+          handler: vi.fn(async () => new Response("{}")),
+          api: {
+            getSession: vi.fn(async () => null),
+            signInEmail: vi.fn(),
+            signUpEmail: vi.fn(),
+            signOut: vi.fn(),
+          },
+        })),
+        getBetterAuthSync: vi.fn(() => undefined),
+      }));
+      const { autoMountAuth } = await import("./auth.js");
+
+      const app = createMockApp();
+      await autoMountAuth(app);
+
+      const guard = app.use.mock.calls
+        .map((call: any[]) => call[0])
+        .find((arg: unknown) => typeof arg === "function");
+      const result = await guard(createMockEvent({ path: "/demo/login" }));
+
+      expect(result).toBeInstanceOf(Response);
+      const response = result as Response;
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Cache-Control")).toBe(
+        DISABLED_SSR_CACHE_HEADERS["cache-control"],
+      );
+      expect(response.headers.get("CDN-Cache-Control")).toBe(
+        DISABLED_SSR_CACHE_HEADERS["cdn-cache-control"],
+      );
+      expect(response.headers.get("Netlify-CDN-Cache-Control")).toBe(
+        DISABLED_SSR_CACHE_HEADERS["netlify-cdn-cache-control"],
+      );
     });
 
     it("custom auth without loginHtml does not render an access-token page", async () => {
@@ -576,7 +627,7 @@ describe("server/auth", () => {
         .find((arg: unknown) => typeof arg === "function");
       expect(guard).toBeTypeOf("function");
 
-      const result = await guard(createMockEvent({ path: "/starter" }));
+      const result = await guard(createMockEvent({ path: "/login" }));
       expect(result).toBeInstanceOf(Response);
 
       const html = await (result as Response).text();
@@ -631,12 +682,9 @@ describe("server/auth", () => {
         guard(createMockEvent({ path: "/portal/pricing" })),
       ).resolves.toBeUndefined();
 
-      const adminResult = await guard(
-        createMockEvent({ path: "/portal/admin/users" }),
-      );
-      expect(adminResult).toBeInstanceOf(Response);
-      expect((adminResult as Response).status).toBe(200);
-      expectLoginHtmlCacheHeaders(adminResult as Response);
+      await expect(
+        guard(createMockEvent({ path: "/portal/admin/users" })),
+      ).resolves.toBeUndefined();
 
       const adminDataResult = await guard(
         createMockEvent({
@@ -644,7 +692,7 @@ describe("server/auth", () => {
           headers: { accept: "text/x-script" },
         }),
       );
-      expect(adminDataResult).toEqual({ error: "Unauthorized" });
+      expect(adminDataResult).toBeUndefined();
 
       const apiResult = await guard(
         createMockEvent({ path: "/portal/api/private" }),
@@ -680,12 +728,9 @@ describe("server/auth", () => {
         guard(createMockEvent({ path: "/docs/share/report" })),
       ).resolves.toBeUndefined();
 
-      const privateResult = await guard(
-        createMockEvent({ path: "/docs/admin" }),
-      );
-      expect(privateResult).toBeInstanceOf(Response);
-      expect((privateResult as Response).status).toBe(200);
-      expectLoginHtmlCacheHeaders(privateResult as Response);
+      await expect(
+        guard(createMockEvent({ path: "/docs/admin" })),
+      ).resolves.toBeUndefined();
     });
 
     it("relays root workspace OAuth callbacks to the app from state", async () => {
@@ -694,6 +739,37 @@ describe("server/auth", () => {
       vi.stubEnv("APP_NAME", "dispatch");
       vi.stubEnv("APP_BASE_PATH", "/dispatch");
       vi.stubEnv("AGENT_NATIVE_WORKSPACE", "1");
+      const { autoMountAuth } = await import("./auth.js");
+
+      const app = createMockApp();
+      await autoMountAuth(app);
+
+      const guard = app.use.mock.calls
+        .map((call: any[]) => call[0])
+        .find((arg: unknown) => typeof arg === "function");
+      expect(guard).toBeTypeOf("function");
+
+      const state = `${Buffer.from(JSON.stringify({ app: "calendar" })).toString("base64url")}.sig`;
+      const result = await guard(
+        createMockEvent({
+          path: "/_agent-native/google/callback",
+          query: { code: "abc", state },
+        }),
+      );
+
+      expect(result).toBeInstanceOf(Response);
+      expect((result as Response).status).toBe(302);
+      expect((result as Response).headers.get("location")).toBe(
+        `/calendar/_agent-native/google/callback?code=abc&state=${state}`,
+      );
+    });
+
+    it("relays mounted-app callbacks when only the workspace app id survives", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("ACCESS_TOKEN", "my-secret");
+      vi.stubEnv("APP_NAME", "dispatch");
+      vi.stubEnv("APP_BASE_PATH", "/dispatch");
+      vi.stubEnv("AGENT_NATIVE_WORKSPACE_APP_ID", "dispatch");
       const { autoMountAuth } = await import("./auth.js");
 
       const app = createMockApp();
@@ -867,6 +943,7 @@ describe("server/auth", () => {
 
       for (const path of [
         "/dispatch/_agent-native/integrations/process-task",
+        "/dispatch/_agent-native/integrations/retry-stuck-tasks",
         "/dispatch/_agent-native/integrations/process-a2a-continuation",
       ]) {
         const event = createMockEvent({ path });
@@ -921,7 +998,12 @@ describe("server/auth", () => {
         .find((arg: unknown) => typeof arg === "function");
       expect(guard).toBeTypeOf("function");
 
-      for (const path of ["/_agent-native/mcp", "/_agent-native/mcp/"]) {
+      for (const path of [
+        "/_agent-native/mcp",
+        "/_agent-native/mcp/",
+        "/mcp",
+        "/mcp/",
+      ]) {
         await expect(guard(createMockEvent({ path }))).resolves.toBeUndefined();
       }
 
@@ -1059,7 +1141,11 @@ describe("server/auth", () => {
         .find((arg: unknown) => typeof arg === "function");
       expect(guard).toBeTypeOf("function");
 
-      for (const path of ["/dispatch/login", "/dispatch/signup"]) {
+      for (const path of [
+        "/dispatch/login",
+        "/dispatch/signup",
+        "/dispatch/_agent-native/sign-in?return=%2Fdispatch%2Foverview",
+      ]) {
         const result = await guard(createMockEvent({ path }));
 
         expect(result).toBeInstanceOf(Response);
@@ -1068,7 +1154,35 @@ describe("server/auth", () => {
       }
     });
 
-    it("serves uncached first-party branded auth when the default guard handles a built-in host", async () => {
+    it("includes analytics on the framework-owned signup page", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("GA_MEASUREMENT_ID", "G-UNITTEST123");
+      delete process.env.ACCESS_TOKEN;
+      delete process.env.ACCESS_TOKENS;
+      const { autoMountAuth } = await import("./auth.js");
+
+      const app = createMockApp();
+      await autoMountAuth(app, {
+        getSession: async () => null,
+        loginHtml:
+          "<!doctype html><html><head></head><body>signup</body></html>",
+      });
+
+      const guard = app.use.mock.calls
+        .map((call: any[]) => call[0])
+        .find((arg: unknown) => typeof arg === "function");
+      expect(guard).toBeTypeOf("function");
+
+      const result = await guard(createMockEvent({ path: "/signup" }));
+
+      expect(result).toBeInstanceOf(Response);
+      const html = await (result as Response).text();
+      expect(html).toContain(
+        "https://www.googletagmanager.com/gtag/js?id=G-UNITTEST123",
+      );
+    });
+
+    it("passes normal app documents through as the uniform SSR shell without resolving a session", async () => {
       vi.stubEnv("NODE_ENV", "production");
       delete process.env.ACCESS_TOKEN;
       delete process.env.ACCESS_TOKENS;
@@ -1102,19 +1216,10 @@ describe("server/auth", () => {
         }),
       );
 
-      expect(result).toBeInstanceOf(Response);
-      expect((result as Response).status).toBe(200);
-      expectLoginHtmlCacheHeaders(result as Response);
-      expect((result as Response).headers.get("X-Robots-Tag")).toBe(
-        "noindex, nofollow",
-      );
-      const html = await (result as Response).text();
-      expect(html).toContain("Agent-Native Dispatch");
-      expect(html).toContain('class="marketing-panel"');
-      expect(html).toContain("__anRedirectIfAlreadySignedIn");
+      expect(result).toBeUndefined();
     });
 
-    it("keeps React Router data requests protected instead of serving cached login HTML", async () => {
+    it("passes React Router page-data requests through as uniform SSR shell data", async () => {
       vi.stubEnv("NODE_ENV", "production");
       delete process.env.ACCESS_TOKEN;
       delete process.env.ACCESS_TOKENS;
@@ -1137,11 +1242,11 @@ describe("server/auth", () => {
       });
       const result = await guard(event);
 
-      expect(result).toEqual({ error: "Unauthorized" });
-      expect(event.res.status).toBe(401);
+      expect(result).toBeUndefined();
+      expect(event.res.status).toBe(200);
     });
 
-    it("redirects mounted login and signup pages when a session already exists", async () => {
+    it("serves the same cached auth document when a session already exists", async () => {
       vi.stubEnv("NODE_ENV", "production");
       vi.stubEnv("APP_BASE_PATH", "/dispatch");
       delete process.env.ACCESS_TOKEN;
@@ -1163,8 +1268,9 @@ describe("server/auth", () => {
         const result = await guard(createMockEvent({ path }));
 
         expect(result).toBeInstanceOf(Response);
-        expect((result as Response).status).toBe(302);
-        expect((result as Response).headers.get("location")).toBe("/dispatch");
+        expect((result as Response).status).toBe(200);
+        expectLoginHtmlCacheHeaders(result as Response);
+        expect(await (result as Response).text()).toContain("QA login");
       }
 
       const recapResult = await guard(
@@ -1173,10 +1279,8 @@ describe("server/auth", () => {
         }),
       );
       expect(recapResult).toBeInstanceOf(Response);
-      expect((recapResult as Response).status).toBe(302);
-      expect((recapResult as Response).headers.get("location")).toBe(
-        "/dispatch/recaps/recap_123",
-      );
+      expect((recapResult as Response).status).toBe(200);
+      expect(await (recapResult as Response).text()).toContain("QA login");
 
       const unsafeResult = await guard(
         createMockEvent({
@@ -1184,10 +1288,8 @@ describe("server/auth", () => {
         }),
       );
       expect(unsafeResult).toBeInstanceOf(Response);
-      expect((unsafeResult as Response).status).toBe(302);
-      expect((unsafeResult as Response).headers.get("location")).toBe(
-        "/dispatch",
-      );
+      expect((unsafeResult as Response).status).toBe(200);
+      expect(await (unsafeResult as Response).text()).toContain("QA login");
     });
 
     it("quietly falls back when auto dev account signup loses a duplicate-user race", async () => {
@@ -1258,7 +1360,7 @@ describe("server/auth", () => {
       expect(guard).toBeTypeOf("function");
 
       const event = createMockEvent({
-        path: "/dispatch/overview",
+        path: "/dispatch/_agent-native/sign-in?return=%2Fdispatch%2Foverview",
         headers: { "sec-fetch-dest": "document" },
       });
       const socket = { remoteAddress: "127.0.0.1" };
@@ -1346,7 +1448,7 @@ describe("server/auth", () => {
 
       const createLoopbackEvent = () => {
         const event = createMockEvent({
-          path: "/dispatch/overview",
+          path: "/dispatch/_agent-native/sign-in?return=%2Fdispatch%2Foverview",
           headers: { "sec-fetch-dest": "document" },
         });
         const socket = { remoteAddress: "127.0.0.1" };
@@ -1375,6 +1477,12 @@ describe("server/auth", () => {
       expect(signUpEmail).toHaveBeenCalledTimes(1);
       expect(signInEmail).toHaveBeenCalledTimes(2);
       expect(logSpy).toHaveBeenCalledTimes(1);
+      const generatedPassword = signUpEmail.mock.calls[0]?.[0]?.body?.password;
+      const logOutput = logSpy.mock.calls.flat().join(" ");
+      expect(generatedPassword).toBeTypeOf("string");
+      expect(logOutput).toContain("Local dev auto-login ready");
+      expect(logOutput).not.toContain("dev@local.test");
+      expect(logOutput).not.toContain(generatedPassword);
       expect(warnSpy).not.toHaveBeenCalled();
 
       warnSpy.mockRestore();
@@ -3361,7 +3469,7 @@ describe("server/auth", () => {
       expect(loginHtml).toContain(
         'var __AN_WORKSPACE_GATEWAY_RETURN_ORIGIN = "";',
       );
-      expect(loginHtml).toContain('id="debug"');
+      expect(loginHtml).toContain('id="google-debug"');
       expect(loginHtml).toContain(
         "__anSetOAuthDebug('Google popup opened; waiting for callback', flowId)",
       );
@@ -3434,7 +3542,7 @@ describe("server/auth", () => {
         "Opening Google sign-in redirect from Builder preview",
       );
       expect(loginHtml).toContain(
-        "never reached this app. Check the Google OAuth redirect URI",
+        "Google sign-in did not finish. Check the Google OAuth redirect URI",
       );
       expect(loginHtml).not.toContain("&debug=1");
     });
@@ -3554,7 +3662,7 @@ describe("server/auth", () => {
       expect(html).toContain('id="resend-verification"');
       expect(html).toContain('id="back-to-signup"');
       expect(html).toContain("showVerificationStep(email, pass)");
-      expect(html).toContain("callbackURL: __anGetReturnPath()");
+      expect(html).toContain("callbackURL: __anResumeHref()");
       expect(html).not.toContain(
         "Account created! Check your email to verify, then sign in.",
       );
@@ -4221,6 +4329,23 @@ describe("server/auth", () => {
       const { resolveOAuthRedirectUri } = await import("./google-oauth.js");
       const event = createMockEvent({
         path: "/calendar/_agent-native/google/auth-url",
+        headers: {
+          host: "agent-workspace.builder.io",
+          "x-forwarded-proto": "https",
+        },
+      });
+
+      expect(resolveOAuthRedirectUri(event)).toBe(
+        "https://agent-workspace.builder.io/_agent-native/google/callback",
+      );
+    });
+
+    it("uses the root callback when the workspace app id survives without the relay flag", async () => {
+      vi.stubEnv("APP_BASE_PATH", "/coach");
+      vi.stubEnv("AGENT_NATIVE_WORKSPACE_APP_ID", "coach");
+      const { resolveOAuthRedirectUri } = await import("./google-oauth.js");
+      const event = createMockEvent({
+        path: "/coach/_agent-native/google/auth-url",
         headers: {
           host: "agent-workspace.builder.io",
           "x-forwarded-proto": "https",

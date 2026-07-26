@@ -5,6 +5,8 @@
 // interface covering the shapes both `threadRuntime.export()` and
 // `normalizeThreadRepository()` produce, and use it everywhere instead of `any`.
 
+import { ASSISTANT_RUN_DURATION_METADATA_KEY } from "../../agent/thread-data-builder.js";
+
 export interface RepoMessageStatus {
   type?: string;
   reason?: string;
@@ -54,6 +56,81 @@ export function getRepoMessages(
 
 export function getRepoMessage(entry: RepoEntry): RepoMessage | null {
   return (entry?.message ?? entry) as RepoMessage | null;
+}
+
+export function getAssistantRunDurationMs(
+  message:
+    | {
+        metadata?: unknown;
+      }
+    | null
+    | undefined,
+): number | null {
+  const metadata =
+    message?.metadata && typeof message.metadata === "object"
+      ? (message.metadata as Record<string, unknown>)
+      : null;
+  const custom =
+    metadata?.custom && typeof metadata.custom === "object"
+      ? (metadata.custom as Record<string, unknown>)
+      : null;
+  const durationMs = custom?.[ASSISTANT_RUN_DURATION_METADATA_KEY];
+  return typeof durationMs === "number" &&
+    Number.isFinite(durationMs) &&
+    durationMs >= 0
+    ? durationMs
+    : null;
+}
+
+export function withLastAssistantRunDuration<T extends NormalizedRepo>(
+  repo: T,
+  durationMs: number | null | undefined,
+): T {
+  if (
+    !Array.isArray(repo.messages) ||
+    typeof durationMs !== "number" ||
+    !Number.isFinite(durationMs) ||
+    durationMs < 0
+  ) {
+    return repo;
+  }
+
+  let messageIndex = -1;
+  for (let index = repo.messages.length - 1; index >= 0; index -= 1) {
+    if (getRepoMessage(repo.messages[index]!)?.role === "assistant") {
+      messageIndex = index;
+      break;
+    }
+  }
+  if (messageIndex < 0) return repo;
+
+  const entry = repo.messages[messageIndex]!;
+  const message = getRepoMessage(entry);
+  if (!message || getAssistantRunDurationMs(message) === durationMs) {
+    return repo;
+  }
+
+  const metadata = message.metadata ?? {};
+  const custom =
+    metadata.custom && typeof metadata.custom === "object"
+      ? (metadata.custom as Record<string, unknown>)
+      : {};
+  const nextMessage: RepoMessage = {
+    ...message,
+    metadata: {
+      ...metadata,
+      custom: {
+        ...custom,
+        [ASSISTANT_RUN_DURATION_METADATA_KEY]: durationMs,
+      },
+    },
+  };
+  const messages = repo.messages.slice();
+  messages[messageIndex] =
+    entry.message === undefined
+      ? (nextMessage as RepoEntry)
+      : { ...entry, message: nextMessage };
+  return { ...repo, messages };
 }
 
 /**
@@ -207,6 +284,41 @@ function repoTerminalAssistantCount(
   }).length;
 }
 
+function toolCallProgressScore(part: RepoMessageContent): number {
+  if (part.type !== "tool-call") return 0;
+  let score = 1;
+  if (part.activity !== true) score += 1;
+  if ("result" in part) score += 4;
+  return score;
+}
+
+function repoToolCallProgress(repo: NormalizedRepo | null | undefined): {
+  total: number;
+  materialized: number;
+  completed: number;
+  score: number;
+} {
+  const progress = {
+    total: 0,
+    materialized: 0,
+    completed: 0,
+    score: 0,
+  };
+  for (const entry of getRepoMessages(repo)) {
+    const message = getRepoMessage(entry);
+    const content = message?.content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (part?.type !== "tool-call") continue;
+      progress.total += 1;
+      if (part.activity !== true) progress.materialized += 1;
+      if ("result" in part) progress.completed += 1;
+      progress.score += toolCallProgressScore(part);
+    }
+  }
+  return progress;
+}
+
 export function shouldImportServerThreadData(
   currentRepo: NormalizedRepo | null | undefined,
   incomingRepo: NormalizedRepo | null | undefined,
@@ -227,6 +339,16 @@ export function shouldImportServerThreadData(
     if (
       incomingTerminalAssistants <= currentTerminalAssistants &&
       repoTextLength(incomingRepo) < repoTextLength(currentRepo)
+    ) {
+      return false;
+    }
+    const currentTools = repoToolCallProgress(currentRepo);
+    const incomingTools = repoToolCallProgress(incomingRepo);
+    if (
+      incomingTools.total < currentTools.total ||
+      incomingTools.materialized < currentTools.materialized ||
+      incomingTools.completed < currentTools.completed ||
+      incomingTools.score < currentTools.score
     ) {
       return false;
     }

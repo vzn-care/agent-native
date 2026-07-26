@@ -9,11 +9,14 @@ import {
   AGENT_NATIVE_SOCIAL_IMAGE_CACHE_BUSTER,
   AGENT_NATIVE_SOCIAL_IMAGE_PATH,
 } from "../shared/social-meta.js";
+import { registerErrorCaptureProvider } from "./capture-error.js";
 import { getRequestUserEmail } from "./request-context.js";
 import {
   createH3SSRHandler,
   DEFAULT_SSR_CACHE_HEADERS,
   DEFAULT_SPECULATION_RULES_HEADER,
+  DISABLED_SSR_CACHE_HEADERS,
+  SSR_CACHE_ENV_VAR,
 } from "./ssr-handler.js";
 
 const mocks = vi.hoisted(() => {
@@ -83,6 +86,7 @@ describe("createH3SSRHandler", () => {
     delete process.env.SENTRY_CLIENT_DSN;
     delete process.env.SENTRY_DSN;
     delete process.env.SENTRY_ENVIRONMENT;
+    delete process.env.AGENT_NATIVE_SSR_CACHE;
     mocks.requestHandler.mockClear();
     mocks.getSession.mockClear();
     mocks.getOrgContext.mockClear();
@@ -98,6 +102,37 @@ describe("createH3SSRHandler", () => {
 
     await expect(response.text()).resolves.toBe("GET /inbox?view=unread");
     expect(mocks.requestHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("captures SSR exceptions with request context before returning a safe 500", async () => {
+    const error = new Error("render failed");
+    const provider = vi.fn();
+    const unregister = registerErrorCaptureProvider(
+      "ssr-handler-test",
+      provider,
+    );
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    mocks.requestHandler.mockImplementationOnce(async () => {
+      throw error;
+    });
+    const handler = createH3SSRHandler(() => ({})) as any;
+
+    try {
+      const response = await handler(createEvent("/recaps/recap_test"));
+
+      expect(response.status).toBe(500);
+      expect(provider).toHaveBeenCalledWith(error, {
+        route: "/recaps/recap_test",
+        method: "GET",
+        userAgent: undefined,
+        tags: { renderMode: "anonymous-public", surface: "ssr" },
+      });
+    } finally {
+      consoleError.mockRestore();
+      unregister();
+    }
   });
 
   it("strips APP_BASE_PATH from React Router lazy route manifest paths", async () => {
@@ -183,6 +218,8 @@ describe("createH3SSRHandler", () => {
         headers: {
           "cache-control": "private, no-store",
           "content-type": "text/html; charset=utf-8",
+          "set-cookie": "viewer=private; Path=/",
+          vary: "Cookie, Accept-Encoding, Authorization",
         },
       }),
     );
@@ -190,6 +227,31 @@ describe("createH3SSRHandler", () => {
 
     const response = await handler(createEvent("/private-html"));
 
+    expectDefaultSsrCacheHeaders(response);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(response.headers.get("vary")).toBe("Accept-Encoding");
+  });
+
+  it("strips credential headers before React Router renders the public shell", async () => {
+    mocks.requestHandler.mockImplementationOnce(
+      async (request: Request) =>
+        new Response(
+          `<html><head></head><body>${request.headers.get("cookie") ?? "no-cookie"}:${request.headers.get("authorization") ?? "no-auth"}</body></html>`,
+          { headers: { "content-type": "text/html; charset=utf-8" } },
+        ),
+    );
+    const handler = createH3SSRHandler(() => ({})) as any;
+
+    const response = await handler(
+      createEvent("/private", "GET", {
+        headers: {
+          cookie: "an_session=active",
+          authorization: "Bearer private-token",
+        },
+      }),
+    );
+
+    expect(await response.text()).toContain("no-cookie:no-auth");
     expectDefaultSsrCacheHeaders(response);
   });
 
@@ -655,6 +717,25 @@ describe("createH3SSRHandler", () => {
     expect(html).toContain('src="/docs/app.js"');
   });
 
+  it("uses APP_BASE_PATH in React Router's mounted hydration context", async () => {
+    process.env.APP_BASE_PATH = "/analytics";
+    mocks.requestHandler.mockResolvedValueOnce(
+      new Response(
+        '<html><body><script>window.__reactRouterContext = {"basename":"/","future":{},"ssr":true};</script></body></html>',
+        { headers: { "content-type": "text/html; charset=utf-8" } },
+      ),
+    );
+    const handler = createH3SSRHandler(() => ({})) as any;
+
+    const response = await handler(createEvent("/analytics"));
+    const html = await response.text();
+
+    expect(html).toContain(
+      'window.__reactRouterContext = {"basename":"/analytics"',
+    );
+    expect(html).not.toContain('window.__reactRouterContext = {"basename":"/"');
+  });
+
   it("injects runtime browser Sentry config into SSR HTML", async () => {
     process.env.SENTRY_DSN = "https://public@example/4511270423822336";
     process.env.SENTRY_ENVIRONMENT = "production";
@@ -687,6 +768,158 @@ describe("createH3SSRHandler", () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe("/docs/login");
+  });
+
+  describe(`${SSR_CACHE_ENV_VAR} deployment override`, () => {
+    function mockHtmlResponse(extraHeaders: Record<string, string> = {}) {
+      mocks.requestHandler.mockResolvedValueOnce(
+        new Response("<html><head></head><body>ok</body></html>", {
+          headers: {
+            "content-type": "text/html; charset=utf-8",
+            ...extraHeaders,
+          },
+        }),
+      );
+    }
+
+    function mockDataResponse(extraHeaders: Record<string, string> = {}) {
+      mocks.requestHandler.mockResolvedValueOnce(
+        new Response('[{"_1":2},"routes/docs.$slug"]', {
+          headers: {
+            "content-type": "text/x-script",
+            "x-remix-response": "yes",
+            ...extraHeaders,
+          },
+        }),
+      );
+    }
+
+    function expectCacheHeaders(response: Response, expected: string) {
+      for (const name of Object.keys(DEFAULT_SSR_CACHE_HEADERS)) {
+        expect(response.headers.get(name)).toBe(expected);
+      }
+    }
+
+    it("disables SSR caching on HTML when set to off", async () => {
+      process.env.AGENT_NATIVE_SSR_CACHE = "off";
+      mockHtmlResponse({
+        "set-cookie": "viewer=private; Path=/",
+        vary: "Cookie, Accept-Encoding, Authorization",
+      });
+      const handler = createH3SSRHandler(() => ({})) as any;
+
+      const response = await handler(createEvent("/"));
+
+      expectCacheHeaders(response, DISABLED_SSR_CACHE_HEADERS["cache-control"]);
+      // Opting out of caching must not turn the shell personal: cookies are
+      // still stripped and the response still cannot vary by credentials.
+      expect(response.headers.get("set-cookie")).toBeNull();
+      expect(response.headers.get("vary")).toBe("Accept-Encoding");
+    });
+
+    it("disables SSR caching on .data when set to off", async () => {
+      process.env.AGENT_NATIVE_SSR_CACHE = "off";
+      mockDataResponse({
+        "cache-control": "no-cache",
+        "set-cookie": "viewer=private; Path=/",
+        vary: "Cookie",
+      });
+      const handler = createH3SSRHandler(() => ({})) as any;
+
+      const response = await handler(
+        createEvent("/docs/template-calendar.data", "GET", {
+          headers: { cookie: "an_session=active" },
+        }),
+      );
+
+      expectCacheHeaders(response, DISABLED_SSR_CACHE_HEADERS["cache-control"]);
+      expect(response.headers.get("set-cookie")).toBeNull();
+      expect(response.headers.get("vary")).toBeNull();
+    });
+
+    it("still renders the anonymous shell when caching is disabled", async () => {
+      process.env.AGENT_NATIVE_SSR_CACHE = "off";
+      mocks.getSession.mockResolvedValueOnce({ email: "alice@example.com" });
+      mocks.requestHandler.mockImplementationOnce(async (request: Request) => {
+        const email = getRequestUserEmail();
+        return new Response(
+          `<html><head></head><body>${email ?? "anonymous"}:${request.headers.get("cookie") ?? "no-cookie"}</body></html>`,
+          { headers: { "content-type": "text/html; charset=utf-8" } },
+        );
+      });
+      const handler = createH3SSRHandler(() => ({})) as any;
+
+      const response = await handler(
+        createEvent("/app/private", "GET", {
+          headers: { cookie: "an_session=active" },
+        }),
+      );
+
+      expect(await response.text()).toContain("anonymous:no-cookie");
+      expect(mocks.getSession).not.toHaveBeenCalled();
+    });
+
+    it("applies a shortened freshness window when set to a duration", async () => {
+      process.env.AGENT_NATIVE_SSR_CACHE = "30s";
+      mockHtmlResponse();
+      const handler = createH3SSRHandler(() => ({})) as any;
+
+      const response = await handler(createEvent("/"));
+
+      expectCacheHeaders(
+        response,
+        "public, max-age=30, stale-while-revalidate=30, stale-if-error=3600",
+      );
+    });
+
+    it("applies the shortened freshness window to .data responses too", async () => {
+      process.env.AGENT_NATIVE_SSR_CACHE = "30s";
+      mockDataResponse({ "cache-control": "no-cache" });
+      const handler = createH3SSRHandler(() => ({})) as any;
+
+      const response = await handler(createEvent("/docs/thing.data"));
+
+      expectCacheHeaders(
+        response,
+        "public, max-age=30, stale-while-revalidate=30, stale-if-error=3600",
+      );
+    });
+
+    it("keeps the default policy byte-identical when unset", async () => {
+      expect(process.env.AGENT_NATIVE_SSR_CACHE).toBeUndefined();
+      mockHtmlResponse();
+      const handler = createH3SSRHandler(() => ({})) as any;
+
+      const response = await handler(createEvent("/"));
+
+      expectDefaultSsrCacheHeaders(response);
+      expectCacheHeaders(
+        response,
+        "public, max-age=600, stale-while-revalidate=604800, stale-if-error=3600",
+      );
+    });
+
+    it("falls back to the default policy on an unrecognized value", async () => {
+      const consoleWarn = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => {});
+      try {
+        process.env.AGENT_NATIVE_SSR_CACHE = "banana";
+        mockHtmlResponse();
+        const handler = createH3SSRHandler(() => ({})) as any;
+
+        const response = await handler(createEvent("/"));
+
+        // Fail safe: a typo must not silently disable the CDN.
+        expectDefaultSsrCacheHeaders(response);
+        expect(response.headers.get("cache-control")).not.toBe(
+          DISABLED_SSR_CACHE_HEADERS["cache-control"],
+        );
+        expect(consoleWarn).toHaveBeenCalled();
+      } finally {
+        consoleWarn.mockRestore();
+      }
+    });
   });
 
   describe("document CSP", () => {

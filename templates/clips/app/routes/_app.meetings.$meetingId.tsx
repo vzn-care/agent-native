@@ -1,24 +1,26 @@
+import { appPath } from "@agent-native/core/client/api-path";
+import { writeClipboardText } from "@agent-native/core/client/clipboard";
 import {
   useActionMutation,
   useActionQuery,
-  useT,
-} from "@agent-native/core/client";
+} from "@agent-native/core/client/hooks";
+import { useT } from "@agent-native/core/client/i18n";
 import {
   IconArrowLeft,
   IconCheck,
   IconClock,
   IconCopy,
   IconDeviceDesktop,
-  IconDots,
+  IconDotsVertical,
   IconEdit,
   IconExternalLink,
   IconLoader2,
   IconNotes,
   IconPlayerStop,
+  IconRefresh,
   IconShare3,
   IconTrash,
   IconUsers,
-  IconWand,
 } from "@tabler/icons-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -60,7 +62,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Tooltip,
   TooltipContent,
@@ -100,6 +101,8 @@ interface Meeting {
   recordingId?: string | null;
   recordingDurationMs?: number | null;
   transcriptStatus?: "pending" | "ready" | "failed" | "in_progress" | string;
+  visibility?: "private" | "org" | "public" | null;
+  shareTranscript?: boolean | null;
   summaryMd?: string | null;
   userNotesMd?: string | null;
   bulletsJson?: Bullet[] | null;
@@ -121,14 +124,6 @@ function formatDateTime(iso?: string | null): string {
   } catch {
     return "";
   }
-}
-
-function formatDurationMs(ms?: number | null): string {
-  if (!ms || ms <= 0) return "";
-  const total = Math.round(ms / 1000);
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 function TitleEditor({
@@ -322,7 +317,10 @@ export default function MeetingDetailRoute() {
     meeting?: Omit<Meeting, "participants" | "segmentsJson"> | null;
     participants?: Participant[];
     actionItems?: ActionItem[];
-    transcript?: { segmentsJson?: TranscriptSegment[] | null } | null;
+    transcript?: {
+      fullText?: string | null;
+      segmentsJson?: TranscriptSegment[] | null;
+    } | null;
     recording?: { id: string; durationMs?: number | null } | null;
     role?: "owner" | "admin" | "editor" | "viewer";
   };
@@ -482,12 +480,6 @@ export default function MeetingDetailRoute() {
     updateMeeting.mutate({ id: meeting.id, summaryMd: next });
   };
 
-  const handleUserNotesChange = (next: string) => {
-    if (!meeting) return;
-    patchCachedMeeting({ userNotesMd: next });
-    updateMeeting.mutate({ id: meeting.id, userNotesMd: next });
-  };
-
   const handleToggleActionItem = (index: number, completed: boolean) => {
     if (!meeting) return;
     const items = meeting.actionItemsJson ?? [];
@@ -517,7 +509,7 @@ export default function MeetingDetailRoute() {
 
   const handleFinalize = () => {
     if (!meeting) return;
-    // "My notes" (userNotesMd) is a separate field and is untouched by
+    // User-authored notes (userNotesMd) are separate and untouched by
     // regeneration; only the AI summary/bullets are overwritten. Reassure
     // the user their own notes are kept.
     if (hasNotes) {
@@ -553,6 +545,30 @@ export default function MeetingDetailRoute() {
 
   const handleEndMeeting = () => {
     if (!meeting) return;
+    // The meeting share link is valid independently of the stop call, so copy
+    // it while the user's click still counts as activation instead of waiting
+    // on the mutation. The public meeting page resolves `visibility = public`
+    // rows only — anything else would hand the user a link that 404s for the
+    // people they send it to.
+    if (meeting.visibility === "public" && typeof window !== "undefined") {
+      const shareUrl = `${window.location.origin}${appPath(
+        `/share/meeting/${meeting.id}`,
+      )}`;
+      void writeClipboardText(shareUrl).then((copied) => {
+        if (copied) {
+          toast.success(t("recordRoute.linkCopied"));
+          return;
+        }
+        toast(t("meetingDetail.share"), {
+          action: {
+            label: t("recordRoute.copyLinkAction"),
+            onClick: () => {
+              void writeClipboardText(shareUrl);
+            },
+          },
+        });
+      });
+    }
     // Optimistic: flip the live badge off immediately rather than waiting
     // for the next 2s poll — stop-meeting-recording stamps actualEnd and
     // flips transcriptStatus server-side.
@@ -626,7 +642,8 @@ export default function MeetingDetailRoute() {
   const bullets = meeting.bulletsJson ?? [];
   const actionItems = meeting.actionItemsJson ?? [];
   const segments = meeting.segmentsJson ?? [];
-  const recordingDuration = formatDurationMs(meeting.recordingDurationMs);
+  const hasSummary =
+    !!meeting.summaryMd || bullets.length > 0 || actionItems.length > 0;
 
   const handleCopyTranscript = async () => {
     if (!segments.length) return;
@@ -647,7 +664,7 @@ export default function MeetingDetailRoute() {
   };
 
   return (
-    <div className="p-6 max-w-6xl mx-auto w-full flex flex-col min-h-0 flex-1">
+    <div className="p-6 max-w-6xl mx-auto w-full flex flex-col min-h-0 flex-1 lg:h-full lg:overflow-hidden">
       <PageHeader>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -692,19 +709,16 @@ export default function MeetingDetailRoute() {
               <IconLoader2 className="h-3.5 w-3.5 animate-spin" />
               {t("meetingDetail.generatingNotesInline")}
             </span>
-          ) : hasNotes ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={handleFinalize}
-              className="cursor-pointer h-8"
-            >
-              {t("meetingDetail.regenerateNotes")}
-            </Button>
           ) : null}
           <ShareMeetingPopover
             meetingId={meeting.id}
             meetingTitle={meeting.title}
+            shareTranscript={meeting.shareTranscript === true}
+            transcriptReady={
+              meeting.transcriptStatus === "ready" &&
+              (segments.length > 0 ||
+                Boolean(data?.transcript?.fullText?.trim()))
+            }
           >
             <Button size="sm" className="shrink-0 gap-1.5">
               <IconShare3 className="h-4 w-4" />
@@ -721,10 +735,16 @@ export default function MeetingDetailRoute() {
                     className="h-8 w-8 cursor-pointer"
                     aria-label={t("meetingDetail.meetingOptions")}
                   >
-                    <IconDots className="h-4 w-4" />
+                    <IconDotsVertical className="h-4 w-4" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-44">
+                  {hasSummary && !finalize.isPending && (
+                    <DropdownMenuItem onSelect={handleFinalize}>
+                      <IconRefresh className="mr-2 h-4 w-4" />
+                      {t("meetingDetail.regenerateNotes")}
+                    </DropdownMenuItem>
+                  )}
                   {isLive && (
                     <DropdownMenuItem
                       onSelect={(event) => {
@@ -814,19 +834,11 @@ export default function MeetingDetailRoute() {
       </PageHeader>
 
       {showDesktopRecordHint && (
-        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-border bg-accent/20 px-3 py-2.5">
-          <IconDeviceDesktop className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="text-sm">{t("meetingDetail.desktopHint")}</span>
-          {!isDesktopApp && (
-            <CaptureInstallButton
-              size="sm"
-              variant="secondary"
-              className="ml-auto h-8 gap-1.5 cursor-pointer"
-            >
-              <IconExternalLink className="h-3.5 w-3.5" />
-              {t("meetingDetail.getDesktopApp")}
-            </CaptureInstallButton>
-          )}
+        <div className="mb-4 flex items-start gap-3 rounded-md border border-border bg-accent/20 px-3 py-2.5">
+          <IconDeviceDesktop className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 text-sm">
+            {t("meetingDetail.desktopHint")}
+          </span>
         </div>
       )}
 
@@ -869,94 +881,51 @@ export default function MeetingDetailRoute() {
         )}
       </div>
 
-      <div className="clips-meeting-detail-grid grid grid-cols-1 gap-6 flex-1 min-h-0">
-        {/* Two-tone canvas: user notes (black) + AI summary/bullets (gray) */}
+      <div className="clips-meeting-detail-grid grid grid-cols-1 gap-6 flex-1 min-h-0 lg:overflow-hidden">
+        {/* Summary canvas with generated bullets and action items. */}
         <div
           className={cn(
             "clips-meeting-notes-panel rounded-lg border border-border bg-background min-h-[480px] overflow-hidden flex flex-col",
             notesJustArrived && "animate-in fade-in duration-500",
           )}
         >
-          <Tabs
-            defaultValue="notes"
-            className="flex min-h-0 flex-1 flex-col gap-0"
-          >
-            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
-              <TabsList className="h-8 gap-1 bg-transparent p-0">
-                <TabsTrigger
-                  value="notes"
-                  className="h-7 px-2.5 text-xs data-[state=active]:bg-muted"
-                >
-                  {t("meetingDetail.myNotes")}
-                </TabsTrigger>
-                <TabsTrigger
-                  value="ai"
-                  className="h-7 gap-1 px-2.5 text-xs data-[state=active]:bg-muted"
-                >
-                  <IconWand className="h-3 w-3" />
-                  {t("meetingDetail.aiNotes")}
-                </TabsTrigger>
-                <TabsTrigger
-                  value="actions"
-                  className="h-7 px-2.5 text-xs data-[state=active]:bg-muted"
-                >
-                  {t("meetingDetail.actionItems")}
-                  {actionItems.length > 0 && (
-                    <span className="ml-1 text-muted-foreground">
-                      {actionItems.length}
-                    </span>
-                  )}
-                </TabsTrigger>
-              </TabsList>
-              {finalize.isPending && (
-                <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                  <IconLoader2 className="h-3 w-3 animate-spin" />
-                  {t("meetingDetail.working")}
-                </span>
-              )}
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-2.5">
+            <div className="text-xs font-medium">
+              {t("meetingDetail.summary")}
             </div>
+            {finalize.isPending && (
+              <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                <IconLoader2 className="h-3 w-3 animate-spin" />
+                {t("meetingDetail.working")}
+              </span>
+            )}
+          </div>
 
-            <TabsContent
-              value="notes"
-              className="mt-0 min-h-0 flex-1 overflow-y-auto"
-            >
-              <CanvasEditor
-                view="user"
-                userNotesMd={meeting.userNotesMd ?? ""}
-                onUserNotesChange={handleUserNotesChange}
-                readOnly={!canEdit}
-              />
-            </TabsContent>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <CanvasEditor
+              view="ai"
+              summaryMd={meeting.summaryMd ?? ""}
+              bullets={bullets.map((b) => b.text)}
+              onSummaryChange={handleSummaryChange}
+              readOnly={!canEdit}
+              renderBullet={(b) => (
+                <BulletLink
+                  bullet={b}
+                  segments={segments}
+                  onJumpTo={handleJumpToSegment}
+                >
+                  <div className="flex gap-2 text-sm leading-relaxed text-muted-foreground">
+                    <span>•</span>
+                    <span className="flex-1">{b}</span>
+                  </div>
+                </BulletLink>
+              )}
+            />
 
-            <TabsContent
-              value="ai"
-              className="mt-0 min-h-0 flex-1 overflow-y-auto"
-            >
-              <CanvasEditor
-                view="ai"
-                summaryMd={meeting.summaryMd ?? ""}
-                bullets={bullets.map((b) => b.text)}
-                onSummaryChange={handleSummaryChange}
-                readOnly={!canEdit}
-                renderBullet={(b) => (
-                  <BulletLink
-                    bullet={b}
-                    segments={segments}
-                    onJumpTo={handleJumpToSegment}
-                  >
-                    <div className="flex gap-2 text-sm leading-relaxed text-muted-foreground">
-                      <span>•</span>
-                      <span className="flex-1">{b}</span>
-                    </div>
-                  </BulletLink>
-                )}
-              />
-            </TabsContent>
-
-            <TabsContent
-              value="actions"
-              className="mt-0 min-h-0 flex-1 overflow-y-auto px-6 py-4"
-            >
+            <div className="max-w-2xl px-6 pb-6">
+              <div className="mb-3 text-xs font-medium">
+                {t("meetingDetail.actionItems")}
+              </div>
               {actionItems.length > 0 ? (
                 <ActionItemsByPerson
                   items={actionItems}
@@ -968,11 +937,11 @@ export default function MeetingDetailRoute() {
                   {t("meetingDetail.noActionItems")}
                 </p>
               )}
-            </TabsContent>
-          </Tabs>
+            </div>
+          </div>
         </div>
 
-        {/* Transcript pane — chat-bubble layout */}
+        {/* Transcript pane — plain agent-chat-style text layout */}
         <div className="rounded-lg border border-border bg-background min-h-[480px] lg:min-h-0 overflow-hidden flex flex-col">
           <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-2.5 bg-background">
             <div className="flex items-center gap-1.5 text-xs font-medium">
@@ -980,13 +949,6 @@ export default function MeetingDetailRoute() {
               {t("meetingDetail.transcript")}
             </div>
             <div className="flex items-center gap-2">
-              {meeting.transcriptStatus === "ready" && (
-                <span className="text-[10px] text-muted-foreground">
-                  {t("meetingDetail.segments", {
-                    count: segments.length,
-                  })}
-                </span>
-              )}
               {segments.length > 0 && (
                 <Tooltip>
                   <TooltipTrigger asChild>

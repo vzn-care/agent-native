@@ -1,4 +1,7 @@
+import { creativeContextMessagesByLocale } from "@agent-native/creative-context/messages";
+
 const messages = {
+  creativeContext: creativeContextMessagesByLocale["es-ES"],
   root: {
     commandPresentations: "Presentaciones",
     searchDecks: "Buscar decks",
@@ -34,10 +37,10 @@ const messages = {
       "Gestiona miembros del equipo, acceso de la organización y preferencias compartidas.",
     openTeamSettings: "Abrir ajustes del equipo",
     openResourceSettings: "Abrir ajustes de recursos",
-    agentTitle: "Ajustes del agente",
+    agentTitle: "Gestionar agente",
     agentDescription:
-      "Abre los ajustes del agente en la barra lateral para modelos, claves API, automatizaciones, voz y otros controles.",
-    openAgentSettings: "Abrir ajustes del agente",
+      "Gestiona el modelo del agente, claves API, automatizaciones, voz y otros controles.",
+    openAgentSettings: "Gestionar agente",
   },
   agent: {
     emptyState: "Pregúntame cualquier cosa sobre tus presentaciones",
@@ -93,6 +96,8 @@ const messages = {
     googlePickerNeedsKeys:
       "Google Picker necesita GOOGLE_PICKER_API_KEY y GOOGLE_PICKER_APP_ID.",
     imageUploadFailed: "Error al subir la imagen",
+    imageUploadNeedsBuilder:
+      "Conecta Builder.io desde el menú de modelos del compositor del agente para subir imágenes a las diapositivas. Soltar una imagen en el lienzo vacío aún puede enviarla al agente sin proveedor.",
     sentToAgent: "Enviado al agente",
     imageUploadGenericError: "Algo salió mal al subir esta imagen.",
     uploading: "Subiendo…",
@@ -103,6 +108,7 @@ const messages = {
     searchImagesPlaceholder: "Buscar imágenes...",
     searchForLogosImagesIcons: "Buscar logos, imágenes, iconos...",
     search: "Buscar",
+    searchFailed: "Error al buscar",
     logoSearchTitle: "Búsqueda de logos",
     searchCompanyLogo: "Busca una empresa para encontrar su logo",
     searchCompanyPlaceholder: "Buscar nombre de empresa (p. ej. Intuit)",
@@ -116,6 +122,7 @@ const messages = {
     uploadAttachedFailed: "No se pudo subir el archivo adjunto.",
     uploadFailed: "Error al subir",
     doubleClickEdit: "Haz doble clic en cualquier texto para editarlo",
+    dragToMove: "Arrastra para mover",
     aiEditing: "IA editando",
     startTypingCommands: "Empieza a escribir… o pulsa / para comandos",
     pinDropHint:
@@ -210,6 +217,7 @@ const messages = {
     elementAnimations: "Animaciones de elementos",
     tweaks: "Ajustes finos",
     drawOnSlide: "Dibujar en la diapositiva",
+    addTextBox: "Añadir cuadro de texto",
     pinComments: "Fijar comentarios",
     pinCommentsDescription:
       "Haz clic en puntos de la diapositiva para encolar varias ediciones y enviarlas todas a la vez.",
@@ -334,6 +342,8 @@ const messages = {
     hideResolved: "Ocultar resueltos",
     showResolved: "Mostrar {{count}} resueltos",
     noCommentsYet: "Aún no hay comentarios",
+    loadFailed: "No se pudieron cargar los comentarios",
+    retry: "Reintentar",
     clickToAddComment: "Haz clic para añadir un comentario",
     selectSlideToAdd: "Selecciona una diapositiva para añadir uno",
   },
@@ -488,6 +498,8 @@ const messages = {
     backToDecks: "Volver a decks",
     tryAgain: "Intentar de nuevo",
     imageUploadFailed: "Error al subir imagen",
+    imageUploadNeedsBuilder:
+      "Conecta Builder.io desde el menú de modelos del compositor del agente para subir imágenes a las diapositivas. Soltar una imagen en el lienzo vacío aún puede enviarla al agente sin proveedor.",
     imageAdded: "Imagen añadida",
     imageUploadError: "Algo salió mal al subir esta imagen.",
     exportFailed: "Error al exportar",
@@ -557,6 +569,10 @@ const messages = {
     chooseAnotherFile: "Elegir otro archivo",
   },
   home: {
+    loadFailed: "No se pudo cargar el contenido",
+    loadFailedDescription:
+      "El contenido guardado sigue disponible. Comprueba la conexión e inténtalo de nuevo.",
+    retry: "Reintentar",
     decksTitle: "Decks",
     newDeck: "Nuevo deck",
     deckLengthQuestion: "¿Qué longitud debe tener este deck?",

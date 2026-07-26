@@ -30,20 +30,37 @@ interface RunRow {
 
 let rows: RunRow[] = [];
 
-// Mirror the two constants used by `backgroundAwareStaleCutoffSql`. The SQL
+// Mirror the three constants used by `backgroundAwareStaleCutoffSql`. The SQL
 // inlines them as literals, so we evaluate the CASE in JS to decide reaping.
 const RUN_STALE_MS = 15_000;
 const BACKGROUND_RUN_STALE_MS = 90_000;
+const BACKGROUND_PROCESSING_RUN_STALE_MS = 45_000;
 
 function rowStaleWindow(row: RunRow): number {
+  if (row.dispatch_mode === "background-processing") {
+    return BACKGROUND_PROCESSING_RUN_STALE_MS;
+  }
   return row.dispatch_mode && row.dispatch_mode.startsWith("background")
     ? BACKGROUND_RUN_STALE_MS
     : RUN_STALE_MS;
 }
 
-/** Effective liveness timestamp = COALESCE(heartbeat_at, started_at). */
-function liveness(row: RunRow): number {
+/** Heartbeat-only basis — used by unclaimed-worker reaper. */
+function heartbeatLiveness(row: RunRow): number {
   return row.heartbeat_at ?? row.started_at;
+}
+
+/** Effective liveness timestamp = max(heartbeat, progress, started). */
+function liveness(row: RunRow): number {
+  const heartbeat = row.heartbeat_at ?? row.started_at;
+  const progress = row.last_progress_at ?? row.started_at;
+  return Math.max(heartbeat, progress);
+}
+
+/** Mark a producer dead for tests: both heartbeat and progress must go stale. */
+function markProducerDead(row: RunRow, at: number) {
+  row.heartbeat_at = at;
+  row.last_progress_at = at;
 }
 
 function norm(sql: string): string {
@@ -120,7 +137,7 @@ const mockDb = {
           r.dispatch_mode === "background",
       );
       if (!row) return { rows: [], rowsAffected: 0 };
-      if (liveness(row) < cutoff) {
+      if (heartbeatLiveness(row) < cutoff) {
         row.status = "errored";
         row.completed_at = completedAt;
         row.error_code = args[1] as string;
@@ -161,7 +178,7 @@ const mockDb = {
       // explicit-maxStaleMs path inlines a plain `?` and binds a pre-computed
       // cutoff. Distinguish by the SQL fragment, not the arg type.
       const usesBackgroundAwareWindow =
-        /CASE WHEN dispatch_mode LIKE 'background%'/i.test(sql);
+        /WHEN dispatch_mode LIKE 'background%'/i.test(sql);
       const row = rows.find((r) => r.id === id && r.status === "running");
       if (!row) return { rows: [], rowsAffected: 0 };
       const cutoff = usesBackgroundAwareWindow
@@ -245,6 +262,7 @@ const {
   UNCLAIMED_BACKGROUND_RUN_ERROR_EVENT,
   RUN_STALE_MS: STORE_RUN_STALE_MS,
   BACKGROUND_RUN_STALE_MS: STORE_BACKGROUND_RUN_STALE_MS,
+  BACKGROUND_PROCESSING_RUN_STALE_MS: STORE_BACKGROUND_PROCESSING_RUN_STALE_MS,
 } = await import("./run-store.js");
 
 describe("run-store durable background", () => {
@@ -253,9 +271,13 @@ describe("run-store durable background", () => {
     vi.clearAllMocks();
   });
 
-  it("exports the tight foreground + wide background stale windows", () => {
+  it("exports distinct stale windows for foreground, unclaimed, and claimed background runs", () => {
     expect(STORE_RUN_STALE_MS).toBe(15_000);
     expect(STORE_BACKGROUND_RUN_STALE_MS).toBe(90_000);
+    expect(STORE_BACKGROUND_PROCESSING_RUN_STALE_MS).toBe(45_000);
+    expect(STORE_BACKGROUND_PROCESSING_RUN_STALE_MS).toBeLessThan(
+      STORE_BACKGROUND_RUN_STALE_MS,
+    );
     expect(STORE_BACKGROUND_RUN_STALE_MS).toBeGreaterThan(STORE_RUN_STALE_MS);
   });
 
@@ -311,18 +333,32 @@ describe("run-store durable background", () => {
     const now = Date.now();
     await insertRun("r-dead-bg", "t1", "turn", { dispatchMode: "background" });
     const row = rows.find((r) => r.id === "r-dead-bg")!;
-    row.heartbeat_at = now - 120_000; // > 90s — genuinely dead worker.
+    markProducerDead(row, now - 120_000); // > 90s — genuinely dead worker.
 
     const reaped = await reapIfStale("r-dead-bg");
     expect(reaped).toBe(true);
     expect(await getRunStatus("r-dead-bg")).toBe("errored");
   });
 
+  it("reaps a claimed background worker after the shorter post-claim window", async () => {
+    const now = Date.now();
+    await insertRun("r-dead-claimed-bg", "t1", "turn", {
+      dispatchMode: "background",
+    });
+    expect(await claimBackgroundRun("r-dead-claimed-bg")).toBe(true);
+    const row = rows.find((r) => r.id === "r-dead-claimed-bg")!;
+    markProducerDead(row, now - 50_000);
+
+    const reaped = await reapIfStale("r-dead-claimed-bg");
+    expect(reaped).toBe(true);
+    expect(await getRunStatus("r-dead-claimed-bg")).toBe("errored");
+  });
+
   it("stale reaper still reaps a foreground run past the tight 15s window", async () => {
     const now = Date.now();
     await insertRun("r-dead-fg", "t1"); // foreground (no dispatch_mode)
     const row = rows.find((r) => r.id === "r-dead-fg")!;
-    row.heartbeat_at = now - 30_000; // > 15s — foreground producer died.
+    markProducerDead(row, now - 30_000); // > 15s — foreground producer died.
 
     const reaped = await reapIfStale("r-dead-fg");
     expect(reaped).toBe(true);
@@ -334,6 +370,8 @@ describe("run-store durable background", () => {
     await insertRun("r-hold-bg", "thread-bg", "turn", {
       dispatchMode: "background",
     });
+    // Quiet heartbeat only — progress may still be fresh / started_at is ok;
+    // background window still covers a 30s cold-start gap.
     rows.find((r) => r.id === "r-hold-bg")!.heartbeat_at = now - 30_000;
 
     const slot = await tryClaimRunSlot("thread-bg");
@@ -345,7 +383,7 @@ describe("run-store durable background", () => {
   it("tryClaimRunSlot frees the slot when a foreground run goes stale (30s)", async () => {
     const now = Date.now();
     await insertRun("r-stale-fg", "thread-fg");
-    rows.find((r) => r.id === "r-stale-fg")!.heartbeat_at = now - 30_000;
+    markProducerDead(rows.find((r) => r.id === "r-stale-fg")!, now - 30_000);
 
     const slot = await tryClaimRunSlot("thread-fg");
     expect(slot.claimed).toBe(true);

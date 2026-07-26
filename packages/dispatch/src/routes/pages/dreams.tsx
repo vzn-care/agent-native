@@ -1,4 +1,7 @@
-import { useActionMutation, useActionQuery } from "@agent-native/core/client";
+import {
+  useActionMutation,
+  useActionQuery,
+} from "@agent-native/core/client/hooks";
 import {
   IconAlertTriangle,
   IconBrain,
@@ -17,20 +20,20 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
 import { toast } from "sonner";
 
-import { DispatchShell } from "@/components/dispatch-shell";
+import { DispatchShell } from "../../components/dispatch-shell";
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
-} from "@/components/ui/accordion";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
+} from "../../components/ui/accordion";
+import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import { Input } from "../../components/ui/input";
+import { Label } from "../../components/ui/label";
+import { ScrollArea } from "../../components/ui/scroll-area";
+import { Separator } from "../../components/ui/separator";
 import {
   Sheet,
   SheetContent,
@@ -39,10 +42,10 @@ import {
   SheetHeader,
   SheetTitle,
   SheetTrigger,
-} from "@/components/ui/sheet";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Spinner } from "@/components/ui/spinner";
-import { Switch } from "@/components/ui/switch";
+} from "../../components/ui/sheet";
+import { Skeleton } from "../../components/ui/skeleton";
+import { Spinner } from "../../components/ui/spinner";
+import { Switch } from "../../components/ui/switch";
 import {
   Table,
   TableBody,
@@ -50,11 +53,15 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
-import { cn } from "@/lib/utils";
-
+} from "../../components/ui/table";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "../../components/ui/tabs";
+import { Textarea } from "../../components/ui/textarea";
+import { cn } from "../../lib/utils";
 import {
   dreamSettingsToDraft,
   dreamSettingsUpdateFromDraft,
@@ -551,17 +558,17 @@ function StatTile({
   icon: typeof IconBrain;
 }) {
   return (
-    <div className="rounded-lg border bg-card px-3 py-2.5">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+    <div className="rounded-lg bg-card px-3 py-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
             {label}
           </div>
           <div className="mt-1 text-xl font-semibold tabular-nums text-foreground">
             {value}
           </div>
         </div>
-        <Icon size={18} className="text-muted-foreground" />
+        <Icon size={18} className="shrink-0 text-muted-foreground" />
       </div>
     </div>
   );
@@ -860,7 +867,7 @@ function ProposalCard({
   const preview = previewQuery.data;
 
   return (
-    <div className="rounded-lg border bg-card">
+    <div className="rounded-lg bg-card">
       <div className="flex flex-col gap-3 border-b px-4 py-3 md:flex-row md:items-start md:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -1238,16 +1245,38 @@ export default function DreamsRoute() {
       setSelectedDreamId(urlDreamId);
       return;
     }
-    if (selectedDreamId && dreams.some((dream) => dream.id === selectedDreamId))
+    if (
+      selectedDreamId &&
+      dreams.some((dream) => dream.id === selectedDreamId)
+    ) {
       return;
+    }
+    if (dreamsQuery.isLoading) return;
+    // If the query failed, normalizeArray returns [] but the list is not
+    // confirmed empty — preserve the current selection so dreamDetailQuery
+    // can still load the detail from the URL param.
+    if (dreamsQuery.error) return;
     const nextId = dreams[0]?.id ?? null;
     setSelectedDreamId(nextId);
     if (nextId && nextId !== urlDreamId) {
       const next = new URLSearchParams(searchParams);
       next.set("dreamId", nextId);
       setSearchParams(next, { replace: true });
+    } else if (!nextId && urlDreamId) {
+      // List settled successfully with no rows — remove the stale URL param
+      // so dreamDetailQuery does not fire for an ID that cannot be found.
+      const next = new URLSearchParams(searchParams);
+      next.delete("dreamId");
+      setSearchParams(next, { replace: true });
     }
-  }, [dreams, searchParams, selectedDreamId, setSearchParams]);
+  }, [
+    dreams,
+    dreamsQuery.isLoading,
+    dreamsQuery.error,
+    searchParams,
+    selectedDreamId,
+    setSearchParams,
+  ]);
 
   function selectDream(dreamId: string) {
     setSelectedDreamId(dreamId);
@@ -1399,8 +1428,8 @@ export default function DreamsRoute() {
       description="Review agent runs, propose memory improvements, and apply evidence-backed learning changes."
     >
       <div className="space-y-4">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div className="grid flex-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
             <StatTile
               label="Dream passes"
               value={dreams.length}
@@ -1422,9 +1451,9 @@ export default function DreamsRoute() {
               icon={IconCheck}
             />
           </div>
-          <div className="flex shrink-0 flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {dreamSettings ? (
-              <Badge variant="outline" className="h-9 px-3">
+              <Badge variant="outline" className="h-9 max-w-full truncate px-3">
                 {dreamSettings.enabled ? "Enabled" : "Paused"} ·{" "}
                 {dreamSettings.allSources
                   ? "All sources"
@@ -1490,8 +1519,8 @@ export default function DreamsRoute() {
           </div>
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)_380px]">
-          <section className="rounded-lg border bg-card">
+        <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-[280px_minmax(0,1fr)_380px]">
+          <section className="rounded-lg bg-card">
             <div className="border-b px-4 py-3">
               <div className="text-sm font-semibold text-foreground">
                 Recent passes
@@ -1567,7 +1596,7 @@ export default function DreamsRoute() {
             </div>
           </section>
 
-          <section className="min-w-0 rounded-lg border bg-card">
+          <section className="min-w-0 rounded-lg bg-card">
             <div className="border-b px-4 py-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0">
@@ -1742,7 +1771,7 @@ export default function DreamsRoute() {
             </div>
           </section>
 
-          <section className="rounded-lg border bg-card">
+          <section className="rounded-lg bg-card">
             <div className="border-b px-4 py-3">
               <div>
                 <div className="text-sm font-semibold text-foreground">

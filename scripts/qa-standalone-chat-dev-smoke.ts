@@ -15,10 +15,11 @@
  * a different SSR pipeline than Vite dev + React Router's environment API.
  *
  * CI flake strategy (do not fight Vite first-load dep optimization):
- * 1. One page.goto to `/` so auto-login runs in the browser.
- * 2. Poll for Home / auth — never re-goto during active Vite reloads.
- * 3. waitForViteDepsQuiet(server logs) before strict assertions.
- * 4. Retry goto/evaluate only for transient Playwright navigation errors.
+ * 1. Poll the unauthenticated JSON API from process launch until it returns 401.
+ * 2. One page.goto to `/` so auto-login runs in the browser.
+ * 3. Poll for Home / auth — never re-goto during active Vite reloads.
+ * 4. waitForViteDepsQuiet(server logs) before strict assertions.
+ * 5. Retry goto/evaluate only for transient Playwright navigation errors.
  */
 import assert from "node:assert/strict";
 import {
@@ -59,6 +60,8 @@ const headed = process.env.STANDALONE_CHAT_DEV_SMOKE_HEADED === "1";
 const isCi = Boolean(process.env.CI || process.env.GITHUB_ACTIONS);
 const shellTimeoutMs = isCi ? 120_000 : 60_000;
 const devStartAttempts = 3;
+const nitroUnavailableConsoleLine =
+  'NitroViteError]: Vite environment "nitro" is unavailable';
 
 function log(step: string): void {
   if (verbose) console.log(`[standalone-dev-smoke] ${step}`);
@@ -90,6 +93,8 @@ interface ViteReloadTracker {
 interface RunningDev {
   baseUrl: string;
   child: ChildProcessWithoutNullStreams;
+  closed: Promise<void>;
+  isClosed: () => boolean;
   logs: string[];
   dbPath: string;
   viteReload: ViteReloadTracker;
@@ -245,26 +250,6 @@ function hasRecentDatabaseLock(logs: string[]): boolean {
   return tail.includes("database is locked") || tail.includes("SQLITE_BUSY");
 }
 
-function parseDevAutoLoginCredentials(logs: string[]): {
-  email: string;
-  password: string;
-} | null {
-  const text = logs.join("");
-  const match = text.match(
-    /Local dev auto-login ready\.\s+email:\s+([^\s]+)\s+password:\s+([^\s]+)/,
-  );
-  if (!match) return null;
-  return { email: match[1], password: match[2] };
-}
-
-function isLoggedOutBody(body: string): boolean {
-  return (
-    /create an account to get started/i.test(body) ||
-    /sign in to your account/i.test(body) ||
-    /log in to your account/i.test(body)
-  );
-}
-
 /**
  * Wait until no Vite full-page reload log chunk has arrived for `quietMs`.
  * Uses chunk timestamps — old "reloading" text in the log buffer never clears.
@@ -331,6 +316,25 @@ async function waitForDevStable(
       continue;
     }
 
+    try {
+      const speculationRules = await fetch(
+        `${baseUrl}/_agent-native/speculation-rules.json`,
+        {
+          redirect: "manual",
+          signal: AbortSignal.timeout(3_000),
+        },
+      );
+      if (speculationRules.status !== 200) {
+        lastError = `speculation rules HTTP ${speculationRules.status}`;
+        await sleep(750);
+        continue;
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      await sleep(750);
+      continue;
+    }
+
     if (!hasChatMigrations(logs)) {
       lastError = "migrations still running";
       await sleep(750);
@@ -354,6 +358,67 @@ async function waitForDevStable(
   );
 }
 
+async function waitForUnauthenticatedPollReady(
+  running: RunningDev,
+): Promise<void> {
+  const deadline = Date.now() + 180_000;
+  let lastError = "dev port has not accepted a request";
+  let transient503s = 0;
+
+  while (Date.now() < deadline) {
+    if (running.isClosed()) {
+      throw new Error(
+        "Dev server exited before the startup poll became ready. Recent logs:\n" +
+          logTail(running.logs),
+      );
+    }
+    if (hasAuthLockFailure(running.logs)) {
+      throw new Error(
+        "Dev server auth init failed (app locked). Recent logs:\n" +
+          logTail(running.logs),
+      );
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`${running.baseUrl}/_agent-native/poll?since=0`, {
+        headers: { accept: "application/json" },
+        redirect: "manual",
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      await sleep(50);
+      continue;
+    }
+
+    const body = await response.text();
+    if (response.status === 401) {
+      log(
+        `startup poll reached HTTP 401 after ${transient503s} transient 503 response(s)`,
+      );
+      return;
+    }
+    if (response.status === 503) {
+      transient503s += 1;
+      lastError = `startup poll HTTP 503 (${transient503s} transient response(s))`;
+      await sleep(100);
+      continue;
+    }
+
+    throw new Error(
+      `Expected unauthenticated startup poll to return HTTP 401 after transient 503s, ` +
+        `got HTTP ${response.status}: ${body.slice(0, 300)}`,
+    );
+  }
+
+  throw new Error(
+    `Unauthenticated startup poll did not reach HTTP 401: ${lastError}\n${logTail(
+      running.logs,
+    )}`,
+  );
+}
+
 async function startDevOnce(): Promise<RunningDev> {
   tryFreePort(port);
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -362,10 +427,9 @@ async function startDevOnce(): Promise<RunningDev> {
   const logs: string[] = [];
   const viteReload: ViteReloadTracker = { lastReloadAt: 0 };
   const child = spawn(
-    "pnpm",
+    nodeBin,
     [
-      "exec",
-      "agent-native",
+      cliEntry,
       "dev",
       "--",
       "--host",
@@ -378,8 +442,16 @@ async function startDevOnce(): Promise<RunningDev> {
       cwd: appDir,
       env: devEnv(baseUrl, dbPath),
       stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
     },
   );
+  let closed = false;
+  const closePromise = new Promise<void>((resolve) => {
+    child.once("close", () => {
+      closed = true;
+      resolve();
+    });
+  });
 
   child.stdout.on("data", (chunk) =>
     appendDevLog(logs, chunk.toString(), viteReload),
@@ -395,9 +467,19 @@ async function startDevOnce(): Promise<RunningDev> {
     );
   });
 
-  const running = { baseUrl, child, logs, dbPath, viteReload };
+  const running = {
+    baseUrl,
+    child,
+    closed: closePromise,
+    isClosed: () => closed,
+    logs,
+    dbPath,
+    viteReload,
+  };
   try {
+    await waitForUnauthenticatedPollReady(running);
     await waitForDevStable(baseUrl, logs);
+    assertCleanServerLogs(logs);
     log(`dev server stable at ${baseUrl}`);
     return running;
   } catch (err) {
@@ -429,17 +511,30 @@ async function startDev(): Promise<RunningDev> {
 }
 
 async function stopDev(running: RunningDev): Promise<void> {
-  if (running.child.exitCode != null) return;
-  running.child.kill("SIGTERM");
-  await Promise.race([
-    new Promise<void>((resolve) => running.child.once("exit", () => resolve())),
-    new Promise<void>((resolve) =>
-      setTimeout(() => {
-        if (running.child.exitCode == null) running.child.kill("SIGKILL");
-        resolve();
-      }, 8_000),
-    ),
-  ]);
+  const signal = (name: NodeJS.Signals) => {
+    try {
+      if (process.platform !== "win32" && running.child.pid) {
+        process.kill(-running.child.pid, name);
+      } else {
+        running.child.kill(name);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+  };
+  const waitForClose = (timeoutMs: number) =>
+    Promise.race([
+      running.closed.then(() => true),
+      sleep(timeoutMs).then(() => false),
+    ]);
+
+  if (running.isClosed()) return;
+  signal("SIGTERM");
+  if (await waitForClose(8_000)) return;
+  signal("SIGKILL");
+  if (!(await waitForClose(2_000))) {
+    throw new Error("Dev server process tree did not close after SIGKILL");
+  }
 }
 
 async function launchBrowser(): Promise<Browser> {
@@ -559,6 +654,19 @@ function isBenignHttpError(status: number, url: string): boolean {
   if (status === 404 && url.includes("/_agent-native/agent-chat/threads/")) {
     return true;
   }
+  // Chat can request checkpoints for a client-created thread before its first
+  // message persists that thread on the server.
+  if (
+    status === 404 &&
+    url.includes("/_agent-native/agent-chat/checkpoints?")
+  ) {
+    return true;
+  }
+  // Nitro can briefly remount framework routes while Vite optimizes the first
+  // browser dependency graph; waitForDevStable verifies this route is ready.
+  if (status === 404 && url.includes("/_agent-native/speculation-rules.json")) {
+    return true;
+  }
   // First dev load optimizes deps and may 504/503 while Vite/Nitro warm up.
   if (
     (status === 504 || status === 503) &&
@@ -567,54 +675,6 @@ function isBenignHttpError(status: number, url: string): boolean {
     return true;
   }
   return false;
-}
-
-async function signInViaAuthApi(
-  page: Page,
-  email: string,
-  password: string,
-): Promise<void> {
-  await retryAfterNavigation("auth API login", () =>
-    page.evaluate(
-      async ({ email, password }) => {
-        const post = async (path: string, body: Record<string, unknown>) => {
-          const response = await fetch(path, {
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          });
-          const text = await response.text();
-          return { ok: response.ok, status: response.status, text };
-        };
-
-        let login = await post("/_agent-native/auth/login", {
-          email,
-          password,
-        });
-        if (!login.ok) {
-          const register = await post("/_agent-native/auth/register", {
-            email,
-            password,
-            name: "Smoke Tester",
-            callbackURL: "/",
-          });
-          if (!register.ok && register.status !== 409) {
-            throw new Error(
-              `register failed with HTTP ${register.status}: ${register.text}`,
-            );
-          }
-          login = await post("/_agent-native/auth/login", { email, password });
-        }
-        if (!login.ok) {
-          throw new Error(
-            `login failed with HTTP ${login.status}: ${login.text}`,
-          );
-        }
-      },
-      { email, password },
-    ),
-  );
 }
 
 interface WaitForHomeLinkOptions {
@@ -727,11 +787,10 @@ async function readAuthenticatedSessionEmail(
   throw lastError;
 }
 
-async function gotoAndWaitForNavLink(
+async function gotoAndWaitForAgentPage(
   page: Page,
   running: RunningDev,
   path: string,
-  linkName: string,
   browserErrors: string[],
   httpErrors: string[],
 ): Promise<void> {
@@ -749,7 +808,7 @@ async function gotoAndWaitForNavLink(
         timeoutMs: 30_000,
       });
       await page
-        .getByRole("link", { name: linkName })
+        .getByRole("tablist", { name: "Agent sections" })
         .waitFor({ state: "visible", timeout: 8_000 });
       return;
     } catch (err) {
@@ -772,7 +831,57 @@ async function gotoAndWaitForNavLink(
   const message =
     lastError instanceof Error ? lastError.message : String(lastError);
   throw new Error(
-    `${path} did not show ${linkName} link before timeout: ${message}\n` +
+    `${path} did not show Agent sections tabs before timeout: ${message}\n` +
+      `Body preview: ${lastBody.slice(0, 400)}`,
+  );
+}
+
+async function gotoAndWaitForChatPage(
+  page: Page,
+  running: RunningDev,
+  path: string,
+  browserErrors: string[],
+  httpErrors: string[],
+): Promise<void> {
+  const deadline = Date.now() + (isCi ? 90_000 : 45_000);
+  let lastError: unknown;
+  let lastBody = "";
+
+  while (Date.now() < deadline) {
+    browserErrors.length = 0;
+    httpErrors.length = 0;
+
+    try {
+      await gotoCommitted(page, `${running.baseUrl}${path}`);
+      await waitForViteDepsQuiet(running.viteReload, running.logs, {
+        timeoutMs: 30_000,
+      });
+      await page
+        .getByText(/Ask me anything|How can I help/i)
+        .first()
+        .waitFor({ state: "visible", timeout: 8_000 });
+      return;
+    } catch (err) {
+      lastError = err;
+      lastBody = await page
+        .locator("body")
+        .innerText({ timeout: 2_000 })
+        .catch(() => "");
+      if (Date.now() >= deadline) break;
+      if (verbose || isCi) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[standalone-dev-smoke] ${path} not ready yet: ${message.split("\n")[0]}`,
+        );
+      }
+      await sleep(2_000);
+    }
+  }
+
+  const message =
+    lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(
+    `${path} did not render the Chat surface before timeout: ${message}\n` +
       `Body preview: ${lastBody.slice(0, 400)}`,
   );
 }
@@ -783,12 +892,6 @@ async function waitForAuthenticatedShell(
   running: RunningDev,
 ): Promise<string> {
   const serverLogs = running.logs;
-  const fallbackEmail =
-    process.env.STANDALONE_CHAT_DEV_SMOKE_EMAIL ||
-    `standalone-smoke-${Date.now()}@example.test`;
-  const fallbackPassword =
-    process.env.STANDALONE_CHAT_DEV_SMOKE_PASSWORD ||
-    "standalone-chat-smoke-password";
 
   log(`navigating to ${baseUrl}/ (auto-login path)`);
   await gotoCommitted(page, `${baseUrl}/`);
@@ -811,17 +914,6 @@ async function waitForAuthenticatedShell(
     }
 
     if (await homeLink.isVisible().catch(() => false)) break;
-
-    const devCreds = parseDevAutoLoginCredentials(serverLogs);
-    const authEmail = devCreds?.email ?? fallbackEmail;
-    const authPassword = devCreds?.password ?? fallbackPassword;
-
-    if (isLoggedOutBody(lastBody) && devCreds) {
-      log(`auth API login as ${authEmail}`);
-      await signInViaAuthApi(page, authEmail, authPassword);
-      await sleep(2_000);
-      continue;
-    }
 
     // Auto-login redirect or Vite reload in progress — poll, do not page.goto again.
     await sleep(2_000);
@@ -856,18 +948,23 @@ async function runBrowserSmoke(
   browserErrors.length = 0;
   httpErrors.length = 0;
 
-  log("assertion pass: /observability after warmup");
-  await gotoAndWaitForNavLink(
+  log("assertion pass: /agent after warmup");
+  await gotoAndWaitForAgentPage(
     page,
     running,
-    "/observability",
-    "Observability",
+    "/agent",
     browserErrors,
     httpErrors,
   );
 
   assert.deepEqual(browserErrors, [], "browser console/page errors");
   assert.deepEqual(httpErrors, [], "browser HTTP errors on app origin");
+
+  log("assertion pass: / (Chat surface) after /agent");
+  await gotoAndWaitForChatPage(page, running, "/", browserErrors, httpErrors);
+
+  assert.deepEqual(browserErrors, [], "browser console/page errors on Chat");
+  assert.deepEqual(httpErrors, [], "browser HTTP errors on Chat");
 }
 
 function assertCleanServerLogs(logs: string[]): void {
@@ -878,6 +975,9 @@ function assertCleanServerLogs(logs: string[]): void {
     offenders.push("Unexpected Server Error");
   if (text.includes("You must render this element inside a")) {
     offenders.push("render outside router context");
+  }
+  if (text.includes(nitroUnavailableConsoleLine)) {
+    offenders.push("Nitro environment unavailable");
   }
   if (hasAuthLockFailure(logs))
     offenders.push("auth init failure (app locked)");
@@ -903,8 +1003,20 @@ async function main(): Promise<void> {
 
   const running = await startDev();
   let browser: Browser | null = null;
+  let primaryError: Error | null = null;
+  let cleanupError: unknown;
   const browserErrors: string[] = [];
   const httpErrors: string[] = [];
+
+  const captureCleanupError = (error: unknown) => {
+    const message =
+      error instanceof Error ? error.stack || error.message : String(error);
+    if (primaryError) {
+      primaryError.message += `\n\nCleanup error:\n${message}`;
+      return;
+    }
+    cleanupError ??= error;
+  };
 
   try {
     browser = await launchBrowser();
@@ -936,11 +1048,12 @@ async function main(): Promise<void> {
     console.log(`  url:      ${running.baseUrl}`);
     console.log(`  app:      ${appDir}`);
     console.log(
-      "  checked:  scaffold → install → dev server → auto-login → / → /observability",
+      "  checked:  scaffold → install → dev server → auto-login → /agent → / (Chat)",
     );
     console.log(
-      "  checked:  no Unexpected Server Error, no HydratedRouter in dev logs",
+      "  checked:  unauthenticated startup poll recovers to HTTP 401",
     );
+    console.log("  checked:  no Nitro startup noise or SSR errors in dev logs");
     console.log("  checked:  no browser console/page errors after warmup");
   } catch (err) {
     const logs = running.logs.slice(-160).join("");
@@ -954,20 +1067,36 @@ async function main(): Promise<void> {
       httpErrors.length > 0
         ? `\n\nBrowser HTTP errors:\n${httpErrors.join("\n")}`
         : "";
-    throw new Error(
+    primaryError = new Error(
       `${message}${browserBlock}${httpBlock}\n\nRecent dev logs:\n${logs}`,
     );
   } finally {
-    if (browser) await browser.close();
-    await stopDev(running);
+    try {
+      if (browser) await browser.close();
+    } catch (error) {
+      captureCleanupError(error);
+    }
+    try {
+      await stopDev(running);
+    } catch (error) {
+      captureCleanupError(error);
+    }
     if (!process.env.STANDALONE_CHAT_DEV_SMOKE_DIR && !skipScaffold) {
-      fs.rmSync(scaffoldParent, {
-        recursive: true,
-        force: true,
-        maxRetries: 3,
-      });
+      try {
+        fs.rmSync(scaffoldParent, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 250,
+        });
+      } catch (error) {
+        captureCleanupError(error);
+      }
     }
   }
+
+  if (primaryError) throw primaryError;
+  if (cleanupError) throw cleanupError;
 }
 
 await main();

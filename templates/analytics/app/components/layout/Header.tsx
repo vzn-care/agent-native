@@ -1,5 +1,5 @@
-import { AgentToggleButton } from "@agent-native/core/client";
-import { useT } from "@agent-native/core/client";
+import { AgentToggleButton } from "@agent-native/core/client/agent-chat";
+import { useT } from "@agent-native/core/client/i18n";
 import { RunsTray } from "@agent-native/core/client/progress";
 import type { ReactNode } from "react";
 import { useLocation } from "react-router";
@@ -20,7 +20,9 @@ const pageTitleKeys: Record<string, string> = {
   "/catalog": "navigation.templateCatalog",
   "/analyses": "navigation.analyses",
   "/sessions": "navigation.sessions",
-  "/agents": "navigation.agents",
+  "/monitoring": "navigation.monitoring",
+  "/agents": "navigation.admin",
+  "/agent": "settings.agentTitle",
   "/dashboards/explorer": "navigation.explorer",
   "/settings": "navigation.settings",
 };
@@ -62,7 +64,7 @@ export function Header() {
       </div>
       <div className="flex items-center gap-2 shrink-0">
         {actions}
-        <RunsTray />
+        <RunsTray pollMs={0} />
         <AgentToggleButton />
       </div>
     </header>

@@ -17,6 +17,7 @@ import {
   EMBED_TARGET_HEADER,
   EMBED_TOKEN_QUERY_PARAM,
 } from "../shared/embed-auth.js";
+import { normalizeAppPath } from "../shared/sign-in-journey.js";
 import { getConfiguredAppBasePath } from "./app-base-path.js";
 import { getWorkspaceA2ADerivedSecret } from "./derived-secret.js";
 
@@ -44,10 +45,22 @@ const EMBED_ROUTE_ALIASES: Record<string, string[]> = {
   // should survive that first-hop redirect instead of falling back to the
   // private deployment token gate.
   "/": ["/overview"],
-  "/dashboard": ["/adhoc/agent-native-templates-first-party"],
-  "/dashboards": ["/adhoc/agent-native-templates-first-party"],
-  "/traffic": ["/adhoc/agent-native-templates-first-party"],
-  "/traffic-dashboard": ["/adhoc/agent-native-templates-first-party"],
+  "/dashboard": [
+    "/dashboards/agent-native-templates-first-party",
+    "/adhoc/agent-native-templates-first-party",
+  ],
+  "/dashboards": [
+    "/dashboards/agent-native-templates-first-party",
+    "/adhoc/agent-native-templates-first-party",
+  ],
+  "/traffic": [
+    "/dashboards/agent-native-templates-first-party",
+    "/adhoc/agent-native-templates-first-party",
+  ],
+  "/traffic-dashboard": [
+    "/dashboards/agent-native-templates-first-party",
+    "/adhoc/agent-native-templates-first-party",
+  ],
 };
 
 let _initPromise: Promise<void> | undefined;
@@ -262,6 +275,10 @@ function openRouteTargetPathnames(targetPath: string): Set<string> {
     addResolvedOpenRoutePath(
       targets,
       `/adhoc/${encodeURIComponent(dashboardId)}`,
+    );
+    addResolvedOpenRoutePath(
+      targets,
+      `/dashboards/${encodeURIComponent(dashboardId)}`,
     );
   }
   const analysisId = safePathSegment(url.searchParams.get("analysisId"));
@@ -489,6 +506,15 @@ export function normalizeEmbedTargetPath(
   if (!path.startsWith("/")) path = `/${path}`;
   if (path.startsWith("//") || path.startsWith("/\\")) return null;
   if (/^\/[a-z][a-z0-9+.-]*:/i.test(path)) return null;
+  // A ticket minted for an auth entry path used to be honoured, redirecting
+  // the embed straight at a login form. Fails closed on the existing
+  // "Invalid embed target." 400 instead.
+  const base = getConfiguredAppBasePath();
+  const pathForValidation =
+    base && (path === base || path.startsWith(`${base}/`))
+      ? path
+      : `${base}${path}`;
+  if (normalizeAppPath(pathForValidation, base) === null) return null;
   return stripConfiguredBasePath(path);
 }
 

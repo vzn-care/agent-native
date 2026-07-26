@@ -9,6 +9,8 @@ import { fileURLToPath } from "url";
 import * as Sentry from "@sentry/node";
 
 import { resolveDeployPostBuildInvocation } from "./deploy-build.js";
+import { shouldTrackCliRun } from "./telemetry-routing.js";
+import { createCliTelemetry } from "./telemetry.js";
 
 // Resolve version once at module scope — used by both --version and --help
 let _version = "unknown";
@@ -170,6 +172,12 @@ const BUGS_URL = "https://github.com/BuilderIO/agent-native/issues";
 const command = process.argv[2];
 // Filter out bare "--" separators that pnpm inserts between its args and script args
 const args = process.argv.slice(3).filter((a) => a !== "--");
+const cliTelemetry = createCliTelemetry({
+  cli: "core",
+  cliVersion: _version,
+  command: command ?? "none",
+  interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+});
 
 function parseScaffoldArgs(argv: string[]): {
   name?: string;
@@ -203,13 +211,23 @@ function parseScaffoldArgs(argv: string[]): {
 // Track CLI usage (best-effort, non-blocking)
 function trackCli(event: string, props?: Record<string, unknown>): void {
   try {
-    import("../tracking/registry.js").then((m) => {
-      m.track(event, { command, ...props });
-    });
-    import("../tracking/providers.js").then((m) =>
-      m.registerBuiltinProviders(),
-    );
+    cliTelemetry.track(event, { command, ...props });
   } catch {}
+}
+
+function captureCliException(
+  error: unknown,
+  context?: Parameters<typeof cliTelemetry.captureException>[1],
+): void {
+  try {
+    cliTelemetry.captureException(error, context);
+  } catch {}
+}
+
+function flushTelemetryAndExit(code: number): void {
+  void Promise.allSettled([cliTelemetry.flush(), Sentry.flush(2000)]).finally(
+    () => process.exit(code),
+  );
 }
 
 // Global error handler — show feedback link on unhandled crashes
@@ -218,8 +236,9 @@ process.on("uncaughtException", (err) => {
   console.error(`  Report this bug: ${BUGS_URL}`);
   console.error(`  Send feedback:   ${FEEDBACK_URL}\n`);
   trackCli("cli.crash", { error: err.message });
+  captureCliException(err, { handled: false, tags: { source: "process" } });
   Sentry.captureException(err);
-  Sentry.flush(2000).finally(() => process.exit(1));
+  flushTelemetryAndExit(1);
 });
 
 process.on("unhandledRejection", (reason: any) => {
@@ -227,14 +246,18 @@ process.on("unhandledRejection", (reason: any) => {
   console.error(`  Report this bug: ${BUGS_URL}`);
   console.error(`  Send feedback:   ${FEEDBACK_URL}\n`);
   trackCli("cli.crash", { error: reason?.message ?? String(reason) });
+  captureCliException(reason, {
+    handled: false,
+    tags: { source: "unhandled-rejection" },
+  });
   Sentry.captureException(reason);
-  Sentry.flush(2000).finally(() => process.exit(1));
+  flushTelemetryAndExit(1);
 });
 
 // Surface a self-heal hint when an interrupted `npx @agent-native/core@latest ...`
 // leaves a half-extracted package in the npx cache and a follow-up run fails
 // to load one of our own sub-modules.
-function handleScaffoldImportError(err: any): never {
+function handleScaffoldImportError(err: any): void {
   const msg = err?.message ?? String(err);
   const looksLikeCorruptCache =
     err?.code === "ERR_MODULE_NOT_FOUND" ||
@@ -251,9 +274,12 @@ function handleScaffoldImportError(err: any): never {
     console.error(`\n  Failed to load the scaffolder: ${msg}\n`);
   }
   trackCli("cli.scaffold.import_error", { error: msg });
+  captureCliException(err, {
+    handled: false,
+    tags: { source: "scaffold-import" },
+  });
   Sentry.captureException(err);
-  Sentry.flush(2000).finally(() => process.exit(1));
-  throw err;
+  flushTelemetryAndExit(1);
 }
 
 function findBinUpwards(binName: string): string | undefined {
@@ -272,6 +298,22 @@ function findViteBin(): string {
   return findBinUpwards("vite") ?? "vite";
 }
 
+function findViteJsEntry(): string | null {
+  try {
+    const require = createRequire(path.join(process.cwd(), "package.json"));
+    const pkgJsonPath = require.resolve("vite/package.json");
+    const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as {
+      bin?: string | Record<string, string>;
+    };
+    const rel = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.vite;
+    if (!rel) return null;
+    const entry = path.join(path.dirname(pkgJsonPath), rel);
+    return fs.existsSync(entry) ? entry : null;
+  } catch {
+    return null;
+  }
+}
+
 function findTsxBin(): string {
   const localTsx = path.resolve("node_modules/.bin/tsx");
   if (fs.existsSync(localTsx)) return localTsx;
@@ -279,13 +321,14 @@ function findTsxBin(): string {
 }
 
 function findTypeScriptCompilerBin(): string {
-  const localTsgo = path.resolve("node_modules/.bin/tsgo");
-  if (fs.existsSync(localTsgo)) return localTsgo;
-
   const localTsc = path.resolve("node_modules/.bin/tsc");
   if (fs.existsSync(localTsc)) return localTsc;
 
-  return "tsgo";
+  // Prefer TypeScript 7's tsc; fall back to legacy tsgo if present.
+  const localTsgo = path.resolve("node_modules/.bin/tsgo");
+  if (fs.existsSync(localTsgo)) return localTsgo;
+
+  return "tsc";
 }
 
 function findReactRouterBin(): string {
@@ -381,15 +424,31 @@ function isWorkspaceRoot(): boolean {
   }
 }
 
+function extractNodeInspectFlag(args: string[]): {
+  inspectFlag: string | null;
+  rest: string[];
+} {
+  const rest: string[] = [];
+  let inspectFlag: string | null = null;
+  for (const arg of args) {
+    if (/^--inspect(-brk)?(=.+)?$/.test(arg)) {
+      inspectFlag = arg;
+      continue;
+    }
+    rest.push(arg);
+  }
+  return { inspectFlag, rest };
+}
+
 function run(
   cmd: string,
   cmdArgs: string[],
-  opts?: { stdio?: "inherit" | "pipe" },
+  opts?: { stdio?: "inherit" | "pipe"; env?: NodeJS.ProcessEnv },
 ) {
   const child = spawn(cmd, cmdArgs, {
     stdio: opts?.stdio ?? "inherit",
     shell: process.platform === "win32",
-    env: process.env,
+    env: opts?.env ?? process.env,
   });
   child.on("exit", (code) => process.exit(code ?? 0));
   // Forward signals to child so Cmd+C doesn't leave zombie processes holding ports
@@ -488,7 +547,17 @@ function runBuildStep(
           stage: "spawn",
         },
       });
-      Sentry.flush(2000).finally(() => process.exit(1));
+      captureCliException(err, {
+        handled: false,
+        tags: {
+          source: "build-step",
+          buildStep: opts.label,
+          ...(template ? { template } : {}),
+          ...(app ? { app } : {}),
+        },
+        extra: { stage: "spawn" },
+      });
+      flushTelemetryAndExit(1);
     });
 
     child.on("exit", (code, signal) => {
@@ -520,13 +589,23 @@ function runBuildStep(
           stdoutTail: stdoutBuf,
         },
       });
+      captureCliException(err, {
+        handled: false,
+        tags: {
+          source: "build-step",
+          buildStep: opts.label,
+          ...(template ? { template } : {}),
+          ...(app ? { app } : {}),
+        },
+        extra: { exitCode, signal: signal ?? null },
+      });
       // Don't throw — see comment on runBuildStep above.
-      Sentry.flush(2000).finally(() => process.exit(exitCode));
+      flushTelemetryAndExit(exitCode);
     });
   });
 }
 
-trackCli("cli.run");
+if (shouldTrackCliRun(command, args)) trackCli("cli.run");
 
 switch (command) {
   case "dev": {
@@ -540,7 +619,36 @@ switch (command) {
       break;
     }
     const vite = findViteBin();
-    run(vite, args);
+    const { inspectFlag, rest } = extractNodeInspectFlag(args);
+    if (!inspectFlag) {
+      run(vite, rest);
+      break;
+    }
+    const viteJsEntry = findViteJsEntry();
+    if (!viteJsEntry) {
+      console.warn(
+        "[agent-native] Could not resolve Vite's JS entry; starting dev " +
+          "server without the debugger.",
+      );
+      run(vite, rest);
+      break;
+    }
+    // Attach inspect flag to server process (not Vite or Nitro process)
+    const parsed = inspectFlag.match(/^--(inspect(?:-brk)?)(?:=(.+))?$/);
+    const kind = parsed?.[1] ?? "inspect";
+    const target = parsed?.[2] ?? "9229";
+    const directive = `--${kind}=${target}`;
+    const preload =
+      "data:text/javascript," +
+      encodeURIComponent(
+        `process.env.NODE_OPTIONS=((process.env.NODE_OPTIONS??"")+" ${directive}").trim();`,
+      );
+    const env = {
+      ...process.env,
+      NITRO_DEV_RUNNER: process.env.NITRO_DEV_RUNNER ?? "node-process",
+    };
+    console.log(`[agent-native] API server debugger listening on ${target}`);
+    run(process.execPath, ["--import", preload, viteJsEntry, ...rest], { env });
     break;
   }
 
@@ -564,6 +672,29 @@ switch (command) {
     // child exits non-zero, runBuildStep calls process.exit itself; the
     // continuation only runs on success.
     (async () => {
+      // Doctor pre-step: scans app source for the security-critical guard
+      // invariants (see `agent-native doctor --help`). Warn-only by
+      // default — prints findings to stderr and always continues. Only
+      // fails the build when `agent-native build --strict` was passed or
+      // `agent-native.json` sets `{ "doctor": { "failOnBuild": true } }`.
+      try {
+        const { runDoctorBuildHook } = await import("./doctor.js");
+        const hook = await runDoctorBuildHook({
+          cwd: process.cwd(),
+          strict: args.includes("--strict"),
+        });
+        if (!hook.ok) {
+          console.error(
+            "\nBuild aborted by `agent-native doctor` (see findings above).",
+          );
+          process.exit(1);
+        }
+      } catch (err) {
+        console.warn(
+          `[doctor] pre-build scan failed to run (continuing): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+
       if (isReactRouterFramework()) {
         validateReactRouterBuildDependencies();
         const rr = findReactRouterBin();
@@ -601,8 +732,12 @@ switch (command) {
       // implies a programming error in the orchestration above. Capture
       // and exit so the global unhandledRejection handler doesn't double-
       // report with a generic title.
+      captureCliException(err, {
+        handled: false,
+        tags: { source: "orchestration" },
+      });
       Sentry.captureException(err);
-      Sentry.flush(2000).finally(() => process.exit(1));
+      flushTelemetryAndExit(1);
     });
     break;
   }
@@ -732,6 +867,52 @@ switch (command) {
     import("./migrate.js")
       .then((m) => m.runMigrate(args))
       .catch(handleScaffoldImportError);
+    break;
+  }
+
+  case "upgrade": {
+    // Bring an existing app/workspace to current @agent-native/* packages,
+    // refresh scaffold skills, and verify — without framework patches.
+    import("./upgrade.js")
+      .then(async (m) => {
+        const code = await m.runUpgrade(args);
+        process.exit(code);
+      })
+      .catch((err) => {
+        console.error(err?.message ?? err);
+        process.exit(1);
+      });
+    break;
+  }
+
+  case "template": {
+    // Pull later upstream first-party template changes into a generated app
+    // via a 3-way merge against the tree it was scaffolded from.
+    import("./template-sync.js")
+      .then(async (m) => {
+        const code = await m.runTemplate(args);
+        process.exit(code);
+      })
+      .catch((err) => {
+        console.error(err?.message ?? err);
+        process.exit(1);
+      });
+    break;
+  }
+
+  case "doctor": {
+    // Scan app source for security-critical guard invariants (see
+    // `agent-native doctor --help`). For dependency-pin health, see
+    // `agent-native upgrade check` instead.
+    import("./doctor.js")
+      .then(async (m) => {
+        const code = await m.runDoctor(args);
+        process.exit(code);
+      })
+      .catch((err) => {
+        console.error(err?.message ?? err);
+        process.exit(1);
+      });
     break;
   }
 
@@ -906,14 +1087,18 @@ switch (command) {
   }
 
   case "setup-agents": {
-    import("./setup-agents.js").then((m) => m.runSetupAgents());
+    import("./setup-agents.js")
+      .then((m) => m.runSetupAgents())
+      .catch(handleScaffoldImportError);
     break;
   }
 
   case "info": {
     // Print read-only info about an installable package (e.g. @agent-native/scheduling).
     // Lists subpath exports, source paths in node_modules, and docs pointers.
-    import("./info.js").then((m) => m.runInfo(args[0]));
+    import("./info.js")
+      .then((m) => m.runInfo(args[0]))
+      .catch(handleScaffoldImportError);
     break;
   }
 
@@ -925,6 +1110,32 @@ switch (command) {
     import("./add.js")
       .then((m) => {
         const code = m.runAdd(args);
+        process.exit(code);
+      })
+      .catch((err) => {
+        console.error(err?.message ?? err);
+        process.exit(1);
+      });
+    break;
+  }
+
+  case "package": {
+    import("./package-lifecycle.js")
+      .then(async (m) => {
+        const code = await m.runPackageLifecycle(args);
+        process.exit(code);
+      })
+      .catch((err) => {
+        console.error(err?.message ?? err);
+        process.exit(1);
+      });
+    break;
+  }
+
+  case "eject": {
+    import("./eject.js")
+      .then(async (m) => {
+        const code = await m.runEject(args);
         process.exit(code);
       })
       .catch((err) => {
@@ -1030,8 +1241,8 @@ Usage:
                                 --with-github-action also writes the PR Visual
                                 Recap workflow into .github/workflows/.
   agent-native content local-files <file-or-folder>
-                                Launch Content in local-file mode for a local
-                                docs/content folder. Use --no-open, --port N,
+                                Connect a local docs/content folder to normal
+                                database-backed Content. Use --no-open, --port N,
                                 or --profile docs/no-bookkeeping as needed.
   agent-native design connect  Start a localhost Design bridge for a running
                                 dev server. Use --url, --port, --root, or
@@ -1043,6 +1254,16 @@ Usage:
                                 local serve | local verify | local preview
   agent-native migrate <source> Create an Agent-Native Code /migrate session, or use
                                 --emit for a portable own-agent dossier.
+  agent-native upgrade          Bring an existing app/workspace to current
+                                @agent-native/* packages, refresh scaffold
+                                skills, and typecheck. Prefer this over
+                                patching core/dispatch. 'upgrade check' is
+                                doctor-only.
+  agent-native template <cmd>   Pull later upstream template changes into an
+                                app generated from a first-party template, via
+                                a 3-way merge against the tree it was
+                                scaffolded from. cmds: status | diff | sync |
+                                baseline | accept. Run after 'upgrade'.
   agent-native add-app [name]   Add one or more apps to the current workspace
   agent-native workspace-dev    Start the multi-app workspace gateway
   agent-native deploy           Build & deploy every app in the workspace to
@@ -1058,6 +1279,13 @@ Usage:
                                 Pass a URL instead of a name for a generic
                                 research-and-integrate blueprint. --list to
                                 browse available blueprints.
+  agent-native package <cmd> <package>
+                                Manifest package lifecycle: inspect | add | eject.
+                                add/eject are dry-run unless --apply; --json emits
+                                a machine-readable compatibility/change report.
+  agent-native eject <unit>    Copy a supported feature into app-owned source.
+                                --list discovers units; inspect/diff are read-only;
+                                eject/restore are dry-run unless --apply.
   agent-native changelog <cmd>  Author the app's user-facing changelog.
                                 cmds: add "<summary>" [--type added|fixed|...] |
                                 release | list. Pending entries live in

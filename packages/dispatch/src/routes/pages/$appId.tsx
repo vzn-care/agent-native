@@ -1,4 +1,7 @@
-import { useActionQuery, appPath, useT } from "@agent-native/core/client";
+import { appPath } from "@agent-native/core/client/api-path";
+import { useActionQuery } from "@agent-native/core/client/hooks";
+import { useT } from "@agent-native/core/client/i18n";
+import { withBuilderUtmTrackingParams } from "@agent-native/core/shared/builder-link-tracking";
 import {
   IconArrowLeft,
   IconArrowUpRight,
@@ -14,15 +17,16 @@ import {
   type LoaderFunctionArgs,
 } from "react-router";
 
-import { DispatchShell } from "@/components/dispatch-shell";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
-import { resolveServerCatchAllTarget } from "@/lib/catch-all-target";
+import { ActionQueryError } from "../../components/action-query-error";
+import { DispatchShell } from "../../components/dispatch-shell";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import { Spinner } from "../../components/ui/spinner";
+import { resolveServerCatchAllTarget } from "../../lib/catch-all-target";
 import {
   workspaceAppHref,
   type WorkspaceAppSummary,
-} from "@/lib/workspace-apps";
+} from "../../lib/workspace-apps";
 
 export function meta() {
   return [{ title: "Workspace app - Dispatch" }];
@@ -96,11 +100,10 @@ export async function clientLoader({
 export default function WorkspaceAppCatchAllRoute() {
   const t = useT();
   const { appId } = useParams();
-  const { data: apps = [], isLoading } = useActionQuery(
-    "list-workspace-apps",
-    { includeAgentCards: false },
-    { refetchInterval: 2_000 },
-  );
+  const appsQuery = useActionQuery("list-workspace-apps", {
+    includeAgentCards: false,
+  });
+  const { data: apps = [], isLoading } = appsQuery;
   const app = useMemo(
     () =>
       (apps as WorkspaceAppSummary[]).find((item) => item.id === appId) ?? null,
@@ -119,6 +122,20 @@ export default function WorkspaceAppCatchAllRoute() {
     return <Navigate to={appPath("/overview")} replace />;
   }
 
+  if (appsQuery.isError) {
+    return (
+      <DispatchShell
+        title={t("dispatch.pages.dataLoadFailed")}
+        description={t("dispatch.pages.pageNotFoundDescription")}
+      >
+        <ActionQueryError
+          error={appsQuery.error}
+          onRetry={() => void appsQuery.refetch()}
+        />
+      </DispatchShell>
+    );
+  }
+
   if ((isLoading && !app) || (app && app.status !== "pending" && href)) {
     return (
       <div className="flex h-screen w-full items-center justify-center">
@@ -132,7 +149,7 @@ export default function WorkspaceAppCatchAllRoute() {
       title={app?.name || t("dispatch.pages.pageNotFound")}
       description={t("dispatch.pages.pageNotFoundDescription")}
     >
-      <div className="max-w-2xl rounded-lg border bg-card p-5">
+      <div className="max-w-2xl rounded-lg bg-card p-5">
         <Button asChild size="sm" variant="ghost" className="-ml-2 mb-4">
           <Link to={appPath("/overview")}>
             <IconArrowLeft size={15} className="mr-1.5" />
@@ -166,7 +183,14 @@ export default function WorkspaceAppCatchAllRoute() {
             ) : null}
             {app.builderUrl ? (
               <Button asChild>
-                <a href={app.builderUrl} target="_blank" rel="noreferrer">
+                <a
+                  href={withBuilderUtmTrackingParams(app.builderUrl, {
+                    campaign: "product",
+                    content: "dispatch_branch",
+                  })}
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   {t("dispatch.pages.openBuilderBranch")}
                   <IconArrowUpRight size={15} className="ml-1.5" />
                 </a>

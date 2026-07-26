@@ -1,12 +1,14 @@
+import { ChangelogSettingsCard } from "@agent-native/core/client/changelog";
+import { LanguagePicker, useT } from "@agent-native/core/client/i18n";
+import { TeamPage } from "@agent-native/core/client/org";
 import {
-  ChangelogSettingsCard,
-  LanguagePicker,
+  AccountSettingsCard,
   SettingsTabsPage,
   useAgentSettingsTabs,
-  useT,
-} from "@agent-native/core/client";
-import { TeamPage } from "@agent-native/core/client/org";
+  type SettingsSearchEntry,
+} from "@agent-native/core/client/settings";
 import { useSetPageTitle } from "@agent-native/toolkit/app-shell";
+import { useMemo } from "react";
 
 import {
   Card,
@@ -29,17 +31,31 @@ export default function SettingsRoute() {
   const agentSettingsTabs = useAgentSettingsTabs();
   useSetPageTitle(t("settings.title"));
 
+  const generalSearchEntries = useMemo<SettingsSearchEntry[]>(
+    () => [
+      {
+        id: "macros-language",
+        label: t("settings.languageTitle"),
+        keywords: "language locale translation i18n",
+        hash: "language",
+      },
+    ],
+    [t],
+  );
+
   return (
     <SettingsTabsPage
+      account={<AccountSettingsCard />}
       teamLabel={t("team.title")}
       extraTabs={agentSettingsTabs}
+      generalSearchEntries={generalSearchEntries}
       general={
-        <div className="mx-auto w-full max-w-3xl space-y-6">
+        <div className="mx-auto w-full max-w-2xl space-y-6">
           <p className="text-sm leading-6 text-muted-foreground">
             {t("settings.description")}
           </p>
 
-          <Card>
+          <Card id="language" className="scroll-mt-16">
             <CardHeader>
               <CardTitle className="text-base">
                 {t("settings.languageTitle")}
@@ -64,7 +80,7 @@ export default function SettingsRoute() {
         </div>
       }
       whatsNew={
-        <div className="mx-auto w-full max-w-3xl">
+        <div className="mx-auto w-full max-w-2xl">
           <ChangelogSettingsCard markdown={changelog} />
         </div>
       }

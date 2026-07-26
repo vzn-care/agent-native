@@ -28,9 +28,9 @@ The agent is already the user's primary interface — it has full project contex
 | Feature                   | Trigger                                                                               | What the action does                                                                                  |
 | ------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | Include full video        | User toggles "Include full video" in the AI tools menu                                | `update-clips-ai-prefs --includeFullVideoInAi=true\|false` → stored in `clips-user-prefs`; default off |
-| Default title             | Native transcript is saved and the recording still has the default title              | `regenerate-title --recordingId=<id>` → writes `clips-ai-request-:id`; the UI bridge sends it to the agent chat. If Include full video is on, skips the transcript-only Gemini fast path and always delegates so the agent watches the recording |
+| Default title             | Native/cloud transcript becomes ready and the recording still has an automatic title   | `regenerate-title --recordingId=<id> --includeSummary=true` tries the transcript-only Gemini fast path, keeps any local heuristic title replaceable, and queues a `generate-metadata` agent refinement that writes a specific title plus description. If Include full video is on, it always delegates so the agent watches the recording |
 | Manual title suggestion   | User asks the agent "rename this"                                                     | Agent reads transcript and calls `update-recording --id=<id> --title=...`                             |
-| Summary / description     | Upload completes, or user clicks "Summarize" / "Regenerate description"               | `regenerate-summary` / `generate-ai-metadata --id=<id> --kind=summary` → agent writes `update-recording --description=...`. With Include full video, agent must watch the clip, not transcript alone |
+| Summary / description     | Transcript becomes ready, or user clicks "Summarize" / "Regenerate description"       | The automatic metadata handoff or `regenerate-summary` asks the agent to write `update-recording --description=...`. Existing user-authored descriptions are preserved. With Include full video, the agent must watch the clip, not transcript alone |
 | Chapters                  | User clicks "Add chapters" or transcript > 3 minutes                                  | `generate-chapters --id=<id>` / `regenerate-chapters` → agent writes `chapters_json` (same full-video preference) |
 | Tags                      | On upload complete                                                                    | `generate-ai-metadata --id=<id> --kind=tags` → agent inserts `recording_tags` rows                    |
 | Filler-word removal       | User clicks "Remove ums and uhs"                                                      | `generate-filler-removal --id=<id>` → agent writes proposed cuts into `editor-draft` for user review  |
@@ -57,7 +57,9 @@ on-screen text.
   `get-recording-player-data` / `create-recording-agent-link` and follow
   recommended frames / the frame API across the timeline — not transcript only.
 - Default title generation also honors this: `regenerate-title` skips the
-  transcript-only Gemini cleanup path and always queues the agent.
+  transcript-only Gemini cleanup path and always queues the agent. Automatic
+  post-transcription work uses one `generate-metadata` request so title and
+  description are not competing application-state entries.
 
 Do not invent a parallel "video LLM" path in the UI. Keep the preference on the
 shared user-prefs object and keep delegation through the agent chat.
@@ -126,12 +128,34 @@ Transcription takes an audio file and returns text + segments. That's not a prom
 **Provider priority:**
 
 1. **Native (highest priority).** The browser's Web Speech API, desktop local Whisper/macOS SFSpeech when available, and desktop Web Speech fallback on non-mac run during recording and save results via `save-browser-transcript`. This gives an instant transcript with no API key when the local/browser recognizer is available. When `request-transcript` runs afterward, it preserves the ready native transcript and only falls back to a cloud provider if native text is missing.
-2. **Cloud fallback — Builder.io managed (Gemini).** When a Builder account is connected (`BUILDER_PRIVATE_KEY` or per-user OAuth, no separate API key needed), `request-transcript` calls `transcribeWithBuilder()`, which routes audio to Builder.io's managed Gemini transcription. Returns text plus timestamped segments.
+2. **Cloud fallback — Builder.io managed (Gemini).** When a Builder account is connected (`BUILDER_PRIVATE_KEY` or per-user OAuth, no separate API key needed), `request-transcript` calls `transcribeWithBuilder()`, which routes audio to Builder.io's managed Gemini transcription. Returns text plus timestamped segments. Retry a failed transcript with `force: true`; pass `regenerate: true` to replace an existing ready transcript from the stored recording media. Regeneration keeps the prior ready transcript available if the new provider attempt fails.
 3. **Cloud fallback — Groq Whisper.** `GROQ_API_KEY` → `https://api.groq.com/openai/v1/audio/transcriptions`, model `whisper-large-v3-turbo`. Fast (~$0.04/hour of audio) Whisper-compatible speech-to-text used when Builder is unavailable.
+
+The transcript included by `view-screen` is only a bounded preview. When its
+`previewTruncated` field is true, the preview may end mid-sentence and does not
+show where transcription ended. Call `get-recording-player-data` before
+judging completeness or quoting the full transcript.
+
+Desktop native transcripts merge the microphone and system-audio streams while
+removing overlapping duplicate speech and low-speech Whisper hallucinations. Keep
+system audio enabled when the meeting audio comes from another app.
+
+Native transcript first is a hard rule, not a preference: cloud transcription is
+fallback-only for Clips recordings. Cleanup and transcript-backed title/summary
+generation run in the durable post-finalize path, so never hide a usable native
+transcript behind failed metadata work, and keep heuristic titles replaceable
+until the agent refinement lands.
 
 Clips never routes recording/meeting audio to OpenAI for transcription. (Groq's endpoint is OpenAI-_compatible_ in request shape only — the audio goes to Groq, not OpenAI.)
 
 If no native transcript exists and no cloud fallback is available (no Builder connection and no Groq key), the action writes `status="failed"` so the UI can show a friendly prompt.
+
+When a transcript becomes ready, `request-transcript` must await native cleanup
+and the metadata handoff before its durable post-finalize worker returns.
+Do not leave title/summary work as an unawaited promise in that worker:
+serverless runtimes may freeze it immediately. A local heuristic title uses
+`titleSource: "context"` so it remains a temporary UI fallback until the
+`generate-metadata` agent request replaces it with a transcript-backed title.
 
 If Builder transcription fails because credits are exhausted, explain that
 Builder.io credits/upgrade or a Groq key are the supported speech-to-text
@@ -156,6 +180,38 @@ registerRequiredSecret({
 ```
 
 It is not marked `required: true` — videos still upload and play without a Groq key when video storage is connected, since native transcription (and Builder when connected) already cover the common case. The API Keys & Connections panel surfaces it so the user can add the Groq fallback if they want it.
+
+## AI setup, providers, and credits
+
+AI setup must be visible and paid-account-backed. Lead with Builder.io Connect
+for managed credits, object storage, uploads, and transcription. BYOK belongs in
+the agent sidebar's API Keys & Connections panel; template settings may signpost
+that panel but must not create a second credential vault.
+
+Which provider powers what:
+
+| Surface                                    | Provider                                  |
+| ------------------------------------------ | ----------------------------------------- |
+| Agent chat                                 | Anthropic / OpenAI                        |
+| Cleanup, titles, meeting notes             | Gemini (Builder-managed or BYOK)          |
+| Recording transcripts                      | Native first, then Builder Gemini or Groq |
+| Desktop voice dictation                    | Optional third-party speech provider      |
+
+Any optional third-party speech provider is limited to desktop voice dictation
+and is never used for recording transcripts.
+
+Use `get-builder-credit-status` when the user asks whether Builder.io credit
+limits are pausing backup transcription, transcript cleanup, summaries, or AI
+title generation. Treat an exhausted status as an FYI and upgrade path, not an
+app error: say so clearly and point the user at Builder.io credits/upgrade.
+Native browser/macOS capture remains the first transcript source regardless.
+
+## Bounded voice context
+
+Dictation cleanup, clip title/cleanup, and meeting summaries should pass bounded
+`voiceContext` to the shared cleanup/transcription path whenever active app
+context, learned vocabulary, user notes, or AGENTS.md preferences are available.
+Pass a bounded summary — never a whole transcript, document, or catalog.
 
 ## Live transcription during recording
 

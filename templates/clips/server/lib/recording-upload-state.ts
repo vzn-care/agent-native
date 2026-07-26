@@ -89,6 +89,17 @@ export async function listRecordingChunkKeys(
   return rows.map((row) => String(row.key));
 }
 
+export async function deleteRecordingChunks(
+  ownerEmail: string,
+  recordingId: string,
+): Promise<number> {
+  const result = await getDbExec().execute({
+    sql: `DELETE FROM application_state WHERE session_id = ? AND key LIKE ? ESCAPE '!'`,
+    args: [ownerEmail, likePrefix(chunkPrefix(recordingId))],
+  });
+  return result.rowsAffected ?? 0;
+}
+
 export async function sumRecordingChunkBytes(
   ownerEmail: string,
   recordingId: string,

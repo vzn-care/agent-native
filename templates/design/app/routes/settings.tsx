@@ -1,11 +1,14 @@
-import {
-  SettingsTabsPage,
-  ChangelogSettingsCard,
-  LanguagePicker,
-  useAgentSettingsTabs,
-  useT,
-} from "@agent-native/core/client";
+import { ChangelogSettingsCard } from "@agent-native/core/client/changelog";
+import { LanguagePicker, useT } from "@agent-native/core/client/i18n";
 import { TeamPage } from "@agent-native/core/client/org";
+import {
+  AccountSettingsCard,
+  SettingsTabsPage,
+  useAgentSettingsTabs,
+  type SettingsSearchEntry,
+} from "@agent-native/core/client/settings";
+import { CreativeContextSettingsLink } from "@agent-native/creative-context/client";
+import { useMemo } from "react";
 
 import {
   Card,
@@ -27,13 +30,29 @@ export default function SettingsRoute() {
   const agentSettingsTabs = useAgentSettingsTabs();
   const t = useT();
 
+  const generalSearchEntries = useMemo<SettingsSearchEntry[]>(
+    () => [
+      {
+        id: "design-language",
+        label: t("settings.languageTitle"),
+        keywords: "language locale translation i18n",
+        hash: "language",
+      },
+    ],
+    [t],
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto bg-background">
       <SettingsTabsPage
+        account={<AccountSettingsCard />}
         extraTabs={agentSettingsTabs}
+        generalSearchEntries={generalSearchEntries}
         general={
           <div className="mx-auto w-full max-w-2xl space-y-6">
-            <Card>
+            <CreativeContextSettingsLink />
+
+            <Card id="language" className="scroll-mt-16">
               <CardHeader>
                 <CardTitle className="text-base">
                   {t("settings.languageTitle")}

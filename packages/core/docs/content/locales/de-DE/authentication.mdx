@@ -15,7 +15,7 @@ Auth wird automatisch über `autoMountAuth(app)` im Authentifizierungsserver-Plu
 - **Remote MCP OAuth:** Standard OAuth 2.1 für MCP-Hosts wie Claude-Code und ChatGPT-Anschlüsse.
 - **Benutzerdefiniert:** Bringen Sie Ihre eigene Authentifizierung über den `getSession`-Rückruf mit.
 
-<Diagram id="doc-block-1hpxy2j" title="Drei Wege rein, eine Sitzung" summary={"Browserbesucher, programmatische MCP-Clients und benutzerdefinierte Anbieter werden alle in dieselbe AuthSession aufgelöst, die das Downstream-Scoping liest."}>
+<Diagram id="doc-block-1hpxy2j" title="Drei Wege rein, eine Sitzung" summary={"Browserbesucher, MCP-Hosts und benutzerdefinierte Anbieter werden alle in dieselbe AuthSession aufgelöst, die das Downstream-Scoping liest."}>
 
 ```html
 <div class="auth-modes">
@@ -219,7 +219,7 @@ Durch die Konfiguration dieser Variablen wird niemals eine Token-Anmeldeseite f�
 Der MCP-Endpunkt jeder App kann als standardmäßig geschützte MCP-Ressource fungieren. OAuth-fähige Clients können nur mit dem Remote-MCP URL:
 
 ```text
-https://mail.agent-native.com/_agent-native/mcp
+https://mail.agent-native.com/mcp
 ```
 
 Nicht authentifizierte MCP-Anfragen geben eine `WWW-Authenticate`-Herausforderung zurück, die auf `/.well-known/oauth-protected-resource` verweist. Der Client erkennt dann die OAuth-Metadaten der App, registriert dynamisch einen öffentlichen Client, öffnet die Autorisierungsseite der App und tauscht einen Autorisierungscode mit PKCE für Zugriffs- und Aktualisierungstoken aus.
@@ -363,8 +363,9 @@ interface AuthSession {
 Verwenden Sie auf dem Client den Hook `useSession()`:
 
 ```ts
-import { useSession } from "@agent-native/core/client";
-
+import {
+  useSession,
+} from "@agent-native/core/client/hooks"
 function MyComponent() {
   const { session, isLoading } = useSession();
   if (isLoading) return <p>Loading...</p>;
@@ -402,7 +403,9 @@ function SignInCta() {
 
 ### Private Pfade mit Lesezeichen versehen
 
-Wenn ein anonymer Benutzer direkt zu einem privaten Pfad wie `/dashboard` navigiert, stellt das Framework bereits die Anmeldeseite unter diesem URL bereit – nach erfolgreicher Anmeldung wird die Seite neu geladen und der Benutzer landet auf `/dashboard`. Keine besondere Handhabung erforderlich; Dies funktioniert für Token, E-Mail/Passwort, **und** Google OAuth.
+Normale App-Seiten verwenden für alle Besucher dieselbe unpersönliche, öffentlich cachebare SSR-Shell. `AppProviders` prüft die Sitzung im Client und leitet anonyme Besucher auf privaten Pfaden wie `/dashboard` zu `/_agent-native/sign-in?return=%2Fdashboard` weiter, bevor private App-UI gerendert wird. Nach der Anmeldung kehren sie zu `/dashboard` zurück. Verwenden Sie `isPublicPath` für öffentliche/SEO-Routen oder `sessionBypass` für Oberflächen mit einem anderen begrenzten Authentifizierungsmechanismus, etwa einem MCP-Embed-Token.
+
+Wie lange diese Shell zwischengespeichert wird, ist eine bereitstellungsweite Einstellung – siehe [SSR-Caching](/docs/deployment#ssr-caching) für `AGENT_NATIVE_SSR_CACHE`. Das Verkürzen oder Deaktivieren des Caches ändert nur die Dauer; SSR rendert weiterhin den anonymen Zweig mit entfernten Cookies.
 
 ### Hinter den Kulissen: Google OAuth
 

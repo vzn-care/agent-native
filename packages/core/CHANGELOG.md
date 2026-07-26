@@ -1,5 +1,2262 @@
 # @agent-native/core
 
+## 0.123.0
+
+### Minor Changes
+
+- 52cce19: One sign-in journey: collapse five return-path validators, four "don't redirect
+  to yourself" checks, and two login documents into a single primitive
+
+  `@agent-native/core/shared` now exports `signInJourney`, `normalizeAppPath`,
+  `encodeContinuation`, and `decodeContinuation`. Every sign-in surface — the
+  client gate, the login document, and the `/_agent-native/sign-in` entry route —
+  computes its destination through that one function. The sign-in URL carries an
+  opaque `?c=` continuation holding a PATH instead of a re-encoded URL, so a
+  return target cannot nest inside another one and the anti-loop checks are
+  deleted rather than centralised.
+
+  Fixed by this change:
+  - **Google-only apps looped on sign-in.** `createGoogleAuthPlugin` shipped its
+    own login page whose completion was `window.location.href = ret || '/'` with
+    `ret` set to the sign-in page itself — sign in, land back on sign-in. That
+    page is gone; the plugin now serves `getOnboardingHtml({ googleOnly: true })`,
+    gaining the already-signed-in bounce, stuck-button recovery, and i18n.
+    `createGoogleAuthPlugin`'s signature is unchanged, but the markup is
+    different: the Google button/error/debug element ids are now `google-btn`,
+    `google-err`, `google-debug` (previously `btn`, `err`, `debug`).
+  - **Base-path deploys bounced forever.** `/myapp/login` was not recognised as an
+    auth entry path, so a signed-in visitor resumed to the login page.
+  - **Verification emails linked back to a login form**, because the `callbackURL`
+    posted to Better Auth could legitimately be the sign-in page.
+  - **Embed tickets minted for an auth entry path** were honoured; they now fail
+    closed on the existing "Invalid embed target." 400.
+  - **Open redirect**: continuations are validated on both encode and decode, and
+    must be contained in the app's own base path — a sibling app's path on a
+    multi-app workspace host is rejected.
+
+  Scope: this fixes _where you land_, not _whether the cookie arrived_. The
+  Builder iframe, Builder desktop proxy, and Agent Native Desktop surfaces fail
+  for cookie-delivery reasons; the `_session` URL bridge and
+  `appendSessionToOAuthReturnUrl` are deliberately untouched. Those surfaces will
+  now land on the right page logged out rather than bouncing to a login loop.
+
+  Compatibility:
+  - `/_agent-native/sign-in?return=<path>` is accepted **permanently**. Generated
+    apps hand-write it and cannot be upgraded. New producers must emit `?c=`.
+  - `buildSignInReturnHref()` keeps its zero-arg call signature and gains an
+    optional `{ returnTo }`. It now emits `?c=`.
+  - `safeReturnPath()` keeps its signature, `"/"` fallback, and rejections; it is
+    now a deprecated one-line delegate to `normalizeAppPath` and deliberately
+    applies no base-path containment, because its eight remaining call sites are
+    provider OAuth returns rather than sign-in journeys.
+  - `isOnSignInPage()` is removed. It was never reachable through a package export
+    and has no remaining callers.
+
+- 52cce19: Stop sending the organization A2A secret in `GET /_agent-native/org/me`. That
+  route runs on every page load, so the secret that signs first-party A2A/MCP
+  JWTs was sitting in JSON any script on the page could read. `/org/me` now
+  returns only `a2aSecretSet: boolean` for owners/admins, and the value is
+  fetched on demand from the new owner/admin `GET /_agent-native/org/a2a-secret`
+  (`useRevealA2ASecret()`) when an operator reveals or copies it. Apps that read
+  `OrgInfo.a2aSecret` should switch to `a2aSecretSet` plus `useRevealA2ASecret()`.
+  Deployments whose secret was previously exposed should rotate it from the Team
+  page (Regenerate then Sync to apps).
+- 52cce19: Export `OG_FONT_FAMILY` from `@agent-native/core/server` alongside `resolveOgFontFiles`. Server-side SVG rasterization needs the family name and the bundled font files to agree — serverless runtimes have no system fonts, so a mismatch renders every `<text>` blank. Callers previously had to hardcode the family name to keep it in sync.
+
+### Patch Changes
+
+- 52cce19: Stop action queries from spinning forever, and stop the sync loop from replaying
+  dead requests. The action fetch timeout now rejects the caller directly instead
+  of relying on `AbortController`, so a transport that ignores the abort signal (a
+  patched fetch, a wedged service worker, a body stream that never ends) surfaces a
+  typed 408 the UI can render and retry rather than an eternal loading skeleton.
+  `useDbSync` no longer refetches an action query whose last fetch failed with
+  401/403 — those repeat identically until the session changes, and one expired
+  session was reissuing them on every SSE/poll tick.
+- 52cce19: Every `active-org-id` write now goes through `setActiveOrgId(email, orgId, reason)`,
+  which logs a loud warning when it moves an account from one organization to
+  another.
+
+  Vault credentials are scoped per organization, so repointing an account orphans
+  every key synced under the previous org — and the only symptom is a
+  missing-credential error naming the key, which sends everyone looking for a
+  deployment or env-var problem. The existing notices
+  (`org.createOrgVaultNotice`, `org.acceptInvitationOrgSwitchNotice`) only reach a
+  human looking at the screen, and `createOrganization()` only warned about the
+  account that created the org. A roster or identity migration run by an agent
+  repointed members through `putUserSetting` directly, with nothing anywhere in
+  its path saying an org boundary had moved.
+
+  The warning names both organizations, the reason for the write, and the
+  orphaned-credential consequence. An unreadable previous org is reported
+  distinctly from an absent one, so a silent repoint cannot look like a
+  first-time assignment in the log.
+
+- 52cce19: Make the `/_agent-native/agent-engine/status` probe cheap. The route ran four sequential DB/secret hops per request (session, org, `OPENAI_BASE_URL` secret, `agent-engine` setting) plus an unconditional `app_secrets` sweep, which is why the agent panel took seconds to decide whether a provider is configured. The stored-setting and base-URL reads now run concurrently, the `app_secrets` sweep only runs when the cheaper sources have not answered, and concurrent probes of the same user/org share one in-flight lookup. The shared entry is dropped as soon as the lookup settles, so adding or removing a provider is never reported stale and no identity ever sees another's answer.
+- 52cce19: Bound what a single agent turn can spend, and stop paying for the same work twice.
+  - The configured iteration budget is now a real cap: the loop stops at a terminal
+    `loop_limit` instead of nudging itself and resetting the counter, so the event
+    the run manager, thread builder and client all already handled finally reaches
+    them.
+  - New per-turn input-token ceiling (`AGENT_MAX_RUN_INPUT_TOKENS`, default 3M)
+    that rides the continuation body, so chained chunks share one allowance rather
+    than getting a fresh one each.
+  - A chained chunk now serves a read-only tool's journaled result from an earlier
+    chunk of the same turn instead of re-running it, respecting `dedupe: false`
+    and same-turn write invalidation.
+  - Turns are bounded by a 20-minute wall clock in addition to the run-count
+    ledger, and both exhaustion paths end with a summary of what actually
+    completed instead of a bare reason string.
+  - Token usage rows now carry run, thread and turn ids so spend is attributable.
+  - Anthropic-shaped engines split the system prompt at a stable/volatile boundary
+    and cache the stable prefix for an hour, so mid-turn resource churn no longer
+    invalidates the system prompt and tool schemas together.
+  - A failed continuation dispatch consults the successor's claim on every target,
+    so a lost response no longer reports a handoff that actually landed.
+  - Per-tool timeouts are clamped to what can fire inside the run's own chunk
+    budget.
+  - Builds that opt into durable background now fail loudly when the function
+    cannot be emitted, assert the artifact on disk, keep the background Lambda
+    warm, and report once per isolate when the deployed function is unreachable.
+  - Terminal run outcomes are rolled up into daily counters before pruning, so
+    completion rates survive the asymmetric retention windows; a worker that dies
+    mid-tool is now reaped in ~2 minutes instead of ~14.5.
+
+- 52cce19: Risky operations now warn the agent in the conversation instead of only the
+  server console. A new `warnAgent()` channel lets a helper deep inside an action's
+  call stack — `setActiveOrgId`, `createOrganization` — raise a warning without
+  access to the action's `ctx`; the agent loop drains it after the tool call and
+  appends tagged `<agent-warning>` blocks to that tool's result, so it reaches the
+  model's context, the transcript, and the ledger in one write. A framework core
+  prompt rule requires the agent to relay a critical warning to the user before
+  reporting success. Outside an agent run (CLI, migration script, boot) warnings
+  still go to the console. Also fixes `createOrganization` silently treating an
+  unreadable membership probe as "this account had no other organization".
+- 52cce19: Bound runaway agent turns by repetition rather than by volume, so genuinely deep
+  analyses are no longer cut off.
+
+  The turn budgets introduced alongside the terminal iteration cap were sized as
+  work limits rather than runaway backstops, which would have stopped legitimate
+  long-running work: production contains a real 117-tool-call analysis that a
+  100-iteration cap would have truncated, and a multi-source investigation can
+  legitimately exceed both a 20-minute wall clock and a 3M-token ceiling.
+
+  Volume does not distinguish a spiral from depth. Repetition does — the observed
+  runaway turns issued 39 identical `run-code` webFetches and 43 identical
+  `docs-search` calls, while the expensive-but-healthy turns kept making _new_
+  calls. So the ceilings move up to backstop levels (400 iterations, 20M input
+  tokens, 90 minutes) and a new per-turn guard stops a turn once the same tool has
+  been called with identical arguments `MAX_IDENTICAL_TOOL_CALLS` (8) times,
+  counted before any journal or cache short-circuit — serving a repeat from cache
+  still means the model is asking the same question again.
+
+- 52cce19: Stop the chat client from competing with the server's run recovery. The browser
+  no-progress watchdog now sits above the server's authoritative backstop,
+  suspends while a tool call or A2A delegation is open, and reattaches to the run
+  instead of aborting it. Background follow gained per-turn run/time budgets so a
+  redispatch loop can no longer spin indefinitely, empty continuations back off
+  exponentially, a trailing `clear` event can no longer wipe a rebuilt transcript,
+  and the "agent stopped without sending a final message" notice is suppressed
+  while the server still reports the run as running.
+- 52cce19: Stop the agent composer from locking into a silently dead state. An
+  engine-readiness check that timed out or failed is now kept distinct from a
+  confirmed "no provider configured": it leaves the composer usable instead of
+  disabling it, and retries on a backoff instead of latching until reload. The
+  2.5s client budget that a single warm-server status probe routinely lost is
+  now a 15s abort ceiling rather than a deadline the probes race. A composer is
+  only ever disabled when the "Connect AI" affordance renders alongside it.
+- 52cce19: Load `describe-workspace-apps` and `call-agent` on the first model request. The
+  `<available-apps>` prompt block names both tools by name, but the lazy initial
+  tool surface omitted their schemas, so an agent asked "which app should I use
+  for this?" answered from assumption instead of reading its peers' live agent
+  cards.
+- 52cce19: Owners can now delete an organization from Settings → Organization, and portaled
+  menus no longer render behind raised app surfaces.
+  - New owner-only `DELETE /_agent-native/org` (type-to-confirm in the UI) removes
+    the org's invitations, org-scoped settings, members, and the org row, then
+    repoints the caller's active org to another membership or Personal.
+  - `@agent-native/core/styles/agent-native.css` now imports the toolkit
+    stylesheet. Core's own client components render toolkit UI, so apps that
+    didn't import `@agent-native/toolkit/styles.css` themselves never generated
+    the classes that only appear inside toolkit components — including the
+    `z-[290]` on dropdown/select/popover content, which made those menus open
+    behind the app shell.
+
+- 52cce19: Fix the design-connect bridge proxy corrupting Vite query-suffixed module responses, which broke hydration in visual-edit iframes.
+- 52cce19: `design connect --daemon` now writes the detached bridge's output to
+  `.agent-native/design-connect.log` and prints that path. Previously the daemon
+  ran with stdio ignored, so a bridge that crashed or lost its port left no trace
+  and Design silently fell back to non-editable iframes.
+- 52cce19: Fix two independent defects behind intermittent `Missing <KEY>` errors for
+  multi-org users.
+
+  Membership resolution now asks the database for a deterministic order
+  (`ORDER BY joined_at ASC, org_id ASC`), so the oldest membership wins. The three
+  fallback paths in `org/context.ts` — `getOrgContext`, `resolveOrgIdForEmail`, and
+  `resolveOrgIdForEmailViaEvent` — previously read the first row of an unordered
+  `SELECT`. On Postgres that order is a query-plan and physical-layout detail, so
+  any multi-org user without a valid persisted `active-org-id` got an arbitrary
+  answer that could change between two identical requests, and `getSession` then
+  froze it into `session.orgId`. This does not repair users who already have the
+  wrong org persisted in `active-org-id`; that needs a separate data change.
+
+  `syncGrantsToApp` now writes each vault secret under the org that owns the row
+  instead of the org of whoever clicked Sync. In `all-apps` mode it lists secrets
+  across every org the caller can see, then synced them all with the caller's ctx,
+  which `credentialStoreScopeForVaultCtx` turned into `scope: "org"` +
+  `scopeId: <caller org>`. Because `writeAppSecret` upserts, that copied rather
+  than moved, so credential material accumulated in whichever orgs happened to be
+  active during a sync. Grouping by the row's own tenant matches what every other
+  sync path already did via `ctxForSecretRow`. The sync result and audit entry now
+  report `credentialStores` (one entry per tenant written) in place of the single
+  `credentialStore` object.
+
+- 52cce19: Remove the unreferenced `agentPanel.connectionUnavailable` localization string. The composer no longer has a click-to-retry dead state, so nothing rendered it.
+- 52cce19: Shrink what the framework installs and carries by removing code and dependencies
+  nothing could reach. No public entry point exported any of it, so the package's
+  export surface is unchanged.
+  - Dropped the `@floating-ui/dom` dependency, which has no reference in
+    `packages/core` or `packages/toolkit`; positioning goes through the Radix
+    primitives that already declare their own copy.
+  - Dropped the `@opentelemetry/sdk-trace-base` dependency.
+    `observability/tracing.ts` documents that heavy `@opentelemetry/sdk-*`
+    packages are deliberately kept out of the dependency list and resolves
+    `@opentelemetry/api` as an optional dependency at runtime, so this entry
+    contradicted the module it was added for.
+  - Deleted `client/extensions/agent-native-extension-runtime.ts`, the orphaned
+    predecessor of `portable-extension`, which every live importer already used.
+  - Deleted the unreferenced `BackgroundAgentSection`, `BrowserSection`, and
+    `MissingKeyCard` components, plus the dead `DemoModeIcon` and
+    `VoiceTranscriptionIcon` helpers.
+
+- 52cce19: Stop deploys from silently losing the durable-background Netlify function. An
+  opted-in build now fails instead of warning when the function cannot be emitted,
+  asserts the artifact actually landed where Netlify scans for it, and the runtime
+  reports once per isolate when a worker that expected the background function is
+  running on the synchronous function instead. The keep-warm scheduled function
+  also pings the background function so it stops cold-starting on every dispatch,
+  and the workspace deploy gate now shares the runtime flag parse instead of
+  keeping a third, inverted copy.
+- 52cce19: Make agent engine failures diagnosable and recoverable: record the `cause`
+  chain behind a bare "Connection error." / "fetch failed" instead of dropping
+  it, stop the Anthropic and AI SDK retry layers from multiplying the loop's own
+  retries, stop retrying once the next backoff would not fit the remaining run
+  budget, resume a resumable transport error in-process on the foreground while
+  budget remains, and stop letting a gateway keepalive release the 25s
+  first-model-event cap.
+- 52cce19: Engine adapters no longer drop a tool call whose arguments were split across
+  stream deltas. Every adapter now accumulates the streamed argument JSON and
+  reconciles it against what the turn actually delivered: a call assembled from
+  its deltas is executed normally, and one whose stream was cut mid-arguments
+  becomes an in-band tool-call error the model reads and retries from, instead of
+  ending the turn advertising an action that never ran ("The agent stopped before
+  starting the X action").
+- 52cce19: Give headless agent runs the same recovery the chat surface has, and keep a
+  deliberate stop from being auto-restarted. Scheduled jobs, automation triggers,
+  messaging-integration turns, and Google Docs comment replies now run through the
+  resume wrapper instead of calling the agent loop raw, so a transport-level cut
+  (gateway timeout, socket hang up, upstream 5xx) is resumed inside the same
+  invocation rather than silently losing the run. Job runs are marked as
+  background dispatch so the stale reaper stops reaping them mid-flight against a
+  window sized for a browser-streamed foreground run, and a job that ended at a
+  continuation boundary is recorded as an error instead of shipping its truncated
+  partial answer as a success. Recovery aborts that are neither a user stop nor a
+  continuation boundary (a Slack cancel, a stuck-banner auto-retry) now surface
+  their real reason without the client auto-continuing the work someone just
+  stopped.
+- 52cce19: Warn before accepting an org invitation silently repoints your credentials.
+  Accepting force-sets the active org, and because vault keys are per-org, a user
+  who joins a second org can find apps that worked yesterday reporting a saved key
+  as missing — with nothing in the flow having said an org boundary existed. The
+  org switcher's invitation rows now carry one inline line naming the consequence:
+  connected apps will switch to the new organization's vault keys.
+
+  Shown only when the user already has an active org. The no-active-org gate
+  (`RequireActiveOrg`) reaches the same accept action, but a user with no current
+  org has no credentials to be moved away from, so the line would be noise there.
+
+- 52cce19: Integrations panel: stop offering a local-only webhook URL as if it will work.
+
+  Slack, WhatsApp, and Telegram verify a webhook Request URL by calling it from
+  their own infrastructure, so the loopback URL a local dev server produces
+  (`http://127.0.0.1:8101/...`) can never pass verification. The webhook slot now
+  detects non-public URLs — loopback, `0.0.0.0`, `::1`, `*.local`, private LAN
+  ranges, and any plain-`http:` origin — and swaps the copyable URL for a short
+  explanation: deploy the app, or expose the server through an HTTPS tunnel, then
+  reopen the page from the public address. Publicly reachable URLs are unchanged.
+
+- 52cce19: Fix mounted-app API thumbnails/media 404ing in dev when a template is mounted
+  under a base path (e.g. `/assets`, `/clips`) as part of a unified workspace
+  deploy. Browsers send `Sec-Fetch-Dest: image/video/audio/track` for
+  `<img>`/`<video>`/`<audio>` fetches, not `empty`, so the dev-server base-strip
+  guard only stripped the mount prefix off document/iframe/frame/empty
+  requests, leaving media API calls with the prefix still attached and the
+  request fell through to a generic "Cannot GET" 404 instead of reaching the
+  app's real handler. The guard now strips the mount prefix for image, video,
+  audio, and track requests too — this only ever affects `/api/**` paths, so
+  static asset and module requests mounted under the base are unaffected.
+- 52cce19: Write NUL group-key delimiters as `\u0000` escapes instead of raw NUL bytes so
+  these files stay searchable. Ripgrep's binary-content heuristic treats any file
+  containing a `\0` byte as binary and prints only a `binary file matches` notice
+  with no lines, so `poll.ts`, `app-skill.ts`, `session-replay.ts`, and
+  `app-creation-store.ts` were invisible to every ripgrep-backed search — agents
+  and humans grepping them for a symbol got zero results and concluded it did not
+  exist. The escape sequence is the same character at runtime; only the on-disk
+  byte the heuristic keys on changes, so there is no behavior change.
+- 52cce19: `/_agent-native/open` validates its redirect target with the shared sign-in
+  primitive
+
+  `safeRelativePath` in the deep-link route was the last surviving return-path
+  validator outside `normalizeAppPath`, and the weakest: prefix checks only, with
+  no WHATWG reparse and no auth-entry rejection. It now delegates, so
+  `?to=/_agent-native/sign-in` falls back to the app home instead of deep-linking
+  a visitor at a login form, and anything the URL parser normalises past `//` is
+  rejected rather than passed through. No base-path containment is applied here —
+  the base is added afterwards by `withConfiguredRedirectBasePath`, so the value
+  is still base-relative at validation time.
+
+  Deprecation shims left in place by the sign-in unification, for the record:
+  - `safeReturnPath()` (`@agent-native/core/server`) — `@deprecated`, a one-line
+    delegate to `normalizeAppPath`, kept for eight provider-OAuth call sites.
+  - `/_agent-native/sign-in?return=<path>` — not deprecated and never removable.
+    Generated apps in the wild hand-write it. Only new producers are forbidden
+    (`guard:one-sign-in`); the consumer is permanent API surface.
+
+- 52cce19: Say at org-creation time that vault keys are not shared between organizations.
+  The three surfaces that call `createOrgHandler` — the org switcher's create
+  form, the Team page's create card, and the "create a separate organization"
+  branch of the no-org gate — now carry one inline line stating that a new
+  organization starts with an empty vault and needs its own API keys.
+
+  The boundary itself is unchanged; only its visibility is. `app_secrets` has no
+  scope readable by every org (a `workspace` row's `scope_id` is always an org id
+  or `solo:<email>`, and `readAppSecret` is strict equality), while the vault UI
+  advertises keys as "available to every workspace app". Users were therefore
+  discovering the per-org boundary weeks later as a missing key on a page that had
+  always worked, rather than at the moment they chose to create the org.
+
+  The no-org gate shows the line only when the user had an organization available
+  to join, since the first organization in a workspace has nothing to diverge from.
+
+- 52cce19: Make the Personal/Workspace secret scope consequence visible before it bites.
+
+  The scope picker in Settings → API Keys & Connections now carries inline
+  helper text explaining that a Personal key is only used by that person's own
+  signed-in sessions, and that integration, webhook, scheduled job, automation,
+  and agent-to-agent runs sign in as their owner and cannot read it.
+
+  When the trap is hit anyway, the provider API "credential not configured"
+  error now explains it: if a key of that name is saved in the caller's own
+  organization under Personal scope, the error names the scope it was found in
+  and the scope the run needed. The probe is bounded to the caller's own org and
+  reports only the scope kind — never the value, the owning account, or anything
+  about another tenant.
+
+- 52cce19: Keep credentials saved before an organization existed reachable afterwards.
+  A key saved while a user had no org is stored at `workspace` scope under
+  `solo:<email>`. Once that user joined or created an org, the generic lookups
+  stopped at org scope, so the key was still in the vault but the app reported it
+  as not configured. `resolveCredential` and `resolveSecret` now probe the solo
+  workspace scope as the final step, matching what the Builder credential paths
+  already did.
+
+  The probe is last on purpose: user scope, org scope, the org's workspace row,
+  and the org-scoped legacy setting are all tried first, so a current org-scoped
+  key always wins over a stale pre-org one. It also stays behind the existing
+  store-readability check — a failed org-scoped read is still reported as
+  retryable rather than being answered from the pre-org row.
+
+- 52cce19: Stop the compact startup-context budget from silently dropping required prompt
+  sections. `selectPromptSectionsWithinBudget` was greedy-with-skip over an
+  untyped `string[]`, so an app with large instruction files could exhaust the
+  48,000-character budget and lose the last section in the array — usually
+  `<available-apps>`, the only place the prompt says which peer apps exist. The
+  agent then reported cross-app work as impossible with no trace anywhere.
+
+  Sections now carry the `ContextGovernanceTier` the context manifest already
+  reports for them, and `required` sections (workspace-core `AGENTS.md`, the
+  on-demand context note, and `<available-apps>`) are reserved before
+  discretionary sections compete for the remainder. Omissions are logged with
+  each section's label and size, and the `<context-budget-note>` now names what
+  was dropped so the agent knows to re-read rather than assume absence. If
+  required sections alone exceed the budget they are sent whole and over budget —
+  a truncated list of workspace apps reads to the model as a complete one — and
+  the overflow is logged.
+
+- 52cce19: Cut agent spend and false continuation failures: request the 1-hour prompt-cache TTL on the stable system+tools prefix (chunk boundaries average past the 5-minute default), split the system prompt so mid-turn resource churn no longer invalidates that prefix, consult the successor's claim on every failed durable-continuation dispatch, and engage the hosted resume default on A2A/MCP delegated turns.
+- 52cce19: Harden agent run lifecycle recovery: sweep stale claimed runs on the fast
+  periodic interval instead of only from client request paths, persist the
+  partial turn on a no-progress recovery abort, emit reason-shaped terminal
+  events (`auto_continue` / reason-coded error) instead of a synthetic `done`,
+  make the chunk-boundary checkpoint durable the moment the soft timeout fires,
+  and derive the foreground no-progress backstop and tool-timeout ceiling from
+  the chunk budget so they can actually fire.
+- 52cce19: `getRequestUserEmail()` no longer lets a request-scoped read silently inherit
+  the process-wide `AGENT_USER_EMAIL` identity.
+
+  Hand-written `/api/*` routes have no AsyncLocalStorage store of their own, so
+  `getRequestUserEmail() ?? session?.email` resolved to the deploy env's identity
+  in preference to the real signed-in user — an admin gate reading it admitted
+  whoever `AGENT_USER_EMAIL` names, failing open toward more privilege. Three
+  changes close that:
+  - Every inbound HTTP request now runs inside a `RequestContext`, established by
+    a request-boundary middleware at `~middleware[0]`. The store is deliberately
+    identity-free (resolving a session there would mean reading cookies on the
+    cached SSR shell path); handlers that do know their caller still nest their
+    own `runWithRequestContext`, which shadows it.
+  - `getAmbientUserEmail()` / `getAmbientOrgId()` name the process-wide identity
+    explicitly, for the callers that legitimately have no request behind them:
+    CLI invocations, cron and scheduled jobs, seed and QA scripts.
+  - When a request-scoped read still reaches the ambient identity in a process
+    that serves HTTP, it warns loudly and names the env identity instead of
+    answering silently.
+
+  App authors: a handler that relied on `getRequestUserEmail()` returning
+  `AGENT_USER_EMAIL` outside an explicit context now gets `undefined` and should
+  fail closed. Scripts and cron entrypoints that really do mean the process
+  identity should call `getAmbientUserEmail()`.
+
+  `guard:no-localhost-fallback` also now flags `?? process.env.AGENT_USER_EMAIL`
+  and the `WORKSPACE_OWNER_EMAIL` owner-coercion shape in request-handling code.
+
+- 52cce19: Make agent run outcomes measurable and stop dead workers from latching the in-flight reaper grace. Completed runs prune after a day while errored runs are kept for a week, so any wider window undercounted successes — `cleanupOldRuns` now folds each pruned run into an additive `agent_run_outcome_daily` counters table (read via `getRunOutcomeCounters`) so outcome rates survive pruning. The `in_flight_since` stale-reaper grace no longer applies to a run whose heartbeat and progress writes have both been dead longer than `IN_FLIGHT_GRACE_MAX_LIVENESS_GAP_MS`, so a worker that dies mid-tool surfaces in ~2 minutes instead of holding the full 14.5-minute grace.
+- 52cce19: Stop scaffolded-app instructions from inviting oversized work on small prompts.
+
+  Two reported failures from a Claude CLI session in a generated app: asked for a
+  login screen with a placeholder test password, the agent wrote a Playwright
+  script from scratch to verify it, then abandoned a half-written action and built
+  three custom Nitro routes plus middleware instead.
+
+  The verification half came from the shipped `frontend-design` skill, whose
+  description fires on any UI work and whose Verification section told the agent
+  to "verify with browser screenshots" with no size threshold. That section is now
+  proportional: existing checks for a small change, browser tooling only when
+  asked or when a multi-step flow cannot be confirmed otherwise, and never author
+  a new browser-automation script or e2e harness for unrequested verification. The
+  `qa` skill's description no longer matches ordinary bug fixing, and
+  `adding-a-feature` now says a restyle or a screen with no new data model does
+  not need all four areas.
+
+  The routes half was not soft wording — the rule appears in every instruction
+  file. It lost to the shipped examples, so the `actions` skill now carries a
+  closed exception list, an explicit stop trigger for the moment a route file or
+  guard middleware is about to be created, and a note that the templates' existing
+  `/api/*` CRUD is a grandfathered baseline rather than a pattern to copy. The
+  same stop trigger is mirrored into the scaffold, chat, workspace, and registry
+  `AGENTS.md` files, which also gain a one-line "scale effort to the task" rule.
+
+- 52cce19: Narrow the auto-load triggers on the `frontend-design`, `shadcn-ui`, and
+  `self-modifying-code` skills so a routine UI edit no longer pulls a full skill
+  body into context. `frontend-design` now fires on genuine design work instead
+  of any web UI change, `shadcn-ui` no longer matches every project with a
+  `components.json`, and `self-modifying-code` no longer matches every source
+  edit. Skill bodies are unchanged; the vendored skills record the deliberate
+  divergence from upstream in their frontmatter.
+- 52cce19: Make the Slack entry in the integrations panel followable in a standalone app.
+  The setup steps previously opened with "Open Settings → Messaging", a page that
+  only exists in the Dispatch template, and then told users not to set
+  `SLACK_BOT_TOKEN` while the panel listed it as a required secret directly below.
+  The steps now cover the scopes, tokens, Event Subscriptions request URL, and the
+  `app_mention` subscription needed to @mention the agent in a thread, and they
+  end with a way to confirm it works. The Dispatch managed-OAuth path is now a
+  closing note instead of a blocking first step.
+- 52cce19: Document the Slack-mention-to-Notion-row workflow end to end. The messaging docs now carry a worked example that connects the two halves nobody had joined up: getting mentions into the app, adding the opt-in provider API actions, storing `NOTION_API_KEY` in the encrypted vault (never `.env`, which the provider runtime deliberately does not read), sharing the Notion database with the integration to avoid the silent 404, the exact prompt to give the agent, the single app action it should write, and the failure signatures for each step. Localized into all ten shipped documentation locales.
+- 52cce19: Stop charging every agent turn for guidance the model already reads elsewhere.
+  The runtime system prompt restated whole tool descriptions: rule 5 repeated
+  `refresh-screen`'s description nearly verbatim, rule 12 repeated every bullet of
+  `manage-progress`'s start/update/complete discipline, rule 10 re-described
+  `tool-search`, and the production `connect-builder` section restated the
+  `builderEnabled` semantics and its "never send users to Builder org settings"
+  guard three separate times. Deferred tools are loaded through `tool-search`, so
+  the model always reads a tool's description before it can call the tool — the
+  prompt only needs to say the capability exists and when it applies.
+
+  Each of those now states its trigger and defers the mechanics to the tool
+  description, and the two overlapping response-style sections merged into one
+  (both told the model to "lead with the outcome"). Also dropped the arbitrary
+  formatting prescriptions (bullet counts, nesting bans) and the dev-mode few-shot
+  `bash` examples in favor of stating the intent. Security, anti-fabrication, and
+  `db-*` isolation rules are unchanged.
+
+  The default production prompt is ~9% smaller and the verbose variant ~17%, with
+  no capability removed.
+
+- 52cce19: Stop `/_agent-native/agent-engine/status` reporting a failed lookup as "no AI
+  provider configured".
+
+  The handler swallowed every error and returned `200 { configured: false }`. The
+  client treats that as an authoritative answer, so a transient database failure
+  gated the composer and told a user with a working key to go connect a provider.
+  It now returns 503, which the client maps to its retryable `unavailable` state —
+  the composer stays usable and the check retries instead of latching.
+
+- 52cce19: Give `agent_runs.status` a value that means "truncated" so a run cut off at a budget, timeout, loop-limit, or no-progress boundary is no longer filed as `completed`. Truncations outnumbered genuine completions on some apps while being invisible to every success-rate query, and because retention keys off status they were deleted after a day while real errors survived a week — the most-reported failures were also the fastest to lose their evidence. `terminalStatusForEvent` now returns `completed` if and only if the terminal reason is `done`; `setRunTerminalReason` corrects a `completed` row to `truncated` for every writer that sets status before it knows the reason; and `cleanupOldRuns` / `listErroredRuns` treat truncations as the failures they are. Additive: `status` is plain TEXT, so no migration is needed.
+- 52cce19: Credential resolution now distinguishes "no credential" from "could not read
+  the credential store". A transient database failure during org membership or
+  `app_secrets` lookup surfaces as a retryable error instead of the permanent
+  "No LLM provider is connected" / "Builder keys are not configured" copy, and a
+  failed org lookup is no longer memoized as "no org" for the rest of the
+  request. `org_members` reads now go through one shared helper so the scheduler
+  and org context cannot disagree about what a failed read means.
+- 52cce19: Teach the visual-edit skill the `viewports` option for placing desktop and
+  mobile frames of each route side by side, and generate the Design template's
+  copy of the skill from the same constant so it can no longer drift back to the
+  deprecated multi-action launch flow.
+- 52cce19: Make a second organization stop silently orphaning vault credentials, and make
+  cross-app capability discoverable at runtime.
+  - `describeCredentialScopeGap` now also detects a key saved in a **different
+    organization the caller belongs to**, so a credential miss reports the
+    organization mismatch that caused it instead of only naming the missing key.
+    Every `provider-api` "credential not configured" error picks this up.
+  - `createOrganization` logs a loud warning when it creates an additional
+    organization for an account that already belongs to one, naming the credential
+    consequence. The existing inline notices only reach a human clicking through
+    the UI; this covers app code and migration actions calling it directly.
+  - New built-in `describe-workspace-apps` agent tool, available to every app. It
+    reads each workspace peer's live `/.well-known/agent-card.json` and returns
+    their purpose plus exact callable action names, so cross-app capability is
+    discoverable without a hand-maintained catalog that goes stale.
+  - `A2AClient.getAgentCard()` accepts an optional `timeoutMs`.
+
+- 52cce19: Restructure the generated workspace `AGENTS.md` so the whole file actually
+  reaches the model. It was 8,294 characters, and the compact prompt hard-slices
+  each injected resource at 6,000, so the last ~2,300 characters — the entire
+  "Adding Apps" workflow — were silently dropped from every workspace agent's
+  system prompt with no build-time signal.
+
+  The always-on layer is now 5,265 characters: purpose, a skills index placed
+  immediately after the purpose line so truncation can never reach it, the core
+  invariants, a framework-docs pointer, and the workspace action index. The
+  long-form detail moved verbatim into two new workspace skills the agent loads on
+  demand: `workspace-conventions` (docs and source lookup, shared vs app-owned
+  code, file/blob storage, env and secrets, agent scratch files, Dispatch
+  Resources) and `adding-workspace-apps` (classifying an "agent" request,
+  scaffolding `apps/<app-name>`, discovery and descriptions, mounting and base
+  paths, action-first data, database portability, finishing a chat-template app).
+  No guidance was removed.
+
+- Updated dependencies [52cce19]
+  - @agent-native/toolkit@0.10.7
+
+## 0.122.4
+
+### Patch Changes
+
+- 648c2d7: Install Rewind through Agent Native's complete local Screen Memory setup instead of treating it as a plain public skill, route every supported Rewind name through the same fail-before-writes checks, reject missing or disconnected local stores, keep explicit-store retrieval bound to Clips' feature configuration, and guide first-time users through consent-gated Clips Desktop setup.
+
+## 0.122.3
+
+### Patch Changes
+
+- 6dd7ee0: Recover long-running messaging integrations across hosted function boundaries while preserving one logical agent turn and one final platform reply.
+
+## 0.122.2
+
+### Patch Changes
+
+- 905bdba: Improve tool-input recovery, stale-run handling, and design-system routing reliability.
+
+## 0.122.1
+
+### Patch Changes
+
+- c8a0bcf: Sign the A2A identity token's audience as the target's origin. Receivers derive their expected audience from `APP_URL`, which carries no app path, so a path-qualified audience could never match — every direct `actions/invoke` between workspace apps failed with "Invalid or expired A2A token".
+- c8a0bcf: Allow agent-to-agent calls between apps in a locally running workspace. The gateway serves every app on loopback, so sibling A2A targets are private addresses by construction and `ssrfSafeFetch` rejected them as SSRF — making cross-app delegation fail locally with "refusing to fetch private/internal address". `ssrfSafeFetch` now accepts an `allowedPrivateOrigins` list and the A2A client passes the deployment's own gateway origin (never a request-supplied value).
+- c8a0bcf: Bound Nitro dev-server startup recovery so a failed restart stops refreshing forever.
+- c8a0bcf: Keep Manage agent as a dedicated linked destination at the bottom of settings navigation.
+
+## 0.122.0
+
+### Minor Changes
+
+- 231aca6: Add `agent-native template` — pull later upstream first-party template changes into an app that was generated from a template, via a real per-file 3-way merge.
+
+  `agent-native create` now records what a later merge needs in `agent-native.scaffold`: the exact `templateRef` the template came from, its `templateSource` (`github` / `bundled` / `local-checkout`), the `coreVersion`, and the app `shape`. The pristine upstream tree is stored as a git ref under `refs/agent-native/template-baseline/<app-path>` written entirely with plumbing and a throwaway index, so HEAD, the index, and the working tree are never touched.
+
+  Commands:
+  - `agent-native template status [app]` — recorded ref, latest ref, baseline health, and counts of upstream-changed and locally-modified files.
+  - `agent-native template diff [app] [--to <ref>]` — read-only unified diff of what upstream changed.
+  - `agent-native template sync [app] [--to <ref>] [--dry-run] [--force]` — 3-way merge upstream changes into the app. `--to` defaults to the ref matching the installed `@agent-native/core`, so `agent-native upgrade` followed by `agent-native template sync` is the coherent story.
+  - `agent-native template baseline [app] [--ref <ref>] [--template <name>]` — record a baseline for an app scaffolded before provenance existed.
+  - `agent-native template accept [app]` — advance the baseline after resolving conflicts.
+
+  Secrets, lockfiles, generated output, pending changelog entries, and `learnings.md` are never merged; binary files are never marker-merged; and the baseline only advances when the merge came out clean.
+
+- 231aca6: The runtime agent can now actually read skill `references/*.md` sub-files it is told about. Previously only `SKILL.md` content was bundled — sub-file names were advertised in the skills prompt block and via `docs-search`, but their content was never read into the bundle, so `docs-search --slug "skill-<name>"` could never return them. `readSkillsDir` now inlines eligible text sub-files (`.md`/`.txt`/`.json`, capped at 64KB/file and 256KB/skill) into a new `Skill.files` map, `docs-search` exposes each one under a resolvable `skill-<name>--<subpath>` slug, the skills prompt block hints at those resolvable slugs instead of bare filenames, and the Vite dev-server HMR watcher invalidates the bundle for any file under a skills directory (not just `SKILL.md`).
+- 231aca6: Add `AGENT_NATIVE_SSR_CACHE`, a deployment-wide override for the SSR shell cache
+  policy. The default is unchanged: SSR HTML and React Router `.data` are still
+  stamped `public, max-age=600, stale-while-revalidate=604800, stale-if-error=3600`
+  because the shell is impersonal — cookies are stripped before render and all
+  personalization happens on the client. Set the variable to `off` for `no-store`,
+  or to a duration such as `30s` / `5m` for a shorter freshness (the
+  `stale-while-revalidate` window mirrors the chosen `max-age`, so a short
+  freshness does not hand back a seven-day stale window). Unrecognized values warn
+  and keep the default, so a typo cannot silently disable the CDN.
+
+  Use it when your host does not purge its CDN on deploy, or when loaders return
+  mutable public data and a post-mutation `useRevalidator()` re-reads a cached
+  `.data` copy. The override is deliberately deployment-wide rather than
+  per-route: a cache policy that varies per request is how one visitor's payload
+  lands in another visitor's shared CDN entry. Turning it off shortens caching
+  only — it does not make SSR personalized, and mutation-fresh app data still
+  belongs in actions read through `useActionQuery` / `useActionMutation` with
+  `useDbSync()` polling.
+
+### Patch Changes
+
+- 231aca6: Keep delegated agent (A2A) response text visible instead of flashing and
+  vanishing. Remote response text is now tracked as ordered segments interleaved
+  with the sub-agent's reasoning and tool calls, so nested "Asking <agent>" output
+  reads like top-level chat output — markdown text, tools, and thinking in the
+  order they happened.
+- 231aca6: Add `creative-context` to the Analytics template's `requiredPackages` metadata. The Analytics template's `package.json` already depends on `@agent-native/creative-context` as a `workspace:*` dep, but the scaffolder's template metadata didn't list it, so scaffolding a workspace with Analytics but none of the other creative-context-dependent templates produced a dangling `workspace:*` reference and `pnpm install` failed with `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND`.
+- 231aca6: Attribute Builder agent branches to the requesting user instead of the connected credential's `BUILDER_USER_ID`, falling back to that user only when the caller's email is not a Space member.
+- 231aca6: Stop an upstream provider error from reporting the Builder connection as broken.
+  A gateway error arriving inside an already-authenticated stream is now only
+  treated as a credential failure when the message names the credential; a bare
+  "Unauthorized" is surfaced as `builder_model_unauthorized` ("the provider behind
+  this model rejected the request") without recording an auth-failure marker.
+  Builder auth-failure markers also expire after 15 minutes, matching provider
+  markers, so a signed-in user can no longer be pinned to "not connected"
+  indefinitely.
+- 231aca6: Stop `render-data-widget` from stalling on large result sets. The tool is a pure
+  echo — the model authors every row as tool-call arguments — so an uncapped table
+  cost minutes of argument decode before anything rendered, and a 211-row answer
+  was observed stalling for six minutes until the run heartbeat died. Rows are now
+  clamped server-side (50 table rows, 200 chart points) with the existing
+  `totalRows`/`sampledRows`/`truncated` flags set, and both the tool description
+  and the framework prompts state the ceiling instead of asking for "compact real
+  data" and forbidding markdown tables outright.
+- 231aca6: Stop telling users "The agent stopped without sending a final message" while the
+  agent is still working. A run row at a continuation chunk boundary is also
+  `status: "completed"`, and SQL run subscriptions synthesized a bare `done` for
+  it, so a client that reattached past the boundary event concluded the turn had
+  ended while the chained successor run was still going. Subscriptions now re-emit
+  the run's real terminal event (or an `auto_continue` derived from its
+  `terminal_reason`) so the client keeps following the turn. The chat notice also
+  waits for the stopped-without-text state to hold for a beat, so transport
+  re-attach gaps no longer flash it.
+- 231aca6: Expose `@agent-native/core/client/clipboard` as a public subpath so apps can use
+  `writeClipboardText` (desktop bridge + `execCommand` fallback, returns whether
+  the write landed) instead of hand-rolling `navigator.clipboard` calls that fail
+  silently on insecure origins or an unfocused document.
+- 231aca6: Fix `agent-native create --template design` scaffolding a workspace where every `/design` page 500'd. `shouldSkipScaffoldEntry` skipped the entire `.generated` directory, including `templates/design/.generated/bridge/*.generated.ts` — 10 git-tracked files that `DesignCanvas.tsx` and friends import at module load. `.generated/bridge` is now copied while ephemeral dev-time siblings like `actions-registry.ts` and `action-types.d.ts` are still skipped.
+- 231aca6: Resolve Builder credentials through an email-based org fallback and a solo-workspace fallback so a transient org-context dropout no longer reports a connected Builder account as "not configured", and surface credential-store read failures as retryable.
+- 231aca6: Fix the chat "Revert to here" action doing nothing when clicked. The menu item
+  was shown whenever Code mode was on, regardless of whether a checkpoint had
+  actually been saved for that turn, and every failure path reset the button to
+  idle without any feedback. The action now only appears for turns that have a
+  real checkpoint, restores by run id in a single request, and surfaces the
+  server's error instead of failing silently.
+- 231aca6: Create app now offers a "Connect Builder" action when Builder isn't connected, instead of dead-end prose. The create-app flow (popover and full-page NewWorkspaceAppFlow) tracks the structured `builder-unavailable` failure reason from `start-workspace-app-creation`, gives hard failures a destructive-styled affordance instead of the neutral muted box used for informational states, adds a "Try again" control for `builder-error`/`credential-store-unavailable`, and wires the "Connect Builder" button through the shared `useBuilderConnectFlow` hook so users can connect and retry without leaving the flow.
+- 231aca6: Add an instruction-size check to `guard:agent-chat-context`. The compact prompt
+  hard-slices each injected resource at 6,000 characters with no build-time
+  signal, so template `AGENTS.md` files were silently losing their back half —
+  analytics lost 39%, including its entire deep-analysis workflow section. The
+  guard now reports every template's instruction size, fails on a new or growing
+  overflow, and warns on the templates already over the cap.
+- 231aca6: Teach the provider API substrate that a Notion token's `/users/me` name is a Notion-side integration label, not the caller's workspace, so agents stop reporting an unrelated product name when a page was simply never shared. Provider presets can now declare `accessErrorGuidance`, which is appended to request guidance on 401/403/404 responses.
+- 231aca6: Fix existing users being stranded in their personal workspace instead of their company org.
+
+  Request-time domain auto-join decided whether a user was still in a default workspace by
+  comparing the workspace name to a name recomputed from the current session. Sessions minted
+  by the framework's own Google OAuth and identity-SSO paths carry no display name while Better
+  Auth sessions do, so the same account could match on one sign-in path and not another — and a
+  renamed workspace, a changed provider display name, or any second org membership disabled the
+  auto-join permanently. It now keys off whether the user already belongs to an org whose
+  `allowed_domain` matches their email domain, which is the durable signal.
+
+  Joining is now also separated from activating: the company org is always joined, but the user
+  is only switched into it when their current workspace is one they solely own. Members of a
+  shared team stay where they are.
+
+  Also fixes two recovery paths that hid the manual way in: Settings → Team now shows the
+  "Join your team" card even when the user already has a (personal) workspace, and the Dispatch
+  sidebar keeps an icon-only workspace switcher when collapsed instead of dropping it.
+
+- 231aca6: Fix scaffolded workspace packages (pinpoint, embedding, creative-context,
+  scheduling) never building their `dist/` on install, which broke the Slides
+  deck editor and Design app with unresolved `@agent-native/*` imports.
+  `scaffoldRequiredPackages()` now adds a `prepare` script alongside each
+  package's existing `build` script, so pnpm builds it during `pnpm install`.
+- 231aca6: Scope developer-workflow skills (design-exploration, visual-answer, visual-edit, visual-plan, visual-recap, visualize-repo) to `dev` only so they no longer load into the in-app runtime agent's context.
+- 231aca6: Let org service tokens (`svc-<name>@service.<orgId>`) resolve an implicit
+  `member` role for their own org via `implicitServiceOrgRole`, so templates that
+  authorize against `org_members` can accept them for org-scoped actions instead
+  of returning 403. The role is always `member` and requires the request's org id
+  to independently corroborate the target org, so admin-gated operations —
+  including minting or revoking further service tokens — stay closed.
+- 231aca6: Fix messaging-integration (Slack) runs that answered "The model finished without a visible answer" and whose **Open thread** button landed on an empty Dispatch chat.
+  - **Research-shaped asks no longer die at 40s.** `processIntegrationTask` hardcoded the 40s foreground soft-timeout even when durable dispatch had routed the task to the emitted Netlify `-background` function (~15min budget). Any multi-source request — sweep Gong, HubSpot, a Slack channel and Pylon, then summarize — was aborted at a continuation boundary with no user-facing text. The run now takes the background ceiling when `isInBackgroundFunctionRuntime()` proves it is inside that function, so the ~60s synchronous wall still governs everywhere it actually applies.
+  - **A cut-off run says so.** A run that stops at an `auto_continue` boundary is no longer reported as a model that answered with nothing; it now says it ran out of time, points at the thread for the work it did gather, and suggests asking in smaller pieces.
+  - **The Open thread deep link resolves.** A channel conversation runs as the integration service principal, so its thread is owned by `integration@<platform>` and the deep link 404'd for the human who asked — Dispatch silently rendered a brand-new empty chat instead. Each verified participant is now granted an explicit editor share on the thread they are driving (`grantThreadUserShare`, idempotent and never downgrading an existing stronger role), so the button opens the real conversation and it appears in their Dispatch history.
+
+- 231aca6: Fix every `pnpm action` in a Slides app failing with "nitroApp.h3 is not available" — the Slides db plugin now skips readiness-gate middleware registration when invoked by the CLI runner, which supplies no h3 app.
+- 231aca6: Cut the "Generative UI and Extensions" block in the in-app runtime agent's system prompt down to a short pointer. The removed prose (helper API list, `update-extension` operation contract, get-extension/list-extensions/legacy-`tools`-table guidance, the 7-row extension-vs-code-change routing table, and worked examples) already exists verbatim in the `render-inline-extension`/`create-extension`/`update-extension`/`connect-builder` tool descriptions, in `shared-rules.ts`'s single copy of the db-tools rule, and in the `extensions`/`generative-ui` skills — this only removes the duplicate copy from the prompt paid on every turn. Kept in place: the app-native-artifact-first rule, the "don't send existing extension edits to `connect-builder`" guardrail, and the extension-can't-reach-native-chrome boundary sentence, none of which have another home.
+
+  Full base prompt's extension block: ~7.7KB → ~1.8KB. Compact base prompt's extension block: ~4.2KB → ~1.6KB (the compact base prompt shrinks by about 2.5KB total, roughly 14% of its prior size).
+
+- 231aca6: Remove duplicated guidance from the in-app runtime agent's system prompt. Anthropic's guidance is that overlapping/conflicting instructions are handled worse by modern models than a single clear statement, and that tool-level detail belongs in tool descriptions rather than being repeated in the system prompt.
+  - Production (tool) mode no longer re-lists every action's name and truncated description in `## Available Actions` — the native tool schemas already carry that. Only native-chat-widget annotations and a `tool-search` pointer for actions outside the initial tool set remain (dev/CLI mode, where template actions are invoked via `pnpm action` and are not native tools, is unchanged).
+  - The Navigation Rule, previously stated once as a numbered core rule and again in its own section, is now stated once.
+  - The three overlapping anti-fabrication / no-fake-success / verify-before-claiming-done rules are consolidated into one rule with three clearly labeled sub-behaviors (don't fabricate data, don't fabricate success, recover instead of giving up), removing a rule that existed only to explain how it differed from the other two.
+  - The "Extended Capabilities" section no longer repeats "call `get-framework-context` with key X" once per capability for capabilities the tool's own topic list already documents; it collapses to one line, keeping only the agent-teams delegation-intent guidance and the call-agent warning that carry unique, non-redundant behavior.
+
+  Full framework core prompt shrinks by roughly 1.8 KB (~10%); the already-condensed compact variant shrinks by a smaller amount since it had less of this duplication to begin with. The tool-mode `## Available Actions` block shrinks by an amount proportional to the number of registered actions (roughly 85%+ for typical action counts), since it stops repeating what the native tool schema already tells the model.
+
+## 0.121.2
+
+### Patch Changes
+
+- 302cac7: Rewrite getting started guide based on hands-on walkthrough
+
+## 0.121.1
+
+### Patch Changes
+
+- 99997d8: Recognize Netlify's documented Function runtime marker so opted-in durable background work reaches its generated worker instead of falling back to a short synchronous route.
+
+## 0.121.0
+
+### Minor Changes
+
+- 4e64dd1: Realtime sync: two hosted-gateway follow-ups. Both are opt-in and leave apps without hosted-realtime config unchanged.
+  - Hosted SSE reconnect now sends the client's cursor (`&since=`) on the gateway stream URL, so the gateway's connect-time catch-up replays events written during the reconnect gap immediately instead of deferring them to the next poll. First connect (cursor 0) is unaffected. Because a `since=` only takes effect when a new `EventSource` is constructed (the browser's own auto-reconnect reuses the URL frozen at construction), the hosted transport now owns reconnects: on a stream error it closes the stream and schedules its own reconnect so the next connect rebuilds the URL from the current cursor, keeping the token on transient errors and reminting on a closed stream. A late error from a replaced (stale) stream is ignored so it cannot tear down the current one. Local mode keeps native EventSource reconnect.
+  - New gateway access-check tokens (`signGatewayAccessToken`/`verifyGatewayAccessToken`, exported from `./server/short-lived-token`): per-project HMAC key, a `typ` discriminator (not interchangeable with subscribe or media tokens), and the full access query (`resourceType`/`resourceId`/`userEmail`/`orgId`) bound into the signature so the app authenticates the params, not just the caller. `verifyGatewayAccessToken` also accepts an optional expected `projectId` to bind the channel (mirroring `verifyRealtimeSubscribeToken`); the `can-see` endpoint passes its own project id when known.
+  - New endpoint `GET /_agent-native/can-see` mounted by core-routes. The hosted Realtime Gateway has no copy of an app's shareable-resource registry, so it calls this to resolve sharee visibility: the endpoint verifies a gateway access-check token against the app's per-project secret, runs the app's registry-based `resolveAccess`, and returns `{ allowed }`. Fails closed (`allowed: false`) on an unknown resource type or lookup error; 404 when the app has no realtime secret; `Cache-Control: private, no-store`.
+  - New `AppSyncStateOptions.dbAssignedVersions` (default off): allocate durable-event versions from the app's Postgres DB — a one-row allocator advanced with `GREATEST(v + 1, epoch_ms_now)` inside the same autocommit insert statement — instead of the per-writer in-memory clock counter. Hosted realtime has multiple writers per app DB (the app's serverless instances plus gateway instances), where clock skew can assign a LOWER version to a LATER event and a client whose cursor passed the higher value filters the later event out permanently; DB allocation serializes on the allocator row's lock so version order equals commit order across all writers. Buffer/emit defer until the allocated version returns (no provisional version ever reaches clients); a deterministic-id dedupe loser adopts the winner's version via `ON CONFLICT DO UPDATE ... RETURNING`; on DB failure the writer falls back to clock allocation (logged) so the in-process fast path never stalls. Versions stay epoch-ms scale, so existing cursors, seeds, and lag metrics are unaffected. The default instance enables this automatically when `AGENT_NATIVE_REALTIME_TRANSPORT=hosted` with a gateway URL; self-hosted apps are byte-identical. Postgres only; ignored on SQLite.
+
+### Patch Changes
+
+- 3adc377: Explicitly disable dependency bundling for generated self-contained Netlify keep-warm functions.
+
+## 0.120.4
+
+### Patch Changes
+
+- 8afb252: Stabilize A2A polling deadline coverage under full-suite load.
+- Updated dependencies [8afb252]
+  - @agent-native/toolkit@0.10.6
+
+## 0.120.3
+
+### Patch Changes
+
+- 0e2c19d: Improve dark-mode destructive feedback contrast across shared surfaces and embedded templates.
+- 0e2c19d: Add small documentation links beside the MCP URL and A2A agent card on the shared agent Access page.
+- 0e2c19d: Simplify the shared app menu by flattening Dispatch, removing redundant headings, and showing app metadata descriptions with a grid-style overflow action.
+- 0e2c19d: Use borderless accent styling for shared secondary controls and organization pickers.
+- 0e2c19d: Prevent the shared chat handoff morph from also running the sidebar's right-side entry animation.
+- 0e2c19d: Align shared chat history rails with left-aligned New Chat controls and animate chat-list expansion using intrinsic sizing.
+- 0e2c19d: Quiet the embedded Settings Extensions tab by removing its enclosing border, title, and chat toggle.
+- 0e2c19d: Scope the chat handoff drawer suppression to its initial destination mount so ordinary sidebar opening still animates.
+- 0e2c19d: Expose a shared command-menu open event and sidebar footer action composition primitive.
+- 0e2c19d: Keep active chat threads eligible for the page-to-sidebar handoff and clear the handoff when starting a new chat.
+- 0e2c19d: Capture server-side and CLI exceptions in first-party Agent Native monitoring, and avoid reporting browser errors already handled by stale-chunk recovery or extensions.
+- Updated dependencies [0e2c19d]
+- Updated dependencies [0e2c19d]
+- Updated dependencies [0e2c19d]
+  - @agent-native/toolkit@0.10.5
+
+## 0.120.2
+
+### Patch Changes
+
+- b00c38d: Emit the continuation handoff event after completion callbacks install server-driven continuations.
+- b00c38d: Keep generated chat template Settings and Manage agent links in the sidebar footer.
+- b00c38d: Move extension management into the shared Settings tabs and support embedded extension lists.
+- b00c38d: Preserve the full continuation reason when durable agent runs hand off to the next chunk.
+
+## 0.120.1
+
+### Patch Changes
+
+- 5477352: Keep Dispatch's overview composer, full-page chat, and side chat on the same selected model.
+- 5477352: Inject the configured Google Analytics tag into framework-owned login and signup pages.
+
+## 0.120.0
+
+### Minor Changes
+
+- 20ebb96: `agent-native dev --inspect` (and `--inspect-brk`, optionally `=<port>`) now
+  attaches the Node inspector to **only** the Nitro API-server process, on a
+  single known port (default 9229). It selects Nitro's `node-process` dev runner
+  so the server is a real, attachable process, and injects `NODE_OPTIONS` through
+  a Vite preload that runs before Vite's own startup — so Vite, pnpm, and the CLI
+  are never inspected and there is exactly one debugger target. Set
+  `NITRO_DEV_RUNNER` yourself to override the runner.
+
+## 0.119.6
+
+### Patch Changes
+
+- f3c3523: Add an opt-in, scoped Netlify background handoff and scheduled recovery sweep for durable messaging-integration tasks.
+
+## 0.119.5
+
+### Patch Changes
+
+- 13eb9f7: Fix AI SDK provider engines being unusable on bundled serverless deploys, and stop rewriting custom model IDs on save/read.
+  - **Serverless package detection.** `isAgentEnginePackageInstalled` relied on `require.resolve`, which fails on bundled serverless runtimes (Vercel/Netlify via Nitro) where optional provider packages (`ai`, `@ai-sdk/*`) are inlined into the function bundle. Every engine-usability gate then rejected the AI SDK engines and the agent silently fell back to the native Anthropic engine. Package resolution now treats a resolve miss as available only when there is real evidence of a bundled runtime (Vercel/Netlify markers, or a bundle-output module path), and defers to the engine's own dynamic `import()` as the real gate. Generic container/Lambda/Cloud Run deploys that ship a real `node_modules` still surface genuine "package not installed" misses.
+  - **Custom model preservation.** `normalizeModelForEngine` replaced any unrecognized model ID with the engine default when the settings actions passed a static registry entry, so a custom OpenAI-compatible gateway model (e.g. an Ollama model) reverted to the OpenAI default on save and read. The set/list/app-default actions now resolve the OpenAI-compatible-endpoint capability (`resolveEnginePreservesCustomModels`) and pass it through, preserving custom IDs verbatim — including version-shaped IDs — while first-party OpenAI still normalizes unknown IDs to a supported model.
+
+## 0.119.4
+
+### Patch Changes
+
+- 4b734be: Preserve completed agent chat work durations when threads reload.
+- 4b734be: Keep durable background agent workers alive until terminal run events and status are persisted.
+- 4b734be: Keep delegated agent tool summaries non-expandable when their private details are unavailable, and prevent missing-response text from flashing between a completed tool and its follow-up answer.
+- 4b734be: Keep transient Nitro environment startup failures as HTTP responses instead of printing benign unhandled rejection errors.
+- 4b734be: Remove the redundant long-running hint from delegated agent chats now that they show live remote tool activity.
+- 4b734be: Persist stopped nested agent activity as terminal so canceled chats do not resume showing a false Thinking state after refresh.
+- Updated dependencies [4b734be]
+  - @agent-native/toolkit@0.10.4
+
+## 0.119.3
+
+### Patch Changes
+
+- 7131053: Pin scaffolded standalone apps' `@agent-native/core` and `@agent-native/toolkit` dependencies to the exact release pair this CLI was built and tested with, instead of the independently-moving npm `latest` dist-tag for each. Prevents `agent-native create` from installing a core/toolkit pair that were never released together, which could produce duplicate toolkit installs and "does not provide an export" errors at runtime.
+
+## 0.119.2
+
+### Patch Changes
+
+- 2254362: Show only the Go home action on 404 error screens.
+- 2254362: Allow idempotent database reads to set a per-query timeout and retry budget, and let email callers bound provider delivery time.
+- 2254362: Keep Cloudflare Pages SSR builds working when shared chat components use the assistant UI state hook.
+- 2254362: Preserve ordered fallback bearer tokens for connected A2A agent calls during key rotation.
+- 2254362: Center full-page empty chat surfaces consistently and quiet the shared chat history rail.
+- 2254362: Polish the Manage agent resources layout with aligned empty states and whitespace-based section spacing.
+- 2254362: Space out and cap Vite optimized-dependency recovery reloads so dev startup does not thrash when the optimizer stays out of sync.
+- 2254362: Use a background-independent mask for the scrolled chat fade so it matches each host surface.
+- Updated dependencies [2254362]
+  - @agent-native/toolkit@0.10.2
+
+## 0.119.1
+
+### Patch Changes
+
+- c015dc7: Export shared Figma paint math (gradient geometry from transforms/handles,
+  blend-mode mapping, linear stop remapping) from `@agent-native/core/ingestion`
+  so the REST and `.fig`/clipboard import renderers derive gradients identically.
+
+## 0.119.0
+
+### Minor Changes
+
+- 6f485ac: Remove the redundant Done action from shared share popovers and dialogs.
+- 6f485ac: Stream delegated A2A agent activity into an indented chat run with live reasoning, tool status, elapsed time, and a scroll-free final response.
+
+### Patch Changes
+
+- 6f485ac: Use GPT-5.6 Luna as the default for Builder Gateway and OpenAI connections, keep Claude Sonnet 5 for Anthropic connections, and order the model picker from lowest to highest cost.
+
+## 0.118.1
+
+### Patch Changes
+
+- c15d20f: Only show in-chat connection suggestions for exact provider brands or provider-owned URLs found in user-authored text.
+- c15d20f: Harden browser and CLI error handling and hide editor commands for disabled features.
+- c15d20f: Keep remote MCP OAuth flow state in browser-safe cookie chunks and show Granola's official provider icon.
+- c15d20f: Keep completed chat turns with interactive custom UI expanded and frame custom action UI in a padded card.
+- c15d20f: Pin Slack delivery to the app that received the event and reject legacy bot tokens from a different Slack app.
+- c15d20f: Keep healthy long-running tool and agent calls out of the stuck-run warning, add space below long-running tool hints, and prevent a hung remote status request from bypassing the A2A call timeout.
+- c15d20f: Wait for Nitro's Vite environment before serving initial development requests, and keep published Core installs from enabling framework-monorepo dependency optimization.
+- c15d20f: Consume agent-authored URL navigation commands from full-page chat surfaces.
+- c15d20f: Remove the obsolete active-tool row selector so stale styles cannot paint the shine outside the label text.
+- c15d20f: Shorten the MCP OAuth connection action label to Connect.
+- c15d20f: Show a soft rotating blue glow for live realtime voice sessions and brighten it while the agent is working.
+- c15d20f: Synchronize the chat response regenerate control and timestamp fade transitions.
+- Updated dependencies [c15d20f]
+- Updated dependencies [c15d20f]
+- Updated dependencies [c15d20f]
+  - @agent-native/toolkit@0.10.1
+
+## 0.118.0
+
+### Minor Changes
+
+- f0da2e0: Add the styling-runtime-agnostic custom design system contract, safe component adapters, semantic theme tokens, and build-time theme CSS generation. New scaffolded apps now include the explicit design-system module, ToolkitProvider seam, and toolkit dependency so custom adapters can be registered from the first render.
+
+### Patch Changes
+
+- f0da2e0: Harden custom design system color gamut handling, semantic default-adapter behavior, sharing controller reuse, and build-time theme cascade ordering. Add complete MUI and Ant Design Chat examples that exercise the public conformance contract, and route normalized settings, sharing, sidebar, and agent-panel chrome through the registered semantic adapters.
+- f0da2e0: Preserve staged cookies across MCP OAuth redirects so browser callbacks retain their authorization flow state.
+- f0da2e0: Add horizontal breathing room around in-chat MCP connection suggestions.
+- f0da2e0: Keep parent chats alive while a delegated A2A task is actively processing.
+- f0da2e0: Clip the active tool-call shine to the tool label instead of painting it across the full row.
+- f0da2e0: Preserve normalized core control icon sizing and semantic button styling while keeping settings defaults and sharing overlays consistent.
+- f0da2e0: Preserve the active chat when page chat and sidebar chat share a thread store.
+- f0da2e0: Serialize realtime voice responses and recover from overlapping response requests without ending the voice session.
+- f0da2e0: Make the Dispatch chat composer recover from unavailable AI status checks and keep its Add menu clickable.
+- f0da2e0: Route the Builder connection card and chat history rail through semantic design-system components while preserving their default presentation and shared controller paths.
+- f0da2e0: Consolidate sharing query, mutation, member-search, optimistic-cache, and
+  error-handling primitives behind the ShareButton and ShareDialog controllers.
+- f0da2e0: ShareButton and ShareDialog controllers now share optimistic updates, rollback handling, organization-member search, and error reporting while preserving pending state across close and reopen.
+- f0da2e0: Show a pending spinner while an MCP OAuth connection is preparing its redirect.
+- Updated dependencies [f0da2e0]
+- Updated dependencies [f0da2e0]
+- Updated dependencies [f0da2e0]
+- Updated dependencies [f0da2e0]
+- Updated dependencies [f0da2e0]
+- Updated dependencies [f0da2e0]
+  - @agent-native/toolkit@0.10.0
+
+## 0.117.2
+
+### Patch Changes
+
+- bc91e11: Archive extensions without deleting their history, data, or sharing configuration.
+- bc91e11: Add a shared editable user profile to settings and the workspace switcher.
+- bc91e11: Render transactional email branding with a SendGrid-compatible inline logo and text fallback.
+- bc91e11: Bound foreground serverless database pools to one connection and retry transient connection-exhaustion errors.
+- bc91e11: Render the default Share trigger as a text-only button without a visibility icon.
+
+## 0.117.1
+
+### Patch Changes
+
+- c9e48ca: Fix Vercel workspace serverless functions crashing on every request. The generated Vercel function wrapper now exports the `{ fetch }` web-handler shape so Vercel invokes it web-style with a Web `Request`, and requires a Web `fetch` handler from `main.mjs` rather than forwarding a Web `Request` to a Node-style `(req, res)` handler (fixes #2324).
+
+## 0.117.0
+
+### Minor Changes
+
+- d73eda3: Realtime sync: framework prerequisites for the hosted Realtime Sync Gateway. All new behavior is opt-in — apps without hosted-realtime config are unchanged.
+  - Refactor `poll.ts` into an `AppSyncState` class holding all previously module-global change-tracking state (version counter, ring buffer, poll emitter, watermarks, and the access cache). Module-level exports (`recordChange`, `getVersion`, `getPollEmitter`, `getChangesSinceForUser`, `canSeeChangeForUser`, `createPollHandler`, `invalidateCollabAccessCache`) delegate to a lazily-created default instance bound to the process DB, so self-hosted apps are unchanged. `createPollHandler` and `createPollEventsHandler` accept an optional injected `AppSyncState`.
+  - `AppSyncState` accepts an injected DB accessor, Postgres check, and access resolver, and exposes `getCombinedChangesSinceForUser`/`checkExternalDbChanges`/`persistSyncEvent` for reuse. `ddl-guard` helpers accept a `dialectIsPostgres` override so injected per-app clients get the guarded Postgres DDL path regardless of the process-global DB.
+  - The per-user access cache key now includes the active `orgId`, so a decision cached in one org is never reused under another org's session.
+  - Add `readMinSyncEventVersion()` (oldest retained durable version) for stale-cursor detection, and an opt-in `deterministicEventIds` mode so multiple processes detecting the same out-of-band write collapse to one durable row. Both off/unused by default.
+  - New public export subpaths: `./server/poll`, `./server/sse`, `./server/short-lived-token`.
+  - New realtime subscribe tokens: `signRealtimeSubscribeToken`/`verifyRealtimeSubscribeToken` — per-project HMAC key, identity-bearing claims (`owner`/`orgId` required), `projectId` channel binding, and a `typ` discriminator so they are not interchangeable with media tokens. Existing `signShortLivedToken`/`verifyShortLivedToken` are untouched.
+  - New session-gated, same-origin endpoint `GET /_agent-native/realtime-token` mounted by core-routes. Fail-closed: responds 404 unless the app is provisioned with a per-project signing secret (`AGENT_NATIVE_REALTIME_HMAC_SECRET`) and a Builder project id; responses are `Cache-Control: private, no-store`.
+  - New shared realtime wire protocol (`realtime-protocol.ts`, re-exported from `./server/sse`): named SSE `handshake`/`token` control frames; data/batch frames unchanged.
+  - Client transport (`useDbSync`/`subscribeSyncEvents`) gains an opt-in hosted-gateway mode, enabled only when the SSR config sets `realtime.transport = "hosted"` with an explicit gateway URL: token mint/rotation, jittered reconnects, and automatic health-gated fallback to the app's own `/poll` + `/events`. `onSseStateChange` callbacks now also receive the negotiated capability list (optional second parameter; existing callbacks are unaffected), which collab uses to keep its fast presence cadence on `no-awareness` streams.
+
+## 0.116.0
+
+### Minor Changes
+
+- 03a043e: Improve Agent Resources settings with contextual documentation links, cleaner file empty states, and file-name creation that defaults extensionless files to Markdown.
+- 03a043e: Add explicit collaboration access modes for resource-scoped and intentionally
+  deployment-wide authenticated documents, with legacy compatibility and Doctor
+  guidance for implicit configurations.
+- 03a043e: Add a catalog-driven in-chat MCP connection suggestion that recognizes Granola
+  and resumes the pending chat request after OAuth or direct connection setup.
+
+### Patch Changes
+
+- 03a043e: Expose the Google Drive workspace connection and provider API to Analytics for Google Sheets exports.
+- 03a043e: Make realtime voice the clear primary microphone action, remember the selected input mode, improve speech waveform responsiveness, and show a shine while the voice agent is working.
+- 03a043e: Prevent reasoning messages from losing their assistant UI provider, and add a progressively disclosed recent-chat rail for app sidebars.
+- 03a043e: Improve the MCP device authorization success message hierarchy by separating the confirmation title from the follow-up connection guidance.
+- 03a043e: Keep page-chat controls clear of messages, continue shared sync in background tabs at a relaxed cadence, and make the latest tool visibly active until the turn finishes.
+- 03a043e: Trim the MCP connection authorization page by removing redundant branding and status pills.
+- 03a043e: Make template feedback controls opt in through `VITE_AGENT_NATIVE_FEEDBACK_URL` so cloned apps do not send feedback to Agent Native by default.
+- 03a043e: Ensure interrupted or empty agent runs always end with a visible final response instead of a bare tool call.
+- 03a043e: Keep the active chat tab fully visible while the right sidebar opens and its tab strip expands.
+- Updated dependencies [03a043e]
+- Updated dependencies [03a043e]
+- Updated dependencies [03a043e]
+  - @agent-native/toolkit@0.9.1
+  - @agent-native/recap-cli@0.5.1
+
+## 0.115.4
+
+### Patch Changes
+
+- 2154ad1: Fix Builder preview credential relay failing behind a proxy. The relay handler now derives the request origin from `x-forwarded-host`/`x-forwarded-proto` (via `getBuilderBrowserOriginForEvent`) instead of the internal loopback host, so `targetOrigin` verification passes on hosted preview deployments.
+
+## 0.115.3
+
+### Patch Changes
+
+- a841109: Teach visual-plan agents to create and promote full-fidelity design surfaces without losing scoped CSS or duplicating an existing plan.
+
+## 0.115.2
+
+### Patch Changes
+
+- f0601ec: Collapse duplicate assistant tool-call ids in the shared agent loop so providers do not reject replayed tool-call history.
+
+## 0.115.1
+
+### Patch Changes
+
+- 321567c: Add `app-branding` and `app-permissions` to the default framework skill set. `app-branding` is layout-aware — it handles both the centralized `app/lib/app-config.ts` source-of-truth layout and the inlined layout where the name/title live across `package.json`, route `meta()`, and `app/root.tsx`. Generated apps using `frameworkSkills: "default"` now receive both skills on scaffold and `skills update`.
+
+## 0.115.0
+
+### Minor Changes
+
+- 0341a7d: Allow the published CLI to scaffold the hidden CRM template explicitly, and include factory-backed actions in production static registries.
+- 0341a7d: Pass trusted trigger automation lineage and a stored policy id to action runs.
+- 0341a7d: Add reusable per-app dashboard storage factories, bounded revision history, and provider-neutral panel source resolvers.
+- 0341a7d: Add Salesforce workspace connections and CRM reader metadata for template-owned integrations.
+
+### Patch Changes
+
+- 0341a7d: Allow hosted authenticated requests to use deployment-level transactional email configuration.
+- 0341a7d: Keep Netlify-hosted apps and their databases warm with site-local scheduled health checks.
+- 0341a7d: Prevent duplicate Thinking statuses and scroll bounce during streamed reasoning, while giving active tool rows a clear live state and new tool rows a subtle entrance.
+- 0341a7d: Require an explicit workspace connection when making Salesforce provider API requests, so each request uses a matched instance URL and OAuth account.
+- 0341a7d: Prevent model gateways from breaking extension edits by using a compact required update contract and normalizing optional placeholder arguments before validation.
+- 0341a7d: Fix Salesforce token refresh when configured with Consumer Key/Secret.
+- 0341a7d: Allow recurring jobs to bind an explicit MCP tool allowlist and resolve those connected capabilities with the job's existing user/org OAuth context.
+- 0341a7d: Teach the agent-native-docs skill to reuse node_modules reference source with rg and cp: version-matched installed source beats web docs, and every first-party template's corpus is fair game to copy and adapt, not just runtime internals that need the customizing-agent-native ladder.
+- 0341a7d: Make the missing-AI composer state visibly actionable with a Connect AI button.
+- Updated dependencies [0341a7d]
+  - @agent-native/toolkit@0.9.0
+
+## 0.114.16
+
+### Patch Changes
+
+- 3a3eb9a: Fix `npx @agent-native/core create` failing with `spawn tsx ENOENT`. The CLI launcher's tsx source fallback is now scoped to monorepo source checkouts, so installed packages always run the shipped `dist` build even when tarball extraction leaves `.ts` files newer than their compiled `.js`.
+
+## 0.114.15
+
+### Patch Changes
+
+- f8fe58b: Add `VISUAL_RECAP_REQUIRED_LABELS` so PR Visual Recap can run only when a pull request has an opt-in label.
+- Updated dependencies [f8fe58b]
+  - @agent-native/recap-cli@0.5.0
+
+## 0.114.14
+
+### Patch Changes
+
+- 8df32f6: Improve the integrations picker by removing dead discovery controls, clearly showing the available catalog size, and simplifying provider setup guidance.
+- 8df32f6: Add UTM attribution to Builder.io links opened from Agent Native.
+
+## 0.114.13
+
+### Patch Changes
+
+- 7112c17: Add portable transactional multi-key application-state compare-and-set operations, including atomic D1 batch support and missing-key creation for race-safe UI workflows.
+
+## 0.114.12
+
+### Patch Changes
+
+- 5c18906: Fix "Fix" button on runtime errors not opening agent chat for extensions embedded via `EmbeddedExtension` (e.g. dashboard panels).
+
+## 0.114.11
+
+### Patch Changes
+
+- b47a1b3: Add extension-data-set and extension-data-get agent actions for reading and writing extensionData from the agent side, with auto-refresh of mounted extension iframes after writes.
+
+## 0.114.10
+
+### Patch Changes
+
+- 687fefc: Capture unexpected HTTP action failures with request-correlated server diagnostics.
+- 687fefc: Capture uncategorized HTTP action failures through the configured server error monitor and correlate them with request telemetry.
+- 687fefc: Abort and retry model requests that produce no stream events within two minutes instead of hanging until run watchdogs fire.
+- 687fefc: Fix nullable organization scope parameters for remote integration stores.
+- 687fefc: Capture truncated, secret-scrubbed tool error text on generation telemetry when `captureToolResults` is enabled.
+- 687fefc: Distinguish ended agent-chat streams from true reconnect stalls in error monitoring and recovery messaging.
+- Updated dependencies [687fefc]
+  - @agent-native/recap-cli@0.4.7
+
+## 0.114.9
+
+### Patch Changes
+
+- fb32d85: Run configurable PR Visual Recap jobs with Bash on every runner platform.
+- Updated dependencies [fb32d85]
+  - @agent-native/recap-cli@0.4.6
+
+## 0.114.8
+
+### Patch Changes
+
+- dcd0810: Forward app-specific agent run no-progress timeouts through every interactive chat handler.
+- dcd0810: Add clear creation actions to empty resource views and improve collaboration usage feedback.
+- Updated dependencies [dcd0810]
+  - @agent-native/toolkit@0.8.2
+
+## 0.114.7
+
+### Patch Changes
+
+- b706848: Add r5 semantic chapter metadata and provenance-aware local Screen Memory search, publish a reusable Rewind skill whose installer also repairs the local Screen Memory MCP connection, and keep the standalone skills installer aligned.
+
+## 0.114.6
+
+### Patch Changes
+
+- 6d96437: Add clear creation actions to empty resource views and improve collaboration usage feedback.
+- Updated dependencies [6d96437]
+  - @agent-native/toolkit@0.8.1
+
+## 0.114.5
+
+### Patch Changes
+
+- 570be31: Skip visual recap publishing when the authoring agent does not produce recap source.
+- Updated dependencies [570be31]
+  - @agent-native/recap-cli@0.4.5
+
+## 0.114.4
+
+### Patch Changes
+
+- f3dcee3: Suppress provisional artifact warnings while delegated work is still running, and preserve verified Slack provenance for cross-app intake through an audience-scoped, fail-closed resolver.
+
+## 0.114.3
+
+### Patch Changes
+
+- c47eb50: fix(core): keep feature-flag definitions out of the browser server graph
+
+  App-shared config that imported feature-flag definitions from
+  `@agent-native/core/feature-flags` pulled the barrel's server re-exports
+  (`store` → `settings/store` → `db/client` → request telemetry) into the client
+  dev graph. Vite's dev server does not tree-shake, so the browser evaluated that
+  server chain and `request-telemetry`'s top-level `new AsyncLocalStorage()` threw
+  against the externalized `node:async_hooks` stub, breaking app load in dev
+  (production tree-shakes it away and was unaffected).
+  - Add a client-safe `@agent-native/core/feature-flags/registry` entry for
+    `defineFeatureFlag` / `defineFeatureFlags` / `registerFeatureFlags` so shared
+    config no longer imports the server barrel.
+  - Make `db/request-telemetry` and `settings/store` resolve `AsyncLocalStorage` /
+    `EventEmitter` lazily via `process.getBuiltinModule` (matching
+    `server/request-context`) instead of a top-level value import, so the modules
+    can be evaluated in any runtime without tripping the browser stub.
+  - Add a regression guard asserting the client-safe registry entry never reaches
+    the server layer and that those modules never statically value-import the
+    builtins.
+
+## 0.114.2
+
+### Patch Changes
+
+- 3253e1d: Teach generated agents to discover Toolkit capabilities before composing or ejecting shared features.
+
+## 0.114.1
+
+### Patch Changes
+
+- c913280: Keep action mutations pending until asynchronous success callbacks finish.
+- c913280: Allow email-password signup without email verification on Netlify deploy previews while preserving explicit verification overrides, and hold auth requests until their serverless routes finish mounting.
+- c913280: Fence incompatible cached browser clients from newer action backends and reload version-aware tabs with a cache-busted build.
+- c913280: Honor an explicit Personal context for users who also belong to organizations.
+
+## 0.114.0
+
+### Minor Changes
+
+- 8453025: Add manifest-driven feature ejection with dry-run planning, committed provenance, import rewrites, drift inspection, hash-gated restore, protected-runtime guidance, and complete first-party coverage guards.
+
+### Patch Changes
+
+- Updated dependencies [8453025]
+  - @agent-native/toolkit@0.8.0
+
+## 0.113.0
+
+### Minor Changes
+
+- e53a34e: Extract reusable Postgres search and embedding primitives into Core while preserving Creative Context imports.
+  The pgvector setup error now consistently says "Vector search" instead of the narrower "Visual search" wording.
+- e53a34e: Add reusable Google and Slack OAuth compatibility helpers, including Slack's Basic-auth token exchange, Gong lookup utilities, and SSRF-safe JSON webhook delivery with shared Slack escaping.
+- e53a34e: Add reusable provider API and staged dataset action factories, including opt-in custom provider registration and sanitized provider request audit summaries that narrow recorded audit metadata to safe request context.
+
+### Patch Changes
+
+- e53a34e: Add a subscription-only Claude Code participant runtime with enforced read-only and driver permissions.
+- e53a34e: Add a ChatGPT-subscription Codex CLI participant runtime with enforced read-only and driver sandboxes.
+- e53a34e: Add durable, fenced local state for compound multi-frontier runs.
+- e53a34e: Move the reusable ChatHistoryList and its stylesheet to the Toolkit chat-history entrypoint while preserving Core compatibility imports. Adopt it across first-party full-page chat sidebars, ship readable Toolkit source, and add generated-app guidance for selective app-owned UI customization.
+- e53a34e: Keep interrupted local Codex runs paused and resumable across every runner command.
+- e53a34e: Harden local Code run persistence and cancellation for the packaged desktop runner.
+- e53a34e: Harden local Code run and transcript persistence with atomic replacements and idempotent events.
+- e53a34e: Persist bounded, redacted Desktop multi-frontier orchestration state for safe recovery.
+- Updated dependencies [e53a34e]
+  - @agent-native/toolkit@0.7.0
+
+## 0.112.0
+
+### Minor Changes
+
+- 6acaad0: Extract reusable Postgres search and embedding primitives into Core while preserving Creative Context imports.
+  The pgvector setup error now consistently says "Vector search" instead of the narrower "Visual search" wording.
+
+### Patch Changes
+
+- 6acaad0: Add durable, fenced local state for compound multi-frontier runs.
+- 6acaad0: Harden local Code run persistence and cancellation for the packaged desktop runner.
+
+## 0.111.4
+
+### Patch Changes
+
+- 2f61097: Re-scan installed package exports after dependency installation before applying manifest import migrations.
+
+## 0.111.3
+
+### Patch Changes
+
+- 7843f92: Apply active import migrations to starter-owned source and install newly introduced migration dependencies before rewriting imports.
+
+## 0.111.2
+
+### Patch Changes
+
+- 736d8b0: Trim non-English reference locales from the published source corpus.
+
+## 0.111.1
+
+### Patch Changes
+
+- 1a0a0af: Rename the "Agent workspace" surface to "Manage agent" and the agent panel "Workspace" tab to "Resources"
+
+## 0.111.0
+
+### Minor Changes
+
+- 01a3f27: BREAKING: move the portable composer, rich editor, collaboration display, visual controls, and shared UI primitives to focused Toolkit entrypoints. Core's removed deep compatibility paths now throw an actionable migration error, and moved symbols are removed from the legacy `@agent-native/core/client` barrel. Run `npx @agent-native/core@latest upgrade --codemods --yes` to rewrite supported imports. Framework-wired composer APIs remain available from `@agent-native/core/client/composer`; bare reusable composer UI is available from `@agent-native/toolkit/composer`.
+
+### Patch Changes
+
+- Updated dependencies [01a3f27]
+  - @agent-native/toolkit@0.6.0
+
+## 0.110.3
+
+### Patch Changes
+
+- 168ce2f: Keep the framework-wired Context X-Ray panel on its existing Core entrypoint instead of suggesting an incompatible Toolkit view migration.
+
+## 0.110.2
+
+### Patch Changes
+
+- b3f04e7: Correct the prepublished registry editor migration so the framework-wired data provider remains on Core's blocks entry.
+
+## 0.110.1
+
+### Patch Changes
+
+- 8ed242f: Prepublish the complete planned composer and editor migration map so Doctor and upgrade codemods can guide apps before the breaking package flip.
+
+## 0.110.0
+
+### Minor Changes
+
+- 079e19a: Add focused client entrypoints, lazy built-in chat widgets, explicit route-chunk recovery initialization, and manifest-driven `upgrade --codemods` and doctor preflight infrastructure for upcoming package moves.
+
+### Patch Changes
+
+- Updated dependencies [079e19a]
+  - @agent-native/toolkit@0.5.1
+
+## 0.109.4
+
+### Patch Changes
+
+- b6d7f87: Move portable rich-editor, context presentation, and visual design controls into Toolkit while preserving Core compatibility re-exports, and add accurate side-effect metadata to capability packages.
+- Updated dependencies [b6d7f87]
+  - @agent-native/toolkit@0.5.0
+
+## 0.109.3
+
+### Patch Changes
+
+- 5199e0b: Make Chat the first and default starting point in the new-app CLI picker.
+- 5199e0b: Track browser, server, cold-start, framework-readiness, and database latency for app requests; retain action 4xx failures; parallelize legacy route bootstrap reads; and deduplicate session lookups without treating transient auth failures as signed-out sessions.
+- 5199e0b: Deliver remote-session Expo push notifications through a retrying, batched outbox worker and verify provider receipts before marking delivery complete.
+
+## 0.109.2
+
+### Patch Changes
+
+- 915c940: Allow HTML diagrams to opt into clean design rendering without the rough.js overlay.
+- 915c940: Preserve stubbed optional package imports and package subpaths when bundling Cloudflare Pages workers.
+
+## 0.109.1
+
+### Patch Changes
+
+- d74a5a4: Return retryable responses for transient agent-chat database failures and back off active-run polling while the database recovers.
+- d74a5a4: Add bounded per-tool generation telemetry, delegated trace linkage, direct-read telemetry, and idempotent A2A submissions.
+
+## 0.109.0
+
+### Minor Changes
+
+- 6cd2c79: Add audience-bound direct invocation for explicitly exposed read-only actions so sibling apps can skip a second agent loop for bounded data operations.
+  Add shared Slack and Notion corpus recipes so cursor pagination runs inside one resumable data operation instead of one model turn per page.
+
+### Patch Changes
+
+- 6cd2c79: Prevent cross-turn chat stream splicing and link browser sessions and session replays to agent-chat threads and runs.
+- 6cd2c79: Resume existing A2A tasks after bounded waits so cross-app agents do not duplicate long-running work.
+- 6cd2c79: Make progress tracking tolerate blank optional status fields, make extension replacement guard errors retryable when the explicit intent flag is missing, expose extension readiness callbacks for host loading states, show the underlying repeated tool error in agent stop messages, and avoid MCP connection suggestions based on hidden tool payloads.
+- 6cd2c79: Show image attachments in queued agent chat messages.
+- 6cd2c79: Open shared chat-thread links in the matching full-page chat or agent sidebar.
+- 6cd2c79: Ignore stackless stale module-loader failures that are handled by route-chunk recovery instead of creating noisy error issues.
+- 6cd2c79: Keep long agent-chat tool histories compact by collapsing older calls behind a "Ran N tools" disclosure.
+- 6cd2c79: Show chat run durations in work summaries and animate their content when opening.
+
+## 0.108.0
+
+### Minor Changes
+
+- 1db27df: Add shared default-off feature flags with server-side targeting, versioned Analytics fleet-management actions, narrowly delegated A2A access, and reusable controlled editor primitives.
+
+## 0.107.2
+
+### Patch Changes
+
+- 2a4d2db: Retry messaging replies without repeating successful agent mutations, and deliver verified A2A artifact checkpoints as soon as they are durable.
+
+## 0.107.1
+
+### Patch Changes
+
+- 8e0afec: Preserve chat continuation context after stale background workers and make Stop durable before a serverless run id exists.
+- 8e0afec: Offer the Figma REST API personal access token fallback when Figma MCP links are restricted.
+- 8e0afec: Add a practical guide for organization context, team roles, resource permissions, RBAC, and framework environment variables.
+- 8e0afec: Keep empty full-page chat navigation from automatically opening the AgentSidebar.
+- 8e0afec: Keep the share popover open while adding people and preserve unfinished invite emails when it is reopened.
+
+## 0.107.0
+
+### Minor Changes
+
+- 149c0ee: Expand the remote MCP directory with audited provider metadata and brand logos, and expose connected MCP/provider API actions to sandboxed extensions without leaking credentials.
+
+### Patch Changes
+
+- 149c0ee: Add governed creative-context sharing, host-backed native clone actions, and a reusable organization-admin permission helper.
+- 149c0ee: Add a practical guide for organization context, team roles, resource permissions, RBAC, and framework environment variables.
+- 149c0ee: Ensure Office, PowerPoint, and PDF dependencies are bundled into serverless deployments and reject broken Netlify ingestion artifacts.
+- 149c0ee: Harden agent composer dictation cleanup when sending live text and add sentence punctuation and spacing between dictated segments.
+
+## 0.106.3
+
+### Patch Changes
+
+- 10fb9f4: Preserve durable `ask_app` task handles and return retryable status-read details when transient polling transport failures outlast bounded retries.
+
+## 0.106.2
+
+### Patch Changes
+
+- 7fb8e89: Return a verified artifact receipt when an integration mutation succeeds without a final model summary.
+
+## 0.106.1
+
+### Patch Changes
+
+- 0d8118e: Allow review comment composers to render a custom agent action in the standard action row, choose the Enter-key submit target, and atomically compare-and-set application state for race-safe UI workflows.
+
+## 0.106.0
+
+### Minor Changes
+
+- a485fbe: Add the Creative Context package for importing, versioning, searching, and reusing workspace decks, designs, assets, websites, and content across creative apps.
+
+  Expose reusable ingestion, prompt-context provider, and search utility seams from core for package-driven creative context.
+
+  Includes bounded image-region cropping for durable localized creative-context fallbacks.
+
+- a485fbe: Add one-click OAuth connections for standard remote MCP servers and shared workspace providers, including GitHub, Figma, Google Drive, HubSpot, Jira Cloud, Notion, and Sentry. OAuth credentials are encrypted and refreshed per user or organization without exposing tokens to browsers or MCP App iframes. Existing API-key and token credentials remain available as explicit fallbacks, and provider API requests can use an OAuth-backed workspace connection.
+- a485fbe: Redesign the agent workspace with plain files first, dedicated resource collections, and a snapshots view for recent context inspection.
+- a485fbe: Add public session replay context and timestamped Analytics links, support host-owned tracking identity, and allow Analytics replay pages to open at a requested timeline offset.
+
+### Patch Changes
+
+- a485fbe: Fail serverless builds that bundle Vitest test runtime code into production SSR output.
+- a485fbe: Disable app-shell transitions across the shared AgentSidebar subtree while the sidebar is being resized.
+- a485fbe: Count explicitly failed action tool events as errors in observability traces and summaries even when their result text does not start with `Error`.
+- a485fbe: Fix managed Slack OAuth to resolve scoped app credentials within the signed-in request context.
+- a485fbe: Show a skeleton while the agent chat model picker is loading its provider and model list.
+- a485fbe: Render dashboard, form, and other resource context as a normal composer chip instead of a scoped-chat badge and history partition.
+- a485fbe: Protect existing extension visual design during data-only repairs by requiring explicit intent for full-body replacements, stop deterministic edit failures before the agent retries the same arguments, and resume cleanly when a provider closes while an action input is still being assembled.
+- a485fbe: Teach Plan agents to fence destructive edits against fresh plan revisions and verify persisted content before closing feedback.
+- a485fbe: Inline `AgentChatSurface` and `AgentChatHome` instances now hide the legacy Chat/Workspace header and chat tab row by default.
+- a485fbe: Share package-registered actions across runtime module instances and mount them alongside explicit app action registries.
+- a485fbe: Hide sidebar chat tabs until a second chat is open so a lone chat does not show a “New chat” tab.
+- a485fbe: Re-enable the sticky 80/20 Sonnet 5 versus GPT-5.6 Luna default-model experiment across first-party hosted templates.
+- a485fbe: Avoid repeated desktop sidebar width transitions while the agent sidebar is being resized.
+- a485fbe: Prevent duplicate recovery submissions and reject late worker events after an agent run has already reached a terminal state.
+- Updated dependencies [a485fbe]
+  - @agent-native/recap-cli@0.4.4
+
+## 0.105.0
+
+### Minor Changes
+
+- 9f2f7a7: Add the Creative Context package for importing, versioning, searching, and reusing workspace decks, designs, assets, websites, and content across creative apps.
+
+  Expose reusable ingestion, prompt-context provider, and search utility seams from core for package-driven creative context.
+
+  Includes bounded image-region cropping for durable localized creative-context fallbacks.
+
+- 9f2f7a7: Redesign the agent workspace with plain files first, dedicated resource collections, and a snapshots view for recent context inspection.
+- 9f2f7a7: Add public session replay context and timestamped Analytics links, support host-owned tracking identity, and allow Analytics replay pages to open at a requested timeline offset.
+
+### Patch Changes
+
+- 9f2f7a7: Fail serverless builds that bundle Vitest test runtime code into production SSR output.
+- 9f2f7a7: Disable app-shell transitions across the shared AgentSidebar subtree while the sidebar is being resized.
+- 9f2f7a7: Count explicitly failed action tool events as errors in observability traces and summaries even when their result text does not start with `Error`.
+- 9f2f7a7: Fix managed Slack OAuth to resolve scoped app credentials within the signed-in request context.
+- 9f2f7a7: Render dashboard, form, and other resource context as a normal composer chip instead of a scoped-chat badge and history partition.
+- 9f2f7a7: Protect existing extension visual design during data-only repairs by requiring explicit intent for full-body replacements, stop deterministic edit failures before the agent retries the same arguments, and resume cleanly when a provider closes while an action input is still being assembled.
+- 9f2f7a7: Teach Plan agents to fence destructive edits against fresh plan revisions and verify persisted content before closing feedback.
+- 9f2f7a7: Inline `AgentChatSurface` and `AgentChatHome` instances now hide the legacy Chat/Workspace header and chat tab row by default.
+- 9f2f7a7: Share package-registered actions across runtime module instances and mount them alongside explicit app action registries.
+- 9f2f7a7: Hide sidebar chat tabs until a second chat is open so a lone chat does not show a “New chat” tab.
+- 9f2f7a7: Re-enable the sticky 80/20 Sonnet 5 versus GPT-5.6 Luna default-model experiment across first-party hosted templates.
+- 9f2f7a7: Avoid repeated desktop sidebar width transitions while the agent sidebar is being resized.
+- 9f2f7a7: Prevent duplicate recovery submissions and reject late worker events after an agent run has already reached a terminal state.
+- Updated dependencies [9f2f7a7]
+  - @agent-native/recap-cli@0.4.3
+
+## 0.104.0
+
+### Minor Changes
+
+- 2625de5: Add the Creative Context package for importing, versioning, searching, and reusing workspace decks, designs, assets, websites, and content across creative apps.
+
+  Expose reusable ingestion, prompt-context provider, and search utility seams from core for package-driven creative context.
+
+  Includes bounded image-region cropping for durable localized creative-context fallbacks.
+
+- 2625de5: Redesign the agent workspace with plain files first, dedicated resource collections, and a snapshots view for recent context inspection.
+- 2625de5: Add public session replay context and timestamped Analytics links, support host-owned tracking identity, and allow Analytics replay pages to open at a requested timeline offset.
+
+### Patch Changes
+
+- 2625de5: Disable app-shell transitions across the shared AgentSidebar subtree while the sidebar is being resized.
+- 2625de5: Count explicitly failed action tool events as errors in observability traces and summaries even when their result text does not start with `Error`.
+- 2625de5: Fix managed Slack OAuth to resolve scoped app credentials within the signed-in request context.
+- 2625de5: Render dashboard, form, and other resource context as a normal composer chip instead of a scoped-chat badge and history partition.
+- 2625de5: Protect existing extension visual design during data-only repairs by requiring explicit intent for full-body replacements, stop deterministic edit failures before the agent retries the same arguments, and resume cleanly when a provider closes while an action input is still being assembled.
+- 2625de5: Teach Plan agents to fence destructive edits against fresh plan revisions and verify persisted content before closing feedback.
+- 2625de5: Inline `AgentChatSurface` and `AgentChatHome` instances now hide the legacy Chat/Workspace header and chat tab row by default.
+- 2625de5: Share package-registered actions across runtime module instances and mount them alongside explicit app action registries.
+- 2625de5: Keep sidebar chat tabs visible in the header and place them beside the new-chat, options, and close controls.
+- 2625de5: Re-enable the sticky 80/20 Sonnet 5 versus GPT-5.6 Luna default-model experiment across first-party hosted templates.
+- 2625de5: Avoid repeated desktop sidebar width transitions while the agent sidebar is being resized.
+- 2625de5: Prevent duplicate recovery submissions and reject late worker events after an agent run has already reached a terminal state.
+- Updated dependencies [2625de5]
+  - @agent-native/recap-cli@0.4.2
+
+## 0.103.1
+
+### Patch Changes
+
+- f512fd2: Keep Cloudflare template builds deployable when browser-only editor and chat packages import input-rule and message-part runtime helpers.
+
+## 0.103.0
+
+### Minor Changes
+
+- 0af0783: Let Content connect manifest-declared local folders to its normal database-backed workspace without enabling a separate local-file data mode.
+
+## 0.102.2
+
+### Patch Changes
+
+- 76a9cca: Improve MCP connection status and make provider connection errors actionable.
+- 76a9cca: Keep queued chat follow-ups draining after fast turns and route cross-origin Assets pickers through a top-level sign-in-safe handoff.
+- 76a9cca: Recover the Agent panel when a stale lazy-loaded chat chunk fails to load.
+- 76a9cca: Keep the Builder source-change handoff card visible outside the collapsed chat work summary.
+
+## 0.102.1
+
+### Patch Changes
+
+- ab33ae7: Make the Agent Files tab taller and viewport-responsive, and let file previews fill the panel height with natural scrolling.
+
+## 0.102.0
+
+### Minor Changes
+
+- 6498492: Add the Tasks template app — a task-list-first agent-native workspace with inbox triage, custom fields, and full action parity for UI and agent.
+
+## 0.101.14
+
+### Patch Changes
+
+- 866d8f0: Bundle the Chat template in the CLI package and download GitHub fallbacks directly from codeload for faster, more reliable scaffolding.
+- 866d8f0: Polish the chat sidebar header by hiding mode tabs and moving full-view navigation into the icon row.
+
+## 0.101.13
+
+### Patch Changes
+
+- e503433: Keep CLI repository downloads asynchronous and challenge bare loopback MCP URLs for OAuth clients.
+- e503433: Keep completed chat work disclosures collapsed and stable when submitting a later message.
+- e503433: Remove the automatic first-session personalization questions from agent chat so new requests are handled directly.
+
+## 0.101.12
+
+### Patch Changes
+
+- 2ff004e: Fix workspace-file resolution and run-code paging/routing edge cases. `contentFromWorkspaceFile` now resolves the same file the run-code `workspaceRead`/`workspaceWrite` bridge sees (bridge scope first, then Resources), and fails closed on a bridge read error instead of silently falling back to a possibly-different same-path Resources body. `workspaceRead` returns null instead of a silently truncated prefix when a later page fails, and the run-code bridge now returns a distinct "not registered" (404) error for unknown tools instead of a misleading read-only access error.
+
+## 0.101.11
+
+### Patch Changes
+
+- fd0ddb8: Wait for agent-card and A2A routes to finish initializing on cold starts, preserve human approval gates across A2A tasks, and carry exact one-time chat authorization through authenticated agent delegation.
+
+## 0.101.10
+
+### Patch Changes
+
+- 3453dd3: Allow review hosts to attach a composer target, anchor, metadata, and visible context while independently controlling agent dispatch, and keep comment-only composers human-routed.
+
+## 0.101.9
+
+### Patch Changes
+
+- bc29c82: Retry visual recap publishing once with a focused source-repair turn when the hosted Plan parser rejects malformed MDX.
+- Updated dependencies [bc29c82]
+  - @agent-native/recap-cli@0.4.1
+
+## 0.101.8
+
+### Patch Changes
+
+- b023dad: Keep Builder account connection available when an app does not configure the separate Builder branch-creation capability, and describe preview relay setup failures before authorization accurately.
+- b023dad: Show Builder connection setup in Settings and use a content-blocker-safe status route.
+- b023dad: Relay Builder authorization securely from an approved callback deployment into an exact allowlisted, immutable preview origin, with deploy-specific Netlify permalinks, a 32+ character shared HMAC secret, and bounded relay request bodies.
+
+## 0.101.7
+
+### Patch Changes
+
+- 70caa6f: Preserve participant-visible integration replies and verified artifact identities so threaded corrections can reliably target resources after renames.
+
+## 0.101.6
+
+### Patch Changes
+
+- dd47e0a: Clarify how to add a UI later while preserving a headless app's shared action and data contract.
+
+## 0.101.5
+
+### Patch Changes
+
+- 9dd88f4: Opt the dedicated `get-code-execution` and `refresh-screen` volatile reads out of the duplicate read-only tool-call guard via the new `dedupe: false` action option while retaining default duplicate protection for normal `run-code` executions. Also raise `get-extension` and `get-extension-history-version` result caps to 500,000 and 2,000,000 characters respectively so JSON serialization overhead cannot slice mid-content and corrupt source reads for large extensions or their history.
+- 9dd88f4: Prevent repeated read-only tool loops while preserving trimmed results, allow volatile reads to opt out of deduping, and enforce notification webhook allowlists at the scope that supplied each secret.
+
+## 0.101.4
+
+### Patch Changes
+
+- 7d72df1: Keep chat responsive while replaying dense agent event bursts, and surface safe cancellation when a live background run has gone quiet.
+- 7d72df1: Bundle one complete Yjs runtime into serverless deploy output so SSR starts without missing named exports.
+
+## 0.101.3
+
+### Patch Changes
+
+- 7cfb087: Keep centered chat composer skeletons aligned with the real composer while the chat UI loads.
+- 7cfb087: Document PR Visual Recap's cost drivers and cheaper model options (`claude-haiku-4-5`, `gpt-5.6-luna`/`gpt-5.6-terra`, `openai-compatible` providers), and note that the Claude backend now defaults to `claude-sonnet-5` when `VISUAL_RECAP_MODEL` is unset. Adds a matching cost/model-choice section to the Visual Plans template doc.
+- 7cfb087: Fail closed when first-party scaffolds cannot be downloaded from the CLI's immutable core version tags instead of mixing newer templates with an older runtime.
+- 7cfb087: Resolve `${keys.NAME}` in the agent fetch tool and notification webhooks through the request-scope cascade so Dispatch-vault keys scoped to the workspace/org resolve like they already do for extensions and automations.
+- 7cfb087: Resolve provider credentials from encrypted Dispatch vault secrets, keep hosted A2A agent discovery distinct from mounted workspace app inventory, and run long Analytics A2A tasks on the durable background worker.
+- 7cfb087: Expose the embedded OG font resolver so template social images keep their text visible in serverless runtimes.
+- 7cfb087: Stop agent turns from looping across alternating read-only docs and source search tools.
+- 7cfb087: Publish PR Visual Recap helpers as a dependency-light CLI package so recap workflows no longer install the full Agent-Native framework dependency graph.
+- 7cfb087: Derive workspace-shared secret encryption material from A2A_SECRET on hosted workspace deploys so vault keys decrypt across sibling apps, and stop serving stale shared ciphertext after a value is updated without shared key material.
+- Updated dependencies [7cfb087]
+- Updated dependencies [7cfb087]
+- Updated dependencies [7cfb087]
+  - @agent-native/recap-cli@0.4.0
+
+## 0.101.2
+
+### Patch Changes
+
+- 616e2b9: Copying an assistant message now preserves formatting when pasting into apps
+  that read rich clipboard content (e.g. Slack), while still pasting as markdown
+  in editors like Notion. Falls back to plain-text copy where the browser does
+  not support rich clipboard writes.
+
+## 0.101.1
+
+### Patch Changes
+
+- f25194e: Keep centered chat composer skeletons aligned with the real composer while the chat UI loads.
+- f25194e: Document PR Visual Recap's cost drivers and cheaper model options (`claude-haiku-4-5`, `gpt-5.6-luna`/`gpt-5.6-terra`, `openai-compatible` providers), and note that the Claude backend now defaults to `claude-sonnet-5` when `VISUAL_RECAP_MODEL` is unset. Adds a matching cost/model-choice section to the Visual Plans template doc.
+- f25194e: Fail closed when first-party scaffolds cannot be downloaded from the CLI's immutable core version tags instead of mixing newer templates with an older runtime.
+- f25194e: Expose the embedded OG font resolver so template social images keep their text visible in serverless runtimes.
+- f25194e: Stop agent turns from looping across alternating read-only docs and source search tools.
+- f25194e: Publish PR Visual Recap helpers as a dependency-light CLI package so recap workflows no longer install the full Agent-Native framework dependency graph.
+- Updated dependencies [f25194e]
+- Updated dependencies [f25194e]
+- Updated dependencies [f25194e]
+  - @agent-native/recap-cli@0.3.0
+
+## 0.101.0
+
+### Minor Changes
+
+- fb281f4: Export first-class A2A auth primitives for the HTTP action route so workspaces
+  stop reaching into core internals:
+  - `verifyA2AToken` (and `A2ATokenPayload`) from `@agent-native/core/a2a` — the
+    same verifier the `/_agent-native/a2a` endpoint uses, including org-level
+    fallback secrets. Apps no longer need to reimplement a partial HS256 verifier.
+  - `AGENT_RUN_OWNER_CONTEXT_KEY`, `seedAgentRunOwnerContext`, and
+    `AgentRunOwnerContext` from `@agent-native/core/server` — a typed contract for
+    pre-seeding the resolved caller, replacing the hardcoded context-key string.
+  - A new `actionRouteAuth` option on `createAgentChatPlugin` (and `ActionRouteAuthAdapter`
+    / `actionRouteAuth` on `mountActionRoutes`). Its `resolveCaller` runs before
+    the `getSession` chain on `/_agent-native/actions/*`, letting apps accept A2A
+    JWTs declaratively instead of intercepting Nitro's `request` hook. Returning
+    `null` defers to the existing framework auth chain; throwing hard-rejects the
+    request with a 401 so an invalid credential can't fall through to a
+    same-origin session cookie. A resolved caller's org comes exclusively from
+    the verified credential — the adapter-returned `orgId`
+    (`ActionRouteResolvedCaller`) or the owner-email membership lookup — never
+    from ambient session/org cookie state, so a request carrying both a valid
+    A2A bearer and an unrelated browser cookie can't execute under the cookie
+    user's org. A2A writes stay org-scoped.
+
+  All additive — existing callers are unaffected.
+
+## 0.100.4
+
+### Patch Changes
+
+- f2ed084: Add public-safe review reads and client gating, root-thread agent routing, durable resolution notes, and capability-aware review panels.
+
+## 0.100.3
+
+### Patch Changes
+
+- a6742d1: Publish PR Visual Recap helpers as a dependency-light CLI package so recap workflows no longer install the full Agent-Native framework dependency graph.
+- Updated dependencies [a6742d1]
+  - @agent-native/recap-cli@0.2.0
+
+## 0.100.2
+
+### Patch Changes
+
+- f8cf755: Add a native local-runtime sign-in handoff for Codex-backed ChatGPT subscriptions in Agent composer surfaces.
+- f8cf755: Fix Slack integration fallbacks and link replies directly to Dispatch chat threads.
+- f8cf755: Keep workspace-shared app secrets decryptable across sibling apps.
+
+## 0.100.1
+
+### Patch Changes
+
+- 037cc3a: Validate explicit Calendar and Mail connector catalog actions through the external MCP lifecycle.
+
+## 0.100.0
+
+### Minor Changes
+
+- 8e6f022: Add an Agent Jobs page tab for recurring jobs and personal automations, with scoped status views and management controls.
+- 8e6f022: Add the full-page Agent surface with scoped Context, Files, Connections, Jobs, and Access tabs, plus shared MCP connection guidance.
+- 8e6f022: Expose system-prompt sections in Context X-Ray and add a no-thread context preview with provenance, governance, and token breakdowns.
+
+### Patch Changes
+
+- 8e6f022: Document the full-page Agent surface, its tab responsibilities, and the in-app external-client Access flow.
+- 8e6f022: Align fullscreen chat thread width with the composer width.
+- 8e6f022: Preserve the registered root Google OAuth callback for workspace apps when deploy-time workspace metadata is available but a runtime relay flag is missing.
+- 8e6f022: Recover reasoning-only model completions before app-specific final-answer guards run, and keep guards anchored to the original user request across internal continuations.
+
+## 0.99.3
+
+### Patch Changes
+
+- 03cd25c: Document the `agent-native invoke` CLI usage and flags on the A2A protocol docs page, across all locales.
+
+## 0.99.2
+
+### Patch Changes
+
+- 34b4f29: Keep Demo mode browser-local so backend actions and agent/MCP results retain real access-scoped data.
+- 34b4f29: Fix 404s when client-side navigating from the dispatch shell into a mounted workspace sub-app's root route. React Router's `.data` loader-fetch convention (e.g. `/coach.data`) didn't match either deployment platform's per-app routing rules (`basePath` / `basePath/*`), so the request fell through to a bare 404 before reaching the app's own server, leaving the sub-app stuck retrying its own action/agent-chat calls afterward.
+- 34b4f29: Keep the latest reasoning thought expanded until a newer thought arrives, then animate the previous thought closed.
+- 34b4f29: Preserve native browser link behavior when opening embedded extensions in their full view.
+- 34b4f29: Keep chat composers editable while AI provider readiness is loading.
+- 34b4f29: Record framework-owned Design preview iframes in session replays with the same privacy masking as the host page.
+- 34b4f29: Remove the extension viewer's View / edit source button.
+- 34b4f29: Retry transient chat-thread database failures so completed agent responses are not surfaced as unsaved.
+
+## 0.99.1
+
+### Patch Changes
+
+- 7effaba: Ignore malformed collaboration presence payloads and keep recoverable server chat timeout handoffs out of Sentry error issues.
+- 7effaba: Fix mounted app auth and OAuth URL resolution when Vite build-time base paths are not present in the runtime environment.
+- 7effaba: Make delegated agent retries and agent-team runs use the model-aware output budget, so MCP/A2A investigations and background sub-agents can reach real data tools across model families.
+- Updated dependencies [7effaba]
+  - @agent-native/toolkit@0.4.10
+
+## 0.99.0
+
+### Minor Changes
+
+- 3c3a59d: Return durable task handles for long-running MCP agent requests and expose
+  grant-checked status polling instead of holding one MCP tool call open for the
+  full agent run.
+
+### Patch Changes
+
+- 3c3a59d: Add Atlassian Rovo MCP to the built-in integration catalog with Jira setup guidance.
+- 3c3a59d: Keep delegated A2A agent runs aligned with interactive prompt context and request-scoped browser access.
+- 3c3a59d: Keep anonymous SSR shells long-cacheable across hosting providers and keep viewer-specific data on client/API paths.
+- 3c3a59d: Add `/mcp` as the canonical public MCP URL while preserving `/_agent-native/mcp` for existing clients.
+
+## 0.98.17
+
+### Patch Changes
+
+- 7bc381d: Preserve the authenticated owner context when delegated A2A agent runs are reconstructed by the processor.
+
+## 0.98.16
+
+### Patch Changes
+
+- cc35446: Resolve the authenticated owner's active provider key for A2A and MCP ask-agent runs, matching the interactive chat engine path.
+
+## 0.98.15
+
+### Patch Changes
+
+- 2161d10: Preserve streamed tool calls when an engine omits its normalized assistant-content event so delegated and MCP agent runs can still execute requested actions.
+
+## 0.98.14
+
+### Patch Changes
+
+- 460583e: Run final-response guards even when an engine completes with streamed text but no normalized assistant-content event.
+
+## 0.98.13
+
+### Patch Changes
+
+- c61d923: Keep delegated A2A and MCP agent turns explicitly bound to the authenticated owner/org scope and Act execution mode.
+
+## 0.98.12
+
+### Patch Changes
+
+- 29a77ab: Keep MCP-local `ask_app` turns on the same app-level final-response guard as A2A turns.
+
+## 0.98.11
+
+### Patch Changes
+
+- 3a4b613: Fall back to the portable A2A processor when a configured durable background worker rejects a task dispatch, and allow apps to explicitly opt out of stale deploy-wide background flags.
+- 3a4b613: Preserve structured payloads from read-only MCP actions so external agents can inspect detailed records and replay data directly.
+- 3a4b613: Preserve unset durable-background configuration and make A2A fallback dispatches reliable when the background worker is unavailable.
+
+## 0.98.10
+
+### Patch Changes
+
+- 079713c: Fall back to the portable A2A processor when a configured durable background worker rejects a task dispatch, and allow apps to explicitly opt out of stale deploy-wide background flags.
+- 079713c: Preserve structured payloads from read-only MCP actions so external agents can inspect detailed records and replay data directly.
+
+## 0.98.9
+
+### Patch Changes
+
+- 944c202: Preserve structured payloads from read-only MCP actions so external agents can inspect detailed records and replay data directly.
+
+## 0.98.8
+
+### Patch Changes
+
+- 2065b5e: Deliver integration identity notices through the durable webhook queue, fail closed for anonymous Slack direct messages unless explicitly enabled, preserve verified identity through transient re-hydration failures, redact signed object URLs from replays, and bound retryable replay upload failures.
+
+## 0.98.7
+
+### Patch Changes
+
+- b94940e: Keep replay recording recoverable across transient upload failures and tab races, preserve object resources, and prevent late A2A workers from overwriting terminal task states.
+
+## 0.98.6
+
+### Patch Changes
+
+- c4bb9ee: Add an opt-in authenticated-read MCP policy that automatically exposes explicitly safe GET actions while keeping external writes behind `ask_app`. Generic SQL stays out of that automatic surface.
+
+  The `authenticatedReads: "auto"` derivation now also applies a hard, name-based exclusion for generic database (`db-query`/`db-schema`/`db-exec`/`db-patch`), template `seed-*`, extension-management, browser-session, and Context X-Ray actions, so they can never be auto-exposed even if one is mis-annotated with the full authenticated-read flag set — only an explicit `connectorCatalog` entry can expose them.
+
+- c4bb9ee: Bound queued and processing A2A task lifetimes, preserve asynchronous dispatch semantics, and fail unrecoverable handoffs deterministically.
+- c4bb9ee: Slack identity lookups no longer cache a failed users.info result for the full 10-minute TTL. Transient Slack API failures now use a short 30-second negative cache, so a brief blip cannot fail-close a sender's identity (and their DMs) for 10 minutes.
+- c4bb9ee: Run verified Slack direct messages with the linked Agent Native user's organization-scoped identity while keeping shared-channel messages service-scoped and rejecting unverified, guest, external, or cross-organization identities.
+
+## 0.98.5
+
+### Patch Changes
+
+- 10dc602: Keep session replay upload backlogs within byte and event caps, and safely split server-rejected oversized batches without losing or duplicating events.
+- 10dc602: Collapse completed reasoning segments into timed thought disclosures while keeping the active thought expanded.
+- 10dc602: Use `anonymous@builder.io` for every email address anonymized by Demo mode.
+- 10dc602: Keep long agent responses visibly active across automatic continuations, reliably follow streamed output until the user scrolls away, and default unsafe regular-function self-chaining off on hosted deployments (opt back in with `AGENT_CHAT_FOREGROUND_SELF_CHAIN`).
+- 10dc602: Use Claude Haiku 4.5's supported manual thinking budget instead of sending the unsupported adaptive-thinking request.
+- 10dc602: Capture framework-owned iframe content and interactions in browser session replays.
+- 10dc602: Fix a durable-background chat turn dying mid-sentence with no recovery: `/runs/active` now prefers a live successor over a stale in-memory terminal run, a hung first model-stream event checkpoints within 25s instead of riding the full 90s watchdog past the foreground platform kill, and the stale-run reapers now insert a claimable recovery successor (instead of leaving the turn dead) when a background worker dies silently.
+- 10dc602: Stop assigning first-party hosted app users between Sonnet and Luna so default model selection follows the normal engine configuration.
+- 10dc602: Also skip demo-mode number redaction on session replay manifest requests, alongside the existing chunk/event payload skip, so replay geometry and pointer data can never be faked at view time.
+- 10dc602: Fixed a bug where a long-running background agent turn could flip the chat to a finished state mid-turn: if the client re-polled a chunk's terminal run row before its server-chained successor became visible, it now keeps following instead of prematurely completing the message. Background runs that die between chunks now get a short grace window to recover onto a claimable successor before surfacing an error, and the "Resuming…" indicator stays warm while the client waits, so the UI never drops into a false-idle state during the handoff.
+- 10dc602: Widen centered full-page Ask and Chat composers by 20% while keeping their responsive viewport cap.
+
+## 0.98.4
+
+### Patch Changes
+
+- 1137302: Keep session replay identities isolated per browser tab so recordings from
+  concurrent or duplicated tabs cannot be merged into a corrupt replay. Preserve
+  signed DOM stylesheet, font, image, and other load-bearing resource URLs while
+  continuing to redact navigation and diagnostic URL secrets. Recover long-lived
+  tabs from replay upload identity conflicts by restarting once with a fresh
+  snapshot, and report the content-free recovery outcome to Analytics.
+  Stabilize Dispatch's deferred-navigation behavior under test-runner load.
+- 1137302: Keep demo-mode session replay playback fast by bypassing raw event payload redaction while still anonymizing email-backed frontend identities.
+
+## 0.98.3
+
+### Patch Changes
+
+- ffad302: Stop heuristically rewriting name-like text in demo mode while continuing to replace email addresses and numbers.
+- ffad302: Expose lightweight settings search metadata for command palettes and other navigation surfaces.
+- Updated dependencies [ffad302]
+- Updated dependencies [ffad302]
+  - @agent-native/toolkit@0.4.8
+
+## 0.98.2
+
+### Patch Changes
+
+- dd6a05b: Expose a live client hook for reading the effective Demo mode status.
+- dd6a05b: Keep local Plan verification source on-device by skipping remote renderer validation, and protect bridge credentials from hosted requests.
+- dd6a05b: Allow PR Visual Recap workflows to select configurable self-hosted runners.
+
+## 0.98.1
+
+### Patch Changes
+
+- ee7b5b3: Keep assistant chat's duplicate-message recovery installed when assistant-ui swaps the underlying thread runtime during reconnects or thread changes.
+- ee7b5b3: Use the browser's preferred language for more accurate realtime voice transcripts.
+- ee7b5b3: Prevent chat and realtime voice from starting before AI provider readiness is known, and reliably surface setup when no provider is connected.
+- ee7b5b3: Update the session replay recorder to the latest stable rrweb release for more faithful browser capture.
+- ee7b5b3: Skip degenerate hand-drawn frame paths that can overflow the browser call stack while a visual block is still measuring.
+- ee7b5b3: Type nullable organization parameters in integration scope, budget, and workspace MCP queries so PostgreSQL can reliably prepare them.
+- ee7b5b3: Prevent sync-driven request storms by preserving in-flight reads, filtering same-tab action echoes, targeting action-query invalidation, refreshing shared run state from change events, and backing idle Dispatch monitoring away from fixed polling.
+- ee7b5b3: Reduce the width and height of centered full-page chat composers for a more compact starting state.
+- ee7b5b3: Use dated changelog filenames when a hand-written entry omits its release date.
+- ee7b5b3: Polish realtime voice settings, keep them open while using nested pickers, and add live microphone selection.
+- ee7b5b3: Show the full Builder model catalog in the app default model setting instead of filtering suggestions to the current model.
+- ee7b5b3: Support app-scoped encryption keys so multi-app development environments can safely read each app's encrypted data.
+- ee7b5b3: Keep full-page chat open when a user navigates to Settings.
+- ee7b5b3: Keep API key settings compact and move unconfigured providers and custom credentials behind a single New menu.
+- ee7b5b3: Ignore expected browser autoplay-policy rejections emitted by recorded media during session replay playback.
+- ee7b5b3: Let realtime voice discover and load app tools on demand while preserving guarded action execution.
+- ee7b5b3: Prevent the agent prompt composer from crashing when a destroyed editor reconnects after remount or browser history restoration.
+- ee7b5b3: Keep realtime voice waveforms visible between turns, show a clear connection spinner, complete the spoken ready greeting, prioritize navigation tools, flatten the orb into a translucent surface, preserve chronological voice transcripts, improve transcription language accuracy, keep popovers and the voice dock clear of the agent panel, and add in-call language, intelligence, and voice controls.
+- ee7b5b3: Simplify the chat model picker to Claude, OpenAI, Gemini, and OpenRouter, with OpenRouter listed last.
+
+## 0.98.0
+
+### Minor Changes
+
+- 38ca6fa: Add an opt-in projected resource load to access checks so callers that only need the access decision can skip fetching heavy resource columns. Default behavior unchanged.
+
+  `resolveAccess()`/`assertAccess()` now accept `{ skipResourceBody: true }` (as the trailing options argument) to load only the columns the access decision itself reads — `id`, `ownerEmail`, `orgId`, `visibility` — instead of the full resource row (`resource` is typed as `AccessProjectedResource` in this mode). This is automatically ignored, falling back to a full row load, for any resource type registered with a `publicAccessRole` _function_ resolver, since that callback can read arbitrary resource fields the projection would have omitted. Passing nothing (the default) is a pure no-op: `loadResourceForAccess` still runs `db.select()` exactly as before, so none of the ~317 existing `assertAccess`/`resolveAccess` call sites change behavior.
+
+  This is a mechanism only — no call sites are migrated in this change. `templates/design/actions/update-design.ts`'s bare `assertAccess("design", id, "editor")` — which currently pulls the full `data` blob it doesn't otherwise need — was the motivating example and is the intended first adopter as a follow-up. Note: the `"design"` resource type itself is registered with a dynamic `publicAccessRole` resolver (`publicDesignAccessRole`), which the guard above always excludes from projection, so that specific call would keep loading the full row even after opting in; `"design-system"` (checked a few lines later in the same action) has no such resolver and is a real candidate. Follow-up migration work should account for this per resource type rather than assuming every `assertAccess`/`resolveAccess` call site benefits.
+
+### Patch Changes
+
+- 38ca6fa: Fix realtime voice microphone selection, connection teardown, stalled sessions, and compact audio-reactive controls.
+- 38ca6fa: Add an optional `agentInputSchema` to `defineAction` — a Standard Schema used ONLY to build the tool definition advertised to the model/MCP/A2A listings, while runtime validation keeps enforcing the full `schema`. Applied it in `templates/plan` to `create-visual-plan`, `create-ui-plan`, `create-plan-design`, `create-prototype-plan`, `update-visual-plan`, and `update-local-plan-folder`: their advertised `content`/`contentPatches` block shapes now show a compact `type` enum plus a pointer to `get-plan-blocks` instead of embedding the full per-block-type union, cutting each action's serialized tool definition by roughly half to three-quarters (largest actions went from ~55-58KB down to ~24-27KB; the rest from ~45-47KB down to ~13-15KB) without changing what content is accepted or how validation errors are reported.
+- 38ca6fa: Default app chats to compact first-turn tool and resource catalogs, keep uncommon actions, instructions, and integrations discoverable on demand, parallelize resource summaries, and record first-request prompt and tool payload sizes in run diagnostics.
+- 38ca6fa: Add optional content-free positive, negative, and neutral message sentiment tracking, enabled by default for first-party hosted apps with GPT-5.6 Luna.
+- 38ca6fa: Advertise and accept the standard `offline_access` OAuth scope so ChatGPT MCP apps can retain refresh-token access without repeated sign-in.
+- 38ca6fa: Removed the long-deprecated `ProductionAgentPanel` and `useProductionAgent` client exports (superseded by `AgentSidebar`/`AgentToggleButton`). No internal consumers remained.
+- 38ca6fa: Track content-free positive and negative sentiment events for explicit agent response feedback, including the associated model when available.
+- 38ca6fa: Render one cacheable, session-independent app shell for normal page requests and gate private UI through `AppProviders` on the client. Explicit auth pages remain cached login documents, signed-in visitors redirect without cache-buster query loops, APIs/actions remain server-protected, and generated edge workers now enforce the same anonymous public-shell cache policy as Nitro and Netlify.
+- 38ca6fa: Keep React Router hydration scoped to an app's workspace mount path so index redirects and nested pages route correctly.
+- 38ca6fa: Coalesce Nitro dev full-reloads so bursts of file edits trigger one server re-import instead of one per file.
+- 38ca6fa: Reduce serialized tool-schema payload on background agent runs. `webhook-handler.ts` and `google-docs-poller.ts` now defer framework-added tools (integration memory, `call-agent`) behind an attached `tool-search` entry on the first request, keeping only the app's own actions visible up front — `createIntegrationsPlugin` supplies the app action names via a new `initialToolNames` option. `scheduler.ts` (`SchedulerDeps.getInitialToolNames`), `dispatcher.ts` (`TriggerDispatcherDeps.getInitialToolNames`), and `agent-teams.ts` (`AgentTeamRunConfig.initialToolNames`) gained the same opt-in filtering plumbing (tool-search attach + `filterInitialEngineTools` + `availableTools` for mid-run expansion), inactive by default so existing behavior is unchanged until a caller supplies an initial tool list.
+- 38ca6fa: Reduce first-request token usage further: recurring jobs and automation triggers now defer framework-addition tools behind tool-search instead of always seeing the full registry; the MCP `ask_app` inner loop now uses the same compact initial-tool surface as interactive chat and A2A; the corpus-tools prompt (provider-api-request/provider-corpus-job/query-staged-dataset/run-code) no longer teaches tools by name that are missing from the first request's active tool set; oversized LEARNINGS.md/MEMORY.md content is capped instead of inlined in full outside lazy-context mode; and the First-Session Personalization block is now gated on the owner's persisted `personalization` flag instead of thread history, so a thread's system prompt stays byte-identical across turns 1 and 2 (fixing a prompt-cache break on every thread's second request).
+- 38ca6fa: Keep realtime voice setup actions on one line, describe Builder credits as free, and prevent false setup prompts by cross-checking successful connection statuses.
+- 38ca6fa: Explain browser loopback permissions and bridge lifecycle requirements when serving local Plans.
+- 38ca6fa: Motion polish across shared UI: overlay primitives (tooltip, popover, select, context/menubar menus) now scale from their trigger, exit with ease-out, and respect prefers-reduced-motion; new shared easing tokens (--ease-drawer, --ease-collapse, --ease-out-strong); press feedback on the shared Button and composer send button; GPU-friendly progress fills; chat tool cells (files-changed/edit/write) animate open/closed like other disclosures.
+- 38ca6fa: Add an Extensions docs shortcut and tighten the new-extension composer spacing.
+- 38ca6fa: Show retryable error states when extension lists, widget installs, slot metadata, or extension history fail to load instead of presenting persisted extensions as empty or missing.
+- Updated dependencies [38ca6fa]
+  - @agent-native/toolkit@0.4.7
+
+## 0.97.0
+
+### Minor Changes
+
+- f43d34c: Add `agent-native doctor` — a CLI command that scans an app's source for seven security-critical code-safety guards (unscoped credentials, unscoped queries against ownable tables, `process.env` credential reads, raw-DB tool table scoping, `process.env` mutation, `local@localhost` identity fallback, and `drizzle-kit push` in build/deploy scripts). Configurable via an optional `"doctor"` key in `agent-native.json`. `agent-native build` now runs doctor as a warn-only pre-step by default; pass `--strict` or set `agent-native.json`'s `doctor.failOnBuild: true` to make findings fail the build. The scaffolded app gets a `pnpm doctor` script and a `self-modifying-code` skill update recommending it after source edits.
+- f43d34c: Added export-audit-events action (CSV/NDJSON, scoped, capped) to the audit log.
+- f43d34c: Use Builder Connect and metered Builder credits automatically for realtime voice, with an OpenAI API key as the secondary fallback.
+- f43d34c: Add a safe manifest-driven package lifecycle CLI with Scheduling as the first inspectable, installable, and ejectable package.
+
+### Patch Changes
+
+- f43d34c: Run a sticky 80/20 Sonnet 5 versus GPT-5.6 Luna default-model experiment across first-party hosted templates while preserving explicit model choices.
+- f43d34c: Add a shared, presentational `ChatHistoryList` component (`@agent-native/core/client`) for rendering chat/run history lists with optional grouped sections, active-item highlight, search box, loading/empty/error states, and optional pin/rename/delete row actions. Core's `HistoryPopover` now renders through it instead of bespoke row markup, with no behavior change.
+- f43d34c: Allow app final-response guards to grant models additional bounded corrective attempts before emitting a fallback.
+- f43d34c: Improve Slack agent progress and diagnostics, and continue long-running delegated tasks reliably.
+- f43d34c: Keep page-level chat actions clear of conversation content and expose scroll state so hosts can fade older messages beneath header controls.
+- f43d34c: Reduce the public SSR edge-cache freshness window from one hour to ten minutes while retaining long stale-while-revalidate coverage.
+- f43d34c: Attach a pending approval key to the Agent-Native Code tool-call transcript item so the shared inline `ApprovalAffordance` (Approve/Deny) can render directly under the paused bash call, instead of only through a separate host banner. `ApprovalContext` gains optional `onDeny` and `onAlwaysAllow` hooks (both additive; existing consumers keep today's Approve-only, local-Deny behavior when they don't supply them), and `AssistantChat` accepts an optional `approvalActions` prop to wire them. `createCodeAgentChatAdapter` now resolves an approved Code tool call through `controller.control("approve")` instead of treating the approval message as a new prompt.
+- f43d34c: Protect state-changing framework routes from CSRF when the app is mounted under an APP_BASE_PATH.
+- f43d34c: Export `./styles/agent-conversation.css` from the package so consumers outside the monorepo (like the desktop app) can import it by package specifier instead of a fragile source-relative path.
+- f43d34c: Export `./styles/chat-history-list.css` from the package so non-Tailwind hosts (like `@agent-native/code-agents-ui`) can import the shared `ChatHistoryList` stylesheet by package specifier instead of a fragile source-relative path.
+- f43d34c: Reconcile stale runs in parallel when listing thread runs instead of sequentially.
+- f43d34c: Scope durable sync-event reads in /poll to the requesting user/org so the existing owner/org indexes are used.
+- f43d34c: Make app-secret writes an atomic upsert and org membership acceptance idempotent (unique org member index + conflict-safe insert).
+- f43d34c: Document the built-in durable background sandbox queue and its execution and
+  isolation boundaries across all supported docs locales.
+- f43d34c: Fail closed on internal self-dispatch processor routes when no A2A_SECRET is configured and the runtime is not provably local (previously an unrecognized deployed host with no secret ran these routes unauthenticated).
+- f43d34c: Export the reasoning hook from browser-only SSR stubs so Cloudflare template builds remain deployable.
+- f43d34c: Archived chat threads are now excluded from thread lists and search by default, so archiving a thread actually removes it from the sidebar/history and the `chat-history` agent tool. Pass `includeArchived: true` (store options, `chat-history` search action, or `search-chats` script) to see archived threads explicitly.
+- f43d34c: Use one primary composer action while a response is running: show stop for an empty draft, restore send when the user types, and keep the microphone immediately to its left.
+- f43d34c: Removed the never-implemented deterministic automations mode — the manage-automations schema now offers agentic only, and legacy deterministic values are rejected at define time instead of silently never firing.
+- f43d34c: Preserve template and use-case context in Builder waitlist form submissions and lifecycle events.
+- f43d34c: Reject cross-site browser requests before creating realtime voice sessions or executing realtime voice tools.
+- f43d34c: Select composer context chips with the first Backspace at the start of a prompt, then remove the selected chip with the next Backspace.
+- f43d34c: Show compact GPT-5.6 model and reasoning names in the collapsed chat composer control.
+- f43d34c: Add a structured `signal: "credential-gap"` marker to code-agent transcript events and export a shared `isCredentialGapCodeAgentEvent` helper so history builders (`thread-data-builder.ts`, `code-agent-transcript.ts`) detect the "no LLM provider key" condition from the executor's structured field instead of regex-matching the hint text. The regex remains only as a fallback for already-persisted transcripts that predate the field.
+- Updated dependencies [f43d34c]
+  - @agent-native/toolkit@0.4.6
+
+## 0.96.0
+
+### Minor Changes
+
+- 270d85f: Use Builder Connect and metered Builder credits automatically for realtime voice, with an OpenAI API key as the secondary fallback.
+
+### Patch Changes
+
+- 270d85f: Run a sticky 80/20 Sonnet 5 versus GPT-5.6 Luna default-model experiment across first-party hosted templates while preserving explicit model choices.
+- 270d85f: Add a shared, presentational `ChatHistoryList` component (`@agent-native/core/client`) for rendering chat/run history lists with optional grouped sections, active-item highlight, search box, loading/empty/error states, and optional pin/rename/delete row actions. Core's `HistoryPopover` now renders through it instead of bespoke row markup, with no behavior change.
+- 270d85f: Allow app final-response guards to grant models additional bounded corrective attempts before emitting a fallback.
+- 270d85f: Improve Slack agent progress and diagnostics, and continue long-running delegated tasks reliably.
+- 270d85f: Keep page-level chat actions clear of conversation content and expose scroll state so hosts can fade older messages beneath header controls.
+- 270d85f: Reduce the public SSR edge-cache freshness window from one hour to ten minutes while retaining long stale-while-revalidate coverage.
+- 270d85f: Attach a pending approval key to the Agent-Native Code tool-call transcript item so the shared inline `ApprovalAffordance` (Approve/Deny) can render directly under the paused bash call, instead of only through a separate host banner. `ApprovalContext` gains optional `onDeny` and `onAlwaysAllow` hooks (both additive; existing consumers keep today's Approve-only, local-Deny behavior when they don't supply them), and `AssistantChat` accepts an optional `approvalActions` prop to wire them. `createCodeAgentChatAdapter` now resolves an approved Code tool call through `controller.control("approve")` instead of treating the approval message as a new prompt.
+- 270d85f: Export `./styles/agent-conversation.css` from the package so consumers outside the monorepo (like the desktop app) can import it by package specifier instead of a fragile source-relative path.
+- 270d85f: Export `./styles/chat-history-list.css` from the package so non-Tailwind hosts (like `@agent-native/code-agents-ui`) can import the shared `ChatHistoryList` stylesheet by package specifier instead of a fragile source-relative path.
+- 270d85f: Export the reasoning hook from browser-only SSR stubs so Cloudflare template builds remain deployable.
+- 270d85f: Archived chat threads are now excluded from thread lists and search by default, so archiving a thread actually removes it from the sidebar/history and the `chat-history` agent tool. Pass `includeArchived: true` (store options, `chat-history` search action, or `search-chats` script) to see archived threads explicitly.
+- 270d85f: Use one primary composer action while a response is running: show stop for an empty draft, restore send when the user types, and keep the microphone immediately to its left.
+- 270d85f: Preserve template and use-case context in Builder waitlist form submissions and lifecycle events.
+- 270d85f: Select composer context chips with the first Backspace at the start of a prompt, then remove the selected chip with the next Backspace.
+- 270d85f: Show compact GPT-5.6 model and reasoning names in the collapsed chat composer control.
+- 270d85f: Add a structured `signal: "credential-gap"` marker to code-agent transcript events and export a shared `isCredentialGapCodeAgentEvent` helper so history builders (`thread-data-builder.ts`, `code-agent-transcript.ts`) detect the "no LLM provider key" condition from the executor's structured field instead of regex-matching the hint text. The regex remains only as a fallback for already-persisted transcripts that predate the field.
+
+## 0.95.1
+
+### Patch Changes
+
+- 6baca78: Document Design tweak controls, inheritance, and context-specific overrides.
+- 6baca78: Show each live tool call and streamed response once, keep thinking expanded by default, and simplify tool preparation status text.
+- 6baca78: Keep public SSR responses fresh in Netlify's durable edge cache for an hour and ignore non-rendering query parameters when selecting cached responses.
+- 6baca78: Allow hosted apps to use their deployment-level Google OAuth client credentials for signed-in connection flows while keeping user OAuth tokens scoped per user.
+- 6baca78: Keep guided question forms visible while application state refreshes.
+
+## 0.95.0
+
+### Minor Changes
+
+- 2308575: Add an OpenAI-compatible PR visual recap backend for DeepSeek, Kimi, and other compatible providers.
+
+## 0.94.3
+
+### Patch Changes
+
+- 48d8471: Keep Slack agent task cards active through deferred cross-agent work, show durable progress, and deliver the true final result instead of treating interim artifacts as complete.
+- 48d8471: Keep completed realtime voice turns in their originating chat, restore that chat safely when voice ends, and expose live audio activity to the voice dock.
+- 48d8471: Accept canonical Content document links returned by successful read-only actions as A2A artifact proof while continuing to reject mismatched or unproven URLs.
+
+## 0.94.2
+
+### Patch Changes
+
+- 725fc27: Keep completed realtime voice turns in their originating chat, restore that chat safely when voice ends, and expose live audio activity to the voice dock.
+
+## 0.94.1
+
+### Patch Changes
+
+- bb1e5c8: Prevent delayed errors from older background runs from reappearing after a newer chat response succeeds.
+
+## 0.94.0
+
+### Minor Changes
+
+- dfbbf30: Add scoped relay primitives for computer-capable devices, typed leased operations, durable approvals, replay protection, handle-only live-view events, and bounded binary-safe relay payloads.
+- dfbbf30: Add framework-wide OpenAI Realtime voice conversations with shared agent tools, actions, and navigation.
+- dfbbf30: Add owner-scoped follow-up, approval, denial, resume, and stop lifecycle controls for agent harness sessions.
+
+### Patch Changes
+
+- dfbbf30: Reduce idle hosted request volume by relaxing database sync polling between agent runs, waking event-driven application-state readers only when their values change, and avoiding duplicate action-query invalidation waves.
+- dfbbf30: Keep controlled settings pages in sync with organization hash links.
+- dfbbf30: Agent chat now uses Medium reasoning by default across supported models, migrates legacy Auto selections to Medium, avoids duplicate generic running status while reasoning streams, and renders completed reasoning directly inside the shared work summary.
+- dfbbf30: Allow explicitly marked Agent Native desktop child runs to receive their authenticated loopback computer-control MCP server without replacing user MCP configuration.
+- dfbbf30: Keep the optional server tokenizer out of browser production bundles, publish Dispatch's Operations route, simplify Dispatch's sidebar identity and chat history, and route design-task creation into structured intake.
+- dfbbf30: Honor organization and user Agent engine settings when Slack, Telegram, and other messaging integrations select their model provider and scoped API key.
+- dfbbf30: Group desktop settings navigation into clearer app, agent, workspace, and update sections.
+- dfbbf30: Add a batched application-state read helper so callers can load several exact keys with one database query.
+- dfbbf30: Export reusable composer controls for realtime voice sessions and a guarded single-tool execution helper that preserves normal validation, approval, timeout, journal, redaction, and refresh behavior.
+- dfbbf30: Make the active agent chat stop control immediately recognizable with a high-contrast circular treatment and filled stop icon.
+- dfbbf30: Stop offering Builder's unavailable Gemini 3.1 Flash-Lite preview model in agent chat and normalize existing selections back to the working default model.
+- dfbbf30: Validate converged collaborative text before persistence or broadcast so application-level guards can reject unsafe concurrent merges without exposing transient invalid state to connected clients.
+- dfbbf30: Keep Slack progress cards current during delegated agent calls, accept one scoped reply after requesting clarification, close deferred progress streams cleanly, and reserve framework integration control-plane routes from platform fallback handling.
+- dfbbf30: Enforce fail-closed computer and browser MCP policy checks in read-only Code runs.
+
+## 0.93.0
+
+### Minor Changes
+
+- d967304: Add managed multi-workspace Slack OAuth with Agent view and direct messages, team-aware threads, bounded native context, streaming task controls, channel identities, explicit memory, channel routines, and usage governance.
+- d967304: Add verified Microsoft Teams and Discord interaction channel adapters, preserve Telegram topic and WhatsApp contextual-reply identity, and expose exact runtime capabilities in Dispatch setup.
+
+### Patch Changes
+
+- d967304: Add Clay's Public API as a constrained provider preset with official API-key authentication, documentation discovery, and hosted-agent guidance.
+- d967304: Add a safe, provider-neutral automation workflow runtime with explicit n8n support metadata and honest Zapier blueprint guidance.
+- d967304: Remove outline-like shadows from shared app and agent main surfaces for a consistently borderless shell.
+- d967304: Allow host apps to observe active shared-composer text and render contextual content above the composer.
+- d967304: Back off browser speech-recognition retries after network failures, and let authenticated app workers reuse the durable Netlify background runtime.
+- d967304: Clarify in docs and agent routing that extensions render on their own pages or in named slots, while deeper host UI customization should continue through the Builder.io Cloud Agent or local source editing flow.
+- d967304: Allow resumable file-upload providers to clean up aborted upload sessions.
+- d967304: Exclude local databases and generated visual plan previews from newly scaffolded apps.
+- d967304: Keep unconnected chat composers stable with an accessible, icon-free AI connection popover.
+- d967304: Point Figma provider API discovery at the current official documentation and explain required scopes and canvas-write limitations.
+- d967304: Render horizontal grid lines in OG images with the same spacing and styling as the vertical lines.
+- d967304: Route opted-in async A2A tasks through Netlify's durable background worker so long analytics queries are not killed by the foreground function timeout.
+- d967304: Avoid false stuck warnings while a durable worker is alive inside its bounded tool window, make retries wait for the prior run to be durably aborted, and keep concurrent progress updates from moving the displayed no-progress clock backward.
+- d967304: Fix a race where a background chat run silently deferred for sweep-based recovery could hit the client's idle timeout before the server redispatched it, surfacing a false "run stopped" error instead of resuming quietly. Queued follow-ups now reattach to the recovering run instead of colliding with it, and terminal continuation conflicts settle pending activity cards so completed or failed chats never retain a working spinner.
+- d967304: Allow the Design local-file bridge to edit existing safe text and code files without relying on a narrow extension allowlist, while continuing to block secrets and binary files.
+- d967304: Apply app final-response guards to delegated A2A turns and resolve Slack sender profiles with request-scoped configured credentials.
+- d967304: Allow design-system indexing callers to fail loudly when inline files exceed size or count limits instead of silently dropping them.
+- d967304: Stop the stuck-run banner's Retry button from aborting a run that still has a live tool call or sub-agent (A2A) `call agent` in flight — a slow provider query or cross-app call can legitimately go minutes without emitting progress, and Retry previously killed that work and re-executed it from scratch. When `AssistantChat`'s new `hasInFlightWork()` reports live work, `RunStuckBanner` hides Retry and offers only an explicit, clearly-labeled Cancel; auto-retry is likewise suppressed. `MultiTabAssistantChat` wires this through automatically.
+- d967304: Scope shared workspace resources and learnings to the active organization, load them for queued Slack and integration turns, and preserve legacy app-wide resources as inherited defaults.
+- d967304: Fix a false `stale_run` failure for background runs holding a long tool call or A2A `call-agent` delegation: the stale-run reaper now grants a bounded grace to a run whose in-flight work is provably still open, even when its heartbeat write itself failed, instead of killing it on a single missed heartbeat window. A genuinely dead run with stuck in-flight work is still failed loudly once the bounded grace elapses. `/runs/active` also now surfaces this signal as `hasInFlightWork` so clients can tell a run with live work apart from one that is truly stuck.
+- d967304: Make Desktop's New action prompt-first: a coding agent now builds and registers local Agent Native apps, remembers the preferred apps folder, starts managed dev servers when opened, keeps the app's sidebar coding tools available for explicitly marked local Desktop previews, and adds native sidebar tab editing, removal, and reordering.
+- d967304: Keep local development auto-login credentials out of terminal output while preserving zero-setup sign-in.
+- d967304: Keep authenticated local Design preview sessions shared across URL-backed screens and proxy same-origin app mutations safely.
+- d967304: Preserve canonical Slack and Telegram request context across A2A delegation, resolve structured intake and domain workflows through workspace instructions and app capabilities, and return verified destination links for saved Content records, Analytics monitors, and published Forms.
+- d967304: Redact provider request audit targets and harden managed integration persistence against concurrent callbacks and SQLite migration failures.
+- d967304: Harden integration tenant isolation, service-principal identity, shared job routing, audit visibility, and usage-budget settlement.
+- d967304: Add a shared integration catalog with accurate built-in messaging metadata and reusable client helpers for integration setup routes.
+- d967304: Surface real remote liveness during cross-app agent calls (call-agent): while the A2A poll waits on another app, each successful poll that reports the remote still working now keeps progress moving, so a slow-but-healthy sub-agent no longer triggers a false "no progress" stuck warning whose Retry button aborts the healthy call and re-runs it from scratch. A hung or unresponsive remote still emits nothing, so the stuck warning correctly appears.
+- d967304: Keep in-memory run aborts successful when durable abort cleanup temporarily fails.
+
+## 0.92.12
+
+### Patch Changes
+
+- 1ecce26: Surface missing LLM credentials and earlier stream errors as failed agent runs instead of successful completions.
+
+## 0.92.11
+
+### Patch Changes
+
+- 4552931: Keep local React visual-edit previews hydrated by preserving Vite request metadata and response lengths through the bridge, and recover exact development source locations from React jsxDEV Fiber stacks.
+- 4552931: Expose strict active-collaboration awareness reads so safety-critical sync flows can distinguish no open editor from presence-storage failures.
+- 4552931: Add cancellation-safe `sendToAgentChatAndConfirm` delivery confirmation and its submit-result event contract so callers can preserve user work when a local chat message is rejected or times out, without allowing that timed-out message to arrive later.
+- 4552931: Fix `.fig` and other binary files silently corrupting when uploaded through `index-design-system-with-builder`: `buildBuilderDesignSystemIndexFiles` always UTF-8-encoded file content even though `mimeTypeForBuilderDesignSystemFilename` already recognized `.fig` as binary (`application/octet-stream`). Add an optional per-file `encoding: "utf8" | "base64"` (defaults to `utf8`, unchanged for existing text-file callers) so binary files can be base64-encoded by the caller and decoded byte-exact here.
+- 4552931: Prevent pre-seed collaborative editor updates from reaching autosave, and allow newer authoritative restores to reapply content previously emitted during mount while retaining stale-echo protection during active typing.
+- 4552931: Prevent PR recap workflows from publishing screenshots of failed recap pages, and report SSR render failures through configured error monitoring.
+- 4552931: Fix long agent-chat turns dying with a Netlify "508 Loop Detected" error after several server-driven continuation chunks: nested self-dispatch chains now break proactively before the platform's undocumented loop-protection limit, and a 508 that does occur is classified distinctly and deferred to the existing unclaimed-run sweep for recovery instead of failing the turn outright.
+- 4552931: Recover background chat turns whose continuation handoff dispatch failed instead of failing them immediately: the pre-inserted successor run is left claimable so the unclaimed-run sweep can redispatch it (and the client poll defers to that sweep within a bound), backed by a backstop that still fails loud if the handoff never lands.
+
+  Operational note — terminal-reason change: when a continuation handoff exhausts its dispatch retry budget but the successor row exists, the run's `terminal_reason` is now `background_continuation_dispatch_deferred` (recoverable, awaiting sweep redispatch) instead of `background_continuation_dispatch_failed`. The old `background_continuation_dispatch_failed` reason is still emitted, but now only in the narrower case where the successor row itself could not be pre-inserted. Any dashboards, alerts, or audit queries matching `background_continuation_dispatch_failed` should add `background_continuation_dispatch_deferred` to keep covering this failure class.
+
+- 4552931: Fix an awareness "storm" in `useCollaborativeDoc`: the shared collab connection's fast awareness-push path re-broadcast a client's own (unchanged) presence state whenever ANY remote participant's awareness changed, not just when the local user actually moved their cursor or updated their presence. With several people collaborating on the same document, every peer's cursor move caused every other connected client to also re-POST its own state, multiplying awareness traffic roughly quadratically with participant count. The fast-push listener now only fires on locally-originated awareness changes (`origin === "local"`), matching the equivalent guard already present in `usePresence`.
+
+  Also add a defensive size cap to the collab `recentEdits` ring (`appendRecentEdit`): descriptor strings (`quote`, `selector`, path entries) and the edit `label` are now truncated to 500 characters. The ring was already bounded in length, but an app forgetting to trim its own excerpt before publishing (e.g. passing a whole paragraph or document as `quote`) could otherwise push an oversized payload through the awareness fast-path broadcast and into the `_collab_awareness` SQL mirror.
+
+- 4552931: Give the Design localhost bridge a per-boot `bridgeInstanceId`, exposed on `/health`, the `/live-edit-bridge` registration response, and the `/live-edit` "unknown bridge key" 409 (now carrying a machine-readable `code: "unknown-bridge-key"` and the echoed `bridgeKey`). This lets a client distinguish a bridge process restart — which silently empties the in-memory live-edit bridge script registry — from a genuine registration bug, instead of guessing from free-text error strings.
+- 4552931: Fix a recurring `DataCloneError` console error when any embedded extension (Design's Tools/Extensions panel, or any other app using `EmbeddedExtension`) loads or its slot context updates. Slot contexts commonly carry live callback functions the host uses internally; `postMessage`'s structured clone algorithm throws on function-valued properties, so the context update silently never reached the extension iframe. Sanitize the context through a JSON round-trip (dropping functions) before posting it.
+- 4552931: Harden local Design source writes with SHA-256 version checks, per-file serialization, atomic replacement, and repeated symlink containment validation.
+
+## 0.92.10
+
+### Patch Changes
+
+- 22abd76: Prevent Netlify, Vercel, and AWS Lambda deployments from failing SSR requests when collaboration runtime chunks import Yjs.
+
+## 0.92.9
+
+### Patch Changes
+
+- d5d94f2: Prevent PR recap workflows from publishing screenshots of failed recap pages, and report SSR render failures through configured error monitoring.
+
+## 0.92.8
+
+### Patch Changes
+
+- 02ff384: Keep Design localhost route manifests, collision-resistant route identities, and per-screen live-edit bridge scripts stable across reconnects and multi-screen editing. Split read-only preview authorization from filesystem access, require authenticated preview endpoints, and restrict bridge CORS to approved Design origins.
+- 02ff384: Prevent local template dev servers from discovering editor dependencies after startup and reloading with outdated optimized modules. Keep production SSR builds on one shared Yjs implementation so collaboration types retain constructor identity.
+- 02ff384: Add a budget-coordinated keepalive action helper for reliable unload-time writes.
+- 02ff384: Replace the managed and BYOK GPT model catalogs with GPT-5.6 Sol, Terra, and Luna.
+- 02ff384: Preserve prior continuation tool results when final-response guards validate a multi-chunk agent turn, recover failed durable handoffs through the client continuation path, and retain completed-side-effect metadata for journal-recovered writes. Successful data queries and dashboard mutations are no longer reported as missing after a background boundary.
+- 02ff384: Keep Cloudflare D1 runtime detection type-safe when core database helpers are compiled inside template applications.
+- 02ff384: Fix a bug where a durable-background agent run could be killed by a single transient network blip during its soft-timeout chunk handoff. A worker proven to be running inside a real background function now gets a retry budget sized for its remaining wall-clock time (5 attempts / 15s timeout) instead of being silently demoted to the smaller foreground budget just because it was forced onto the same-process dispatch target.
+
+## 0.92.7
+
+### Patch Changes
+
+- 37f3367: Preserve starter-pinned `@agent-native/toolkit` versions during builder-agent-native-starter manifest sync so template sync does not reset the update bot's exact toolkit pin back to `"latest"`.
+
+## 0.92.6
+
+### Patch Changes
+
+- 5f187db: Highlight run-code source snippets in chat and keep raw tool output popovers within the available viewport.
+- 5f187db: Fix duplicate in-progress chat output during reconnect handoff so streaming text and tool calls render once while the live assistant message catches up. Also stop a reconnect tool spinner from rendering a second card beside its live pending tool card when their reader-local and server-scoped ids don't match, in every reconnect/handoff window.
+- 5f187db: Focus the settings search field automatically when desktop users open settings.
+- 5f187db: Improve organization settings so invites stay above the fold and members appear in a separate table card.
+- 6a29ba0: `ssrfSafeFetch` hardening: a new `httpsOnly` option validates the URL scheme on the initial request and on every redirect hop, so HTTPS-only callers cannot be downgraded to plain HTTP by a redirect from the untrusted origin. Followed redirect responses now also have their bodies cancelled so each hop's connection is released immediately instead of being held until GC.
+- 5f187db: Remove the divider between settings tabs and their tab content.
+- 5f187db: Preserve dashboard, chart, and label names in demo mode while continuing to anonymize free-text/contact names, emails, and numbers.
+- c32c174: add preset-driven-flow to asset template docs
+
+## 0.92.5
+
+### Patch Changes
+
+- eed1710: Fix `/visual-edit` live-edit 401s. The design server now mints the bridge token in `connect-localhost` and returns it from `open-visual-edit`, and `design connect` adopts it via a new `--bridge-token` flag (or `AGENT_NATIVE_BRIDGE_TOKEN`) instead of minting its own. The local bridge and the user's connection row now share the secret without the CLI needing its own auth to self-register — which was impossible under OAuth-based MCP and was the root cause of the 401s. The `visual-edit` skill is updated to call `open-visual-edit` first and start the bridge with the returned token.
+
+## 0.92.4
+
+### Patch Changes
+
+- 86697e9: Depend on `@agent-native/toolkit` via `workspace:^` instead of `workspace:*`. Publishing now pins a caret range (e.g. `^0.4.3`) rather than an exact version, so an app that scaffolds `@agent-native/toolkit@latest` separately can dedupe against it through normal semver resolution instead of installing two mismatched toolkit copies side by side (which crashed Vite with `"./collab-ui" is not exported`).
+
+## 0.92.3
+
+### Patch Changes
+
+- 0fee97b: Animate settings section cards open and closed with intrinsic height transitions.
+- 0fee97b: Document how to build API-only Agent Native apps with actions on the built-in Nitro/H3 server.
+- 0fee97b: Replay the real terminal error for completed agent runs on reconnect instead of replacing provider failures with stale-run messages, and stop heartbeat updates after a run leaves the running state.
+- 0fee97b: Allow signed embed sessions for Analytics dashboard deep links to authenticate after canonical `/dashboards/:id` redirects.
+- 0fee97b: Prevent stale stored awareness rows from resurrecting user or agent presence after a client explicitly leaves a collaborative document.
+- 0fee97b: Abort superseded chat reconnect readers and back off failed reattach attempts so repeated stale runs do not create client request storms.
+- 0fee97b: Harden chat stop and queued follow-up handling so interrupted tool calls settle cleanly, and flush Agent Native analytics immediately in serverless runtimes.
+- 0fee97b: Avoid CORS preflight storms for embedded framework polling by using query-token auth on safe `/_agent-native` GET requests.
+- 0fee97b: Deliver Agent Native Analytics tracking immediately in serverless runtimes so `http.response` health telemetry is not lost after the response finishes.
+- 0fee97b: Prevent in-flight tool call cards from flickering between newer and older states during reconnect, thread import, and retry clears.
+- 0fee97b: Make chat prompt submission update immediately and make Stop clear queued follow-ups and settle interrupted tool calls.
+- 0fee97b: Single-flight the agent run heartbeat write so a run holds at most one Neon connection for liveness. The 1.5s heartbeat timer previously fired a fresh write every tick regardless of whether the prior one was still in flight; under Neon pooler saturation (writes taking up to the ~8s DB timeout) this piled up ~5 concurrent heartbeat connections per run, adding to the connection-cap exhaustion that starves the heartbeat and gets the still-alive run false-reaped as stale. The abort and no-progress-backstop checks still run every tick.
+- 0fee97b: Normalize unsupported saved agent models to a supported version match or the engine default.
+- 0fee97b: Remove Grok Code Fast and Qwen3 Coder from the Builder gateway model picker.
+- 0fee97b: Treat Anthropic/Builder bare "Connection error." failures as retryable network interruptions, and stop mislabeling those failed runs as stale_run when the client reconnects past the real terminal event.
+- 0fee97b: Stop `useDbSync` from turning app-state navigation/selection churn into a client fetch storm. `app-state` change events (agent/UI navigation, selection, and the set-url/questions command channel) now only invalidate their own `["app-state"]` and command query keys — they no longer fan out into the broad `["action"]`, `["extension"]`, and `["tool"]` data-query invalidation. Only events that can actually change action/extension-backed data (action mutations, settings, extensions, collab, screen-refresh) refetch those prefixes.
+
+  During an active agent session the app mirrors navigation and selection into `application_state` continuously, and on serverless the poll fallback replays those writes back to the originating tab (the DB-scan path can't preserve `requestSource`, so `ignoreSource` can't filter them). Each replayed write previously refetched every action query at once, and that request storm exhausted the DB connection pool — which starved run heartbeat writes and surfaced downstream as `stale_run` chat errors. Real mutations that also write navigation state still refresh action queries because their `action` event rides in the same batch.
+
+- 0fee97b: Show streamed agent reasoning when gateways emit AI SDK-style reasoning deltas.
+- 0fee97b: Show raw tool call output in an auto-height popover with viewport-capped scrolling instead of a fixed-height dialog.
+
+## 0.92.2
+
+### Patch Changes
+
+- 5df1506: Notification emails no longer include raw metadata JSON in the message body.
+
+## 0.92.1
+
+### Patch Changes
+
+- 1d13434: Allow extension iframes to trigger user-initiated downloads and add CSV export to standard data table widgets.
+- 1d13434: Remove the GitHub icon from the free and open source badge on public booking pages.
+- 1d13434: Make framework polling cheaper with durable sync events, remove Dispatch's short app-list polling intervals, preview large DB admin cells by default to avoid accidental blob transfers, and require configured file storage for binary resource uploads instead of storing base64 blobs in SQL.
+- 1d13434: Stage database-admin table selections as agent chat context chips and selected-object application state so users can ask the agent about the active table.
+- 1d13434: Show a clear unavailable state for shared extension links that the viewer cannot access, instead of leaving the standalone extension page looking blank.
+- 1d13434: Filter known browser and extension noise from first-party error auto-capture while preserving real app fetch failures.
+- 1d13434: Recover stale background chat runs instead of surfacing them as terminal failures, and keep chat handoffs from restoring stale server snapshots over fresher completed replies.
+- 1d13434: Fix durable polling cursors, DB admin large-cell safeguards, extension unavailable states, and stale chat snapshot handling.
+- 1d13434: Show organization access controls alongside long team member lists when the Team settings surface has enough width.
+
+## 0.92.0
+
+### Minor Changes
+
+- 680b1eb: Show plain-English thinking in chat, Codex-style tool rows with modal output, and collapse finished work into a "Worked for" summary.
+- 680b1eb: Add `agent-native upgrade` (with `upgrade check` doctor) so older apps can bump `@agent-native/*`, refresh scaffold skills, and verify without inventing core/dispatch patches or overrides. Harden self-modifying-code / AGENTS guidance, discover workspace packages from `pnpm-workspace.yaml`, and ship the `upgrade-agent-native` skill.
+
+### Patch Changes
+
+- 680b1eb: Keep plan-mode blocked tools visible and discoverable as blocked stubs, preload common provider tools in lean agent runs, steer extension edits away from repeated large content scans, and let raw JSON Schema tool inputs recover from common scalar string values without poisoning read-only duplicate caches.
+- 680b1eb: Compact repeated tool-search results and unchanged extension content within a single agent run to preserve context, while keeping schema-including tool searches repeatable when the agent explicitly asks for schemas.
+- 680b1eb: Always register Slack/webhook/email notification channels, prefer delivery-only per-notification webhook URLs, and avoid applying workspace auth headers to override destinations.
+- 680b1eb: Stop rewriting session-replay Meta and ViewportResize dimensions at capture so stored frames stay aligned with the FullSnapshot DOM, while display sizing still clamps extreme aspect ratios.
+- 680b1eb: Render Agent settings sections as polished card surfaces on full settings pages while keeping the sidebar settings panel compact.
+- Updated dependencies [680b1eb]
+  - @agent-native/toolkit@0.4.4
+
+## 0.91.2
+
+### Patch Changes
+
+- 823d635: Add a friendly label for the Calendar `calendar.event-detail.bottom` ExtensionSlot so the empty-slot affordance matches Mail's contact sidebar pattern.
+- 823d635: Surface outbound delivery-queue health on Destinations and add quiet overview shortcuts so cleaned-up overview capabilities stay discoverable without restoring the old dashboard. Localize those overview shortcut and delivery-queue labels across Dispatch locales.
+- 823d635: Attribute recurring job and automation LLM usage to task-specific usage labels.
+- 823d635: Clamp absurd session-replay Meta and ViewportResize dimensions at capture so ultra-wide frames are never stored.
+- 823d635: Align run-slot liveness with the stale reaper and surface repeated heartbeat write failures.
+- 823d635: Upgrade the workspace toolchain to TypeScript 7 (`tsc`) with a side-by-side TypeScript 6 API package for tools that still need programmatic access. Replace `@typescript/native-preview` / `tsgo` with the stable `typescript` 7 release.
+- Updated dependencies [823d635]
+- Updated dependencies [823d635]
+  - @agent-native/toolkit@0.4.3
+
+## 0.91.1
+
+### Patch Changes
+
+- 942165f: Fix design live-edit preview showing a 404/NotFound for client-side-routed
+  (SPA) dev apps. The bridge served every snapshot from its own `/live-edit`
+  path, so the proxied app's router booted at `location.pathname === "/live-edit"`
+  and matched no route. The bridge now injects a synchronous pre-boot
+  `history.replaceState` shim that rewrites the iframe path to the real target
+  route before the app bundle runs. Asset resolution (via the injected
+  `<base href>`) is unchanged, and static/non-SPA apps are unaffected.
+
+## 0.91.0
+
+### Minor Changes
+
+- e310ac1: Add first-party, Sentry-style error capture to the analytics client SDK. `configureTracking({ errorCapture })` now auto-captures uncaught exceptions (`window.onerror`) and unhandled promise rejections, exposes a manual `captureException(error, context?)` / `captureMessage(message, level?)` API plus `addErrorBreadcrumb`, and ties each captured exception to the active session replay id so errors link straight to the recording they happened in. Captured exceptions are sent through the existing first-party analytics ingest as a dedicated `$exception` event and are redacted + deduped client-side. Additive and backward-compatible; error capture only installs when a public key is configured (or explicitly enabled).
+- e310ac1: Revamp the shared settings shell (`SettingsTabsPage`): an edge-aligned,
+  independently scrolling left nav with consistent theming, a built-in settings
+  search that deep-links into tabs and sections via `searchEntries` /
+  `generalSearchEntries`, and a new controlled `value` / `onValueChange` mode so
+  apps can drive the active tab from their own routing and application state.
+- e310ac1: Make agent-native chat threads shareable through the framework share dialog so collaborators can view or edit shared chats.
+
+### Patch Changes
+
+- e310ac1: Populate in-app "What's new" surfaces from pending app changelog entries during dev and build.
+- e310ac1: Use shadcn's message scroller primitives for core chat transcripts so streaming replies, turn anchoring, and scroll-to-bottom behavior stay smoother in long or dynamically resizing chats.
+- e310ac1: Auto-continue recoverable chat run timeouts during reconnect without showing the internal resume prompt in chat history, and retry transient `ask_app_status` bridge fetch failures before surfacing an error.
+- e310ac1: Recover Google popup sign-in pages when the session cookie is present but the parent page misses the automatic OAuth exchange redirect.
+- e310ac1: Hide internal share principal ids in share dialogs by resolving organization names and using safe fallback labels.
+- e310ac1: Fix Vite dev server resolution for Agent Native templates that load local or transitive `@agent-native/toolkit` subpath exports.
+- e310ac1: Avoid repeated Sentry reports when workspace dev app discovery hits local filesystem permission errors.
+
 ## 0.90.11
 
 ### Patch Changes

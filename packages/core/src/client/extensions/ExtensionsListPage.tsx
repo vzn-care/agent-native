@@ -25,7 +25,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "../components/ui/popover.js";
-import { PromptComposer } from "../composer/PromptComposer.js";
+import { PromptComposer } from "../composer/index.js";
 import { useT } from "../i18n.js";
 import { cn } from "../utils.js";
 import {
@@ -37,6 +37,7 @@ import {
   applyToolsOrder,
   getToolsOrder,
 } from "./extension-order.js";
+import { ExtensionQueryErrorState } from "./ExtensionQueryErrorState.js";
 
 interface Extension {
   id: string;
@@ -98,7 +99,14 @@ function CreateToolInput({ className }: { className?: string }) {
   );
 }
 
-export function ExtensionsListPage() {
+export interface ExtensionsListPageProps {
+  /** Skip the standalone extensions navigation state when embedded in Settings. */
+  embedded?: boolean;
+}
+
+export function ExtensionsListPage({
+  embedded = false,
+}: ExtensionsListPageProps = {}) {
   const t = useT();
   const [showCreate, setShowCreate] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -110,12 +118,13 @@ export function ExtensionsListPage() {
   );
 
   useEffect(() => {
+    if (embedded) return;
     fetch(agentNativePath("/_agent-native/application-state/navigation"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ view: "extensions" }),
     }).catch(() => {});
-  }, []);
+  }, [embedded]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -128,7 +137,7 @@ export function ExtensionsListPage() {
     };
   }, []);
 
-  const { data: extensions, isLoading } = useQuery<Extension[]>({
+  const extensionsQuery = useQuery<Extension[]>({
     queryKey: ["extensions", { includeGloballyHidden: showGloballyHidden }],
     queryFn: async () => {
       const res = await fetch(
@@ -138,10 +147,11 @@ export function ExtensionsListPage() {
             : "/_agent-native/extensions",
         ),
       );
-      if (!res.ok) return [];
+      if (!res.ok) throw new Error(`Failed to load extensions (${res.status})`);
       return res.json();
     },
   });
+  const extensions = extensionsQuery.data;
 
   const toolList =
     toolOrderState.length > 0
@@ -187,11 +197,23 @@ export function ExtensionsListPage() {
   };
 
   return (
-    <div className="flex h-full w-full flex-col">
-      <header className="flex h-12 items-center justify-between border-b px-4 shrink-0">
-        <div className="flex items-center gap-2">
-          <h1 className="text-sm font-semibold">{t("extensions.title")}</h1>
-        </div>
+    <div
+      className={cn(
+        "flex w-full flex-col",
+        embedded ? "min-h-[28rem]" : "h-full",
+      )}
+    >
+      <header
+        className={cn(
+          "flex h-12 items-center justify-between px-4 shrink-0",
+          !embedded && "border-b",
+        )}
+      >
+        {!embedded ? (
+          <div className="flex items-center gap-2">
+            <h1 className="text-sm font-semibold">{t("extensions.title")}</h1>
+          </div>
+        ) : null}
         <div className="flex items-center gap-2">
           <Popover open={showCreate} onOpenChange={setShowCreate}>
             <PopoverTrigger asChild>
@@ -242,12 +264,12 @@ export function ExtensionsListPage() {
               </DropdownMenuCheckboxItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <AgentToggleButton />
+          {!embedded ? <AgentToggleButton /> : null}
         </div>
       </header>
 
       <div className="flex-1 overflow-auto px-5 py-8 sm:px-8 sm:py-10">
-        {isLoading ? (
+        {extensionsQuery.isLoading ? (
           <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {Array.from({ length: 6 }).map((_, i) => (
               <div
@@ -260,6 +282,13 @@ export function ExtensionsListPage() {
               </div>
             ))}
           </div>
+        ) : extensionsQuery.isError ? (
+          <ExtensionQueryErrorState
+            className="min-h-[calc(100vh-9rem)]"
+            message={t("extensions.loadError")}
+            onRetry={() => void extensionsQuery.refetch()}
+            retrying={extensionsQuery.isFetching}
+          />
         ) : toolList.length === 0 ? (
           <div className="flex min-h-[calc(100vh-9rem)] flex-col items-center justify-start px-2 pb-12 pt-[clamp(5rem,18vh,11rem)] sm:pb-16">
             <div className="mx-auto flex w-full max-w-[34rem] flex-col gap-7">

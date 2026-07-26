@@ -11,11 +11,10 @@ import {
   IconGripVertical,
   IconBook2,
   IconDatabase,
-  IconReportAnalytics,
   IconSearch,
   IconArchive,
   IconActivity,
-  IconPin,
+  IconHeartbeat,
   IconPlus,
   IconLock,
   IconLink,
@@ -41,7 +40,6 @@ import {
   useRef,
   useMemo,
   Fragment,
-  type FormEvent,
 } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { toast } from "sonner";
@@ -62,27 +60,47 @@ type SidebarDashboard = {
   id: string;
   name: string;
   subviews?: DashboardSubview[];
-  source: "static" | "sql";
+  source: "static" | "sql" | "analysis";
+  resourceId?: string;
   visibility?: Visibility;
   /** Id of the dashboard this one nests under in the sidebar, if any. */
   parentId?: string;
 };
+
+const SIDEBAR_SYNC_SETTLE_MS = 500;
+
+function useSettledSyncVersion(version: number): number {
+  const [settledVersion, setSettledVersion] = useState(version);
+  useEffect(() => {
+    const timeout = window.setTimeout(
+      () => setSettledVersion(version),
+      SIDEBAR_SYNC_SETTLE_MS,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [version]);
+  return settledVersion;
+}
 import {
-  DevDatabaseLink,
-  FeedbackButton,
-  LanguagePicker,
-  appApiPath,
-  callAction,
-  appPath,
   navigateWithAgentChatViewTransition,
   useChatThreads,
+  type ChatThreadSummary,
+} from "@agent-native/core/client/agent-chat";
+import { appPath } from "@agent-native/core/client/api-path";
+import { DevDatabaseLink } from "@agent-native/core/client/db-admin";
+import {
+  callAction,
   useActionMutation,
   useChangeVersions,
-  useT,
-  type ChatThreadSummary,
-} from "@agent-native/core/client";
-import { ExtensionsSidebarSection } from "@agent-native/core/client/extensions";
+} from "@agent-native/core/client/hooks";
+import { LanguagePicker, useT } from "@agent-native/core/client/i18n";
+import { openCommandMenu } from "@agent-native/core/client/navigation";
 import { OrgSwitcher } from "@agent-native/core/client/org";
+import { FeedbackButton } from "@agent-native/core/client/ui";
+import { SidebarFooterActions } from "@agent-native/toolkit/app-shell";
+import {
+  ChatHistoryRail,
+  type ChatHistoryItem,
+} from "@agent-native/toolkit/chat-history";
 
 import {
   AlertDialog,
@@ -122,24 +140,21 @@ import {
   type DashboardView,
 } from "@/hooks/use-dashboard-views";
 import { useUserPref } from "@/hooks/use-user-pref";
+import { shouldRenderDashboardList } from "@/lib/dashboard-list-loading";
 import { usePopularity, popularityOf } from "@/lib/item-popularity";
 import {
-  analysisDetailPrefetchKey,
   sqlDashboardPrefetchKey,
   type PrefetchSnapshot,
 } from "@/lib/prefetch-keys";
 import type { ResourceAccess } from "@/lib/resource-access";
 
-import { NewAnalysisDialog } from "./NewAnalysisDialog";
 import { NewDashboardDialog } from "./NewDashboardDialog";
-
-type AnalysisHiddenFilter = "visible" | "hidden";
+import { SidebarLoadError } from "./SidebarLoadError";
 
 const SIDEBAR_PREVIEW_COUNT = 5;
+const ASK_OPEN_KEY = "analytics-sidebar-ask-open";
 const DASHBOARD_SORT_MODE_KEY = "dashboard-sort-mode";
-const ANALYSIS_SORT_MODE_KEY = "analysis-sort-mode";
 const DASHBOARDS_OPEN_KEY = "analytics-sidebar-dashboards-open";
-const ANALYSES_OPEN_KEY = "analytics-sidebar-analyses-open";
 const SIDEBAR_COLLAPSE_KEY = "analytics.sidebar.collapsed";
 const SIDEBAR_SKELETON_CLASS =
   "bg-sidebar-foreground/12 dark:bg-sidebar-foreground/10";
@@ -169,12 +184,16 @@ const bottomItems = [
   { icon: IconSettings, labelKey: "navigation.settings", href: "/settings" },
 ];
 
-function getStoredBoolean(key: string, fallback: boolean): boolean {
-  if (typeof window === "undefined") return fallback;
-  const raw = window.localStorage.getItem(key);
-  if (raw === "true") return true;
-  if (raw === "false") return false;
-  return fallback;
+function getStoredBooleanPreference(key: string): boolean | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw === "true") return true;
+    if (raw === "false") return false;
+  } catch {
+    // localStorage unavailable — ignore, section state is best-effort.
+  }
+  return null;
 }
 
 function setStoredBoolean(key: string, value: boolean): void {
@@ -271,7 +290,7 @@ function SidebarSectionSettingsPopover({
           <PopoverTrigger asChild>
             <button
               type="button"
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/65 opacity-0 transition-all hover:bg-sidebar-accent hover:text-foreground focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring group-hover/section:opacity-100 data-[state=open]:opacity-100"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/65 opacity-0 transition-[opacity,color,background-color] hover:bg-sidebar-accent hover:text-foreground focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring group-hover/section:opacity-100 data-[state=open]:opacity-100"
               aria-label={settingsLabel}
             >
               <IconFilter className="h-3.5 w-3.5" />
@@ -594,7 +613,7 @@ function SortableRow({
     <div ref={setNodeRef} style={style} className="group/item relative min-w-0">
       <button
         type="button"
-        className="absolute -start-4 top-1/2 z-10 -translate-y-1/2 cursor-grab rounded p-1 text-muted-foreground/30 opacity-0 transition-colors hover:text-muted-foreground/60 group-hover/item:opacity-100 active:cursor-grabbing"
+        className="absolute -start-4 top-1/2 z-10 -translate-y-1/2 cursor-grab rounded p-1 text-muted-foreground/30 opacity-0 transition-[opacity,color] hover:text-muted-foreground/60 group-hover/item:opacity-100 active:cursor-grabbing"
         aria-label={t("sidebar.dragItemPersonal", { name })}
         {...attributes}
         {...listeners}
@@ -837,7 +856,10 @@ function SortableDashboardItem({
     visibility: Visibility,
   ) => Promise<void>;
 }) {
-  const href = `/dashboards/${d.id}`;
+  const resourceId = d.resourceId ?? d.id;
+  const href =
+    d.source === "analysis" ? `/analyses/${resourceId}` : `/dashboards/${d.id}`;
+  const favoriteKey = d.source === "analysis" ? `analysis:${resourceId}` : d.id;
   const t = useT();
   const { mutateAsync: deleteView } = useDeleteDashboardView();
   const [deletingViewId, setDeletingViewId] = useState<string | null>(null);
@@ -878,7 +900,7 @@ function SortableDashboardItem({
   return (
     <SortableRow
       id={d.id}
-      favoriteKey={d.id}
+      favoriteKey={favoriteKey}
       name={d.name}
       href={href}
       isActive={isActive}
@@ -886,7 +908,9 @@ function SortableDashboardItem({
       onToggleFavorite={onToggleFavorite}
       onDelete={() => onDelete(d)}
       onRename={(name) => onRename(d, name)}
-      onArchive={onArchive ? () => onArchive(d) : undefined}
+      onArchive={
+        d.source === "analysis" || !onArchive ? undefined : () => onArchive(d)
+      }
       onPrefetch={() => onPrefetch?.(d)}
       visibility={d.visibility}
       onSetVisibility={
@@ -910,7 +934,7 @@ function SortableDashboardItem({
               <div
                 key={sv.id}
                 className={cn(
-                  "group/sv flex items-center gap-1 rounded-md pe-1 transition-all",
+                  "group/sv flex items-center gap-1 rounded-md pe-1 transition-[opacity,color,background-color]",
                   isSubviewActive
                     ? "bg-primary/10 text-primary"
                     : "text-muted-foreground/70 hover:bg-sidebar-accent/50 hover:text-primary",
@@ -969,7 +993,7 @@ function SortableDashboardItem({
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <PopoverTrigger asChild>
-                            <button className="opacity-0 group-hover/sv:opacity-100 p-0.5 rounded text-muted-foreground/50 hover:text-foreground transition-all shrink-0">
+                            <button className="opacity-0 group-hover/sv:opacity-100 p-0.5 rounded text-muted-foreground/50 hover:text-foreground transition-[opacity,color,background-color] shrink-0">
                               <IconTrash className="h-2.5 w-2.5" />
                             </button>
                           </PopoverTrigger>
@@ -1038,33 +1062,6 @@ function SortableDashboardItem({
   );
 }
 
-// Analyses reuse SortableRow directly — no wrapper component needed.
-
-const ANALYSIS_ORDER_KEY = "analysis-order";
-
-function getAnalysisOrder(): string[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(ANALYSIS_ORDER_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.filter((x) => typeof x === "string")
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function setAnalysisOrder(order: string[]): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(ANALYSIS_ORDER_KEY, JSON.stringify(order));
-  } catch {
-    // localStorage unavailable / quota — ignore, order is best-effort
-  }
-}
-
 const STATIC_DASHBOARD_RENAMES_KEY = "dashboard-name-overrides";
 
 function getStaticDashboardRenames(): Record<string, string> {
@@ -1111,34 +1108,27 @@ type SqlDashboardListItem = {
 async function fetchSqlDashboards(
   t: (key: string) => string,
 ): Promise<SqlDashboardListItem[]> {
-  try {
-    const rows = await callAction("list-sql-dashboards", {}, { method: "GET" });
-    return (Array.isArray(rows) ? rows : [])
-      .filter((d: any) => d && typeof d.id === "string" && d.id.length > 0)
-      .map((d: any) => ({
-        id: d.id,
-        name:
-          typeof d.name === "string" && d.name.trim().length > 0
-            ? d.name
-            : t("sidebar.untitledDashboard"),
-        visibility:
-          d.visibility === "org" || d.visibility === "public"
-            ? (d.visibility as Visibility)
-            : ("private" as Visibility),
-        parentId:
-          typeof d.parentId === "string" && d.parentId.trim().length > 0
-            ? d.parentId
-            : undefined,
-      }));
-  } catch {
-    return [];
-  }
+  const rows = await callAction("list-sql-dashboards", {}, { method: "GET" });
+  return (Array.isArray(rows) ? rows : [])
+    .filter((d: any) => d && typeof d.id === "string" && d.id.length > 0)
+    .map((d: any) => ({
+      id: d.id,
+      name:
+        typeof d.name === "string" && d.name.trim().length > 0
+          ? d.name
+          : t("sidebar.untitledDashboard"),
+      visibility:
+        d.visibility === "org" || d.visibility === "public"
+          ? (d.visibility as Visibility)
+          : ("private" as Visibility),
+      parentId:
+        typeof d.parentId === "string" && d.parentId.trim().length > 0
+          ? d.parentId
+          : undefined,
+    }));
 }
 
-async function fetchSidebarAnalyses(
-  t: (key: string) => string,
-  hidden: AnalysisHiddenFilter = "visible",
-): Promise<
+async function fetchSidebarAnalyses(t: (key: string) => string): Promise<
   {
     id: string;
     name: string;
@@ -1146,31 +1136,21 @@ async function fetchSidebarAnalyses(
     hiddenAt: string | null;
   }[]
 > {
-  try {
-    const rows = await callAction(
-      "list-analyses",
-      {
-        ...(hidden === "hidden" ? { hidden: "hidden" } : {}),
-      } as Record<string, unknown>,
-      { method: "GET" },
-    );
-    return (Array.isArray(rows) ? rows : [])
-      .filter((a: any) => a && typeof a.id === "string" && a.id.length > 0)
-      .map((a: any) => ({
-        id: a.id,
-        name:
-          typeof a.name === "string" && a.name.trim().length > 0
-            ? a.name
-            : t("sidebar.untitledAnalysis"),
-        visibility:
-          a.visibility === "org" || a.visibility === "public"
-            ? a.visibility
-            : ("private" as Visibility),
-        hiddenAt: typeof a.hiddenAt === "string" ? a.hiddenAt : null,
-      }));
-  } catch {
-    return [];
-  }
+  const rows = await callAction("list-analyses", {}, { method: "GET" });
+  return (Array.isArray(rows) ? rows : [])
+    .filter((a: any) => a && typeof a.id === "string" && a.id.length > 0)
+    .map((a: any) => ({
+      id: a.id,
+      name:
+        typeof a.name === "string" && a.name.trim().length > 0
+          ? a.name
+          : t("sidebar.untitledAnalysis"),
+      visibility:
+        a.visibility === "org" || a.visibility === "public"
+          ? a.visibility
+          : ("private" as Visibility),
+      hiddenAt: typeof a.hiddenAt === "string" ? a.hiddenAt : null,
+    }));
 }
 
 type PrefetchedSqlDashboard = {
@@ -1234,16 +1214,6 @@ async function fetchSqlDashboardForPrefetch(
   }
 }
 
-async function fetchAnalysisDetailForPrefetch(id: string): Promise<unknown> {
-  try {
-    const data = await callAction("get-analysis", { id }, { method: "GET" });
-    if (!data || (data as Record<string, unknown>).error) return null;
-    return data;
-  } catch {
-    return null;
-  }
-}
-
 const ANALYTICS_ACTIVE_THREAD_KEY = `agent-chat-active-thread:${ANALYTICS_CHAT_STORAGE_KEY}`;
 
 function formatThreadAge(updatedAt: number) {
@@ -1289,7 +1259,13 @@ function persistedAnalyticsThreadId() {
   }
 }
 
-function AnalyticsChatsSection() {
+function AnalyticsChatsSection({
+  isAskRoute,
+  open,
+}: {
+  isAskRoute: boolean;
+  open: boolean;
+}) {
   const navigate = useNavigate();
   const t = useT();
   const {
@@ -1306,19 +1282,34 @@ function AnalyticsChatsSection() {
     autoCreate: false,
     restoreActiveThread: false,
   });
-  const [renamingThreadId, setRenamingThreadId] = useState<string | null>(null);
-  const [renameDraft, setRenameDraft] = useState("");
-  const renameInputRef = useRef<HTMLInputElement | null>(null);
-  const committingRenameRef = useRef(false);
 
   const visibleThreads = useMemo(
     () =>
       threads
         .filter((thread) => thread.messageCount > 0 && !thread.archivedAt)
         .sort(compareThreads)
-        .slice(0, SIDEBAR_PREVIEW_COUNT),
+        .slice(0, 15),
     [threads],
   );
+  const chatItems = useMemo<ChatHistoryItem[]>(
+    () =>
+      visibleThreads.map((thread) => ({
+        id: thread.id,
+        title: threadTitle(thread, t("chat.untitledChat")),
+        titleText: threadTitle(thread, t("chat.untitledChat")),
+        timestamp:
+          isAskRoute &&
+          (thread.id === activeThreadId ||
+            thread.id === persistedAnalyticsThreadId())
+            ? undefined
+            : formatThreadAge(threadUpdatedAt(thread)),
+        pinned: Boolean(thread.pinnedAt),
+      })),
+    [activeThreadId, isAskRoute, t, visibleThreads],
+  );
+  const displayedActiveThreadId = isAskRoute
+    ? (activeThreadId ?? persistedAnalyticsThreadId())
+    : null;
 
   useEffect(() => {
     const refresh = () => refreshThreads();
@@ -1338,14 +1329,6 @@ function AnalyticsChatsSection() {
       window.removeEventListener("focus", refresh);
     };
   }, [refreshThreads]);
-
-  useEffect(() => {
-    if (!renamingThreadId) return;
-    requestAnimationFrame(() => {
-      renameInputRef.current?.focus();
-      renameInputRef.current?.select();
-    });
-  }, [renamingThreadId]);
 
   function openThread(threadId: string, options?: { isNew?: boolean }) {
     switchThread(threadId);
@@ -1377,176 +1360,70 @@ function AnalyticsChatsSection() {
     }
   }
 
-  function startRenameThread(thread: ChatThreadSummary) {
-    committingRenameRef.current = false;
-    setRenameDraft(threadTitle(thread, t("chat.untitledChat")));
-    setRenamingThreadId(thread.id);
-  }
-
-  function cancelRenameThread() {
-    committingRenameRef.current = true;
-    setRenamingThreadId(null);
-    setRenameDraft("");
-  }
-
-  async function commitRenameThread() {
-    if (committingRenameRef.current) return;
-    const threadId = renamingThreadId;
-    const title = renameDraft.trim();
-    if (!threadId) return;
-    committingRenameRef.current = true;
-    setRenamingThreadId(null);
-    setRenameDraft("");
-    if (title) {
-      const renamed = await renameThread(threadId, title);
+  function handleRenameThread(threadId: string, title: string) {
+    void renameThread(threadId, title).then((renamed) => {
       if (!renamed) toast.error(t("chat.renameFailed"));
-    }
-    committingRenameRef.current = false;
-  }
-
-  function handleRenameSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    void commitRenameThread();
+    });
   }
 
   return (
-    <div className="ms-4 min-w-0 space-y-0.5">
-      {chatsLoading &&
-        visibleThreads.length === 0 &&
-        Array.from({ length: 3 }).map((_, i) => (
-          <div
-            key={`chat-skeleton-${i}`}
-            className="flex items-center gap-2 px-3 py-1"
-          >
-            <Skeleton
-              className={cn(
-                "h-3.5 w-3.5 shrink-0 rounded-sm",
-                SIDEBAR_SKELETON_CLASS,
-              )}
-            />
-            <Skeleton
-              className={cn("h-3 rounded", SIDEBAR_SKELETON_CLASS)}
-              style={{ width: `${60 + ((i * 17) % 30)}%` }}
-            />
-          </div>
-        ))}
-      {visibleThreads.map((thread) => {
-        const title = threadTitle(thread, t("chat.untitledChat"));
-        const isActive =
-          thread.id === activeThreadId ||
-          thread.id === persistedAnalyticsThreadId();
-        const isRenaming = thread.id === renamingThreadId;
-        return (
-          <div
-            key={thread.id}
-            className={cn(
-              "group/item relative flex min-w-0 items-center rounded-lg transition-colors",
-              isActive
-                ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-primary",
-            )}
-          >
-            {isRenaming ? (
-              <form
-                onSubmit={handleRenameSubmit}
-                className="flex min-w-0 flex-1 items-center px-1"
-              >
-                <Input
-                  ref={renameInputRef}
-                  value={renameDraft}
-                  onChange={(event) => setRenameDraft(event.target.value)}
-                  onBlur={() => void commitRenameThread()}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape") {
-                      event.preventDefault();
-                      cancelRenameThread();
-                    }
-                  }}
-                  maxLength={160}
-                  aria-label={t("chat.renameThread", { title })}
-                  className="h-6 min-w-0 rounded-sm border-sidebar-border bg-background px-1.5 text-xs"
-                />
-              </form>
-            ) : (
-              <>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={() => openThread(thread.id)}
-                      className="min-w-0 flex-1 px-2 py-1.5 pe-12 text-start text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    >
-                      <span className="block truncate">{title}</span>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="right">{title}</TooltipContent>
-                </Tooltip>
-                <div className="pointer-events-none absolute end-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
-                  <span className="pointer-events-none pe-1 text-[11px] text-muted-foreground/60 transition-opacity group-hover/item:opacity-0 group-focus-within/item:opacity-0">
-                    {isActive ? "" : formatThreadAge(threadUpdatedAt(thread))}
-                  </span>
-                  <DropdownMenu>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <DropdownMenuTrigger asChild>
-                          <button
-                            type="button"
-                            aria-label={t("chat.optionsFor", { title })}
-                            className="pointer-events-auto rounded p-0.5 text-muted-foreground/50 opacity-0 transition-all hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/item:opacity-100 group-focus-within/item:opacity-100 data-[state=open]:opacity-100 data-[state=open]:text-foreground"
-                          >
-                            <IconDots className="h-3 w-3" />
-                          </button>
-                        </DropdownMenuTrigger>
-                      </TooltipTrigger>
-                      <TooltipContent side="right">
-                        {t("chat.optionsFor", { title })}
-                      </TooltipContent>
-                    </Tooltip>
-                    <DropdownMenuContent
-                      side="right"
-                      align="start"
-                      className="w-44"
-                    >
-                      <DropdownMenuItem
-                        onSelect={() => startRenameThread(thread)}
-                      >
-                        <IconPencil className="me-2 h-3.5 w-3.5" />
-                        {t("chat.renameChat")}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onSelect={() =>
-                          void pinThread(thread.id, !thread.pinnedAt)
-                        }
-                      >
-                        <IconPin className="me-2 h-3.5 w-3.5" />
-                        {thread.pinnedAt
-                          ? t("chat.unpinChat")
-                          : t("chat.pinChat")}
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        onSelect={() => void handleArchiveThread(thread.id)}
-                        className="text-destructive focus:text-destructive"
-                      >
-                        <IconArchive className="me-2 h-3.5 w-3.5" />
-                        {t("chat.archiveChat")}
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </>
-            )}
-          </div>
-        );
-      })}
-      <button
-        type="button"
-        onClick={() => void handleNewChat()}
-        className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-1.5 text-xs text-muted-foreground/60 hover:bg-sidebar-accent/50 hover:text-primary"
-      >
-        <IconPlus className="h-3 w-3" />
-        {t("chat.newChat")}
-      </button>
+    <div
+      className="an-chat-history-rail__collapse"
+      data-state={open ? "open" : "closed"}
+      aria-hidden={!open}
+    >
+      <div className="ms-4 min-w-0 space-y-0.5">
+        {chatsLoading &&
+          visibleThreads.length === 0 &&
+          Array.from({ length: 3 }).map((_, i) => (
+            <div
+              key={`chat-skeleton-${i}`}
+              className="flex items-center gap-2 px-3 py-1"
+            >
+              <Skeleton
+                className={cn(
+                  "h-3.5 w-3.5 shrink-0 rounded-sm",
+                  SIDEBAR_SKELETON_CLASS,
+                )}
+              />
+              <Skeleton
+                className={cn("h-3 rounded", SIDEBAR_SKELETON_CLASS)}
+                style={{ width: `${60 + ((i * 17) % 30)}%` }}
+              />
+            </div>
+          ))}
+        <ChatHistoryRail
+          items={chatItems}
+          activeId={displayedActiveThreadId}
+          onSelect={(threadId) => openThread(threadId)}
+          onNewChat={() => void handleNewChat()}
+          railLabels={{
+            newChat: t("chat.newChat"),
+            showMore: t("sidebar.showMore", {
+              count: Math.max(0, visibleThreads.length - SIDEBAR_PREVIEW_COUNT),
+            }),
+            showLess: t("sidebar.showLess"),
+          }}
+          renameMaxLength={160}
+          onTogglePin={(threadId) => {
+            const thread = visibleThreads.find((item) => item.id === threadId);
+            if (thread) void pinThread(threadId, !thread.pinnedAt);
+          }}
+          onRename={handleRenameThread}
+          onDelete={(threadId) => void handleArchiveThread(threadId)}
+          labels={{
+            options: (item) =>
+              t("chat.optionsFor", { title: item.titleText ?? "" }),
+            renameInput: (item) =>
+              t("chat.renameThread", { title: item.titleText ?? "" }),
+            rename: t("chat.renameChat"),
+            pin: t("chat.pinChat"),
+            unpin: t("chat.unpinChat"),
+            delete: t("chat.archiveChat"),
+          }}
+          className="min-w-0"
+        />
+      </div>
     </div>
   );
 }
@@ -1573,33 +1450,37 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
   const queryClient = useQueryClient();
   const { setTheme } = useTheme();
 
-  const [dashOpen, setDashOpen] = useState(() =>
-    getStoredBoolean(DASHBOARDS_OPEN_KEY, true),
+  const isAskRoute = location.pathname === "/ask";
+  const activeDashboardId = useMemo(() => {
+    const match = location.pathname.match(/^\/(?:adhoc|dashboards)\/([^/]+)/);
+    if (!match?.[1]) return null;
+    return new URLSearchParams(location.search).get("id") || match[1];
+  }, [location.pathname, location.search]);
+  const activeAnalysisId = useMemo(() => {
+    const match = location.pathname.match(/^\/analyses\/([^/]+)/);
+    return match?.[1] ?? null;
+  }, [location.pathname]);
+  const [askOpen, setAskOpen] = useState(
+    () => getStoredBooleanPreference(ASK_OPEN_KEY) ?? isAskRoute,
+  );
+  const [dashOpen, setDashOpen] = useState(
+    () =>
+      getStoredBooleanPreference(DASHBOARDS_OPEN_KEY) ??
+      activeDashboardId !== null,
   );
   const [dashShowAll, setDashShowAll] = useState(false);
   const [dashFilter, setDashFilter] = useState<SidebarVisibilityFilter>("all");
-  const [analysesOpen, setAnalysesOpen] = useState(() =>
-    getStoredBoolean(ANALYSES_OPEN_KEY, true),
-  );
-  const [analysesShowAll, setAnalysesShowAll] = useState(false);
-  const [analysisFilter, setAnalysisFilter] =
-    useState<SidebarVisibilityFilter>("all");
-  const [analysisHiddenFilter, setAnalysisHiddenFilter] =
-    useState<AnalysisHiddenFilter>("visible");
   const [dashboardSortMode, setDashboardSortModeState] =
     useState<SidebarSortMode>(() => getStoredSortMode(DASHBOARD_SORT_MODE_KEY));
-  const [analysisSortMode, setAnalysisSortModeState] =
-    useState<SidebarSortMode>(() => getStoredSortMode(ANALYSIS_SORT_MODE_KEY));
-  const popularity = usePopularity();
+  const { data: popularity, isReady: popularityReady } = usePopularity();
 
   useEffect(() => {
     if (typeof window !== "undefined" && window.localStorage.getItem("theme")) {
       return;
     }
-    fetch(appApiPath("/api/theme"))
-      .then((r) => r.json())
+    callAction("get-theme", {}, { method: "GET" })
       .then((d) => {
-        if (d.theme === "light" || d.theme === "dark") {
+        if (d?.theme === "light" || d?.theme === "dark") {
           setTheme(d.theme);
         }
       })
@@ -1608,7 +1489,6 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
   const { mutateAsync: renameDashboard } =
     useActionMutation("rename-dashboard");
   const { mutateAsync: renameAnalysis } = useActionMutation("rename-analysis");
-  const { mutateAsync: hideAnalysisMut } = useActionMutation("hide-analysis");
   const { mutateAsync: setResourceVisibility } = useActionMutation(
     "set-resource-visibility",
   );
@@ -1646,12 +1526,14 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
   const [dashboardOrderState, setDashboardOrderState] = useState(() =>
     typeof window === "undefined" ? [] : getDashboardOrder(),
   );
-  const [analysisOrderState, setAnalysisOrderState] = useState(() =>
-    typeof window === "undefined" ? [] : getAnalysisOrder(),
-  );
-
   // Server-backed favorites
-  const { data: favoritesData, save: saveFavorites } = useUserPref<{
+  const {
+    data: favoritesData,
+    isLoading: favoritesLoading,
+    isError: favoritesError,
+    isSuccess: favoritesLoaded,
+    save: saveFavorites,
+  } = useUserPref<{
     ids: string[];
   }>("favorites");
   const favoriteIds = useMemo(
@@ -1660,6 +1542,10 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
   );
   const toggleFavorite = useCallback(
     (id: string) => {
+      if (favoritesError || !favoritesLoaded) {
+        toast.error(t("sidebar.favoritesUnavailable"));
+        return;
+      }
       const next = new Set(favoriteIds);
       if (next.has(id)) {
         next.delete(id);
@@ -1668,7 +1554,7 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
       }
       saveFavorites({ ids: Array.from(next) });
     },
-    [favoriteIds, saveFavorites],
+    [favoriteIds, favoritesError, favoritesLoaded, saveFavorites],
   );
 
   const setDashboardSortMode = useCallback((mode: SidebarSortMode) => {
@@ -1676,9 +1562,24 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
     setDashboardSortModeState(mode);
   }, []);
 
-  const setAnalysisSortMode = useCallback((mode: SidebarSortMode) => {
-    setStoredSortMode(ANALYSIS_SORT_MODE_KEY, mode);
-    setAnalysisSortModeState(mode);
+  useEffect(() => {
+    if (getStoredBooleanPreference(ASK_OPEN_KEY) === null) {
+      setAskOpen(isAskRoute);
+    }
+  }, [isAskRoute]);
+
+  useEffect(() => {
+    if (getStoredBooleanPreference(DASHBOARDS_OPEN_KEY) === null) {
+      setDashOpen(activeDashboardId !== null);
+    }
+  }, [activeDashboardId]);
+
+  const toggleAskOpen = useCallback(() => {
+    setAskOpen((current) => {
+      const next = !current;
+      setStoredBoolean(ASK_OPEN_KEY, next);
+      return next;
+    });
   }, []);
 
   const toggleDashOpen = useCallback(() => {
@@ -1689,87 +1590,42 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
     });
   }, []);
 
-  const toggleAnalysesOpen = useCallback(() => {
-    setAnalysesOpen((current) => {
-      const next = !current;
-      setStoredBoolean(ANALYSES_OPEN_KEY, next);
-      return next;
-    });
-  }, []);
-
   // Fold per-source counters into sidebar list query keys so agent-driven
   // create/rename/archive/delete shows up without a manual refresh. We
-  // depend on `action` too because the agent runner emits an `action`
-  // event for every successful tool call — even when the matching
-  // resource-table emit (`dashboards` / `analyses`) is missed (e.g. event
-  // batching). See `use-change-version.ts` in @agent-native/core.
-  const dashboardsSync = useChangeVersions(["dashboards", "action"]);
-  const analysesSync = useChangeVersions(["analyses", "action"]);
+  // Domain counters keep these lists targeted. Folding the generic `action`
+  // counter into the keys makes unrelated background work cancel and restart
+  // both sidebar reads.
+  const dashboardsSync = useSettledSyncVersion(
+    useChangeVersions(["dashboards"]),
+  );
+  const analysesSync = useSettledSyncVersion(useChangeVersions(["analyses"]));
   const dashboardsSyncRef = useRef(dashboardsSync);
-  const analysesSyncRef = useRef(analysesSync);
   dashboardsSyncRef.current = dashboardsSync;
-  analysesSyncRef.current = analysesSync;
 
-  const { data: sqlDashboards = [], isLoading: sqlDashboardsLoading } =
-    useQuery({
-      queryKey: ["sql-dashboards-sidebar", dashboardsSync],
-      queryFn: () => fetchSqlDashboards(t),
-      staleTime: 30_000,
-      placeholderData: (prev) => prev,
-    });
-
-  const { data: analysesList = [], isLoading: analysesLoading } = useQuery({
-    queryKey: ["analyses-sidebar", analysesSync, analysisHiddenFilter],
-    queryFn: () => fetchSidebarAnalyses(t, analysisHiddenFilter),
+  const {
+    data: sqlDashboards = [],
+    isLoading: sqlDashboardsLoading,
+    isPlaceholderData: sqlDashboardsPlaceholder,
+    isError: sqlDashboardsError,
+    refetch: refetchSqlDashboards,
+  } = useQuery({
+    queryKey: ["sql-dashboards-sidebar", dashboardsSync],
+    queryFn: () => fetchSqlDashboards(t),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
   });
 
-  const sortedAnalyses = useMemo(() => {
-    if (analysisSortMode === "alphabetical") {
-      return sortByName(analysesList);
-    }
-    if (analysisSortMode === "manual" && analysisOrderState.length > 0) {
-      return applyOrder(analysesList, analysisOrderState);
-    }
-    return [...analysesList].sort((a, b) => {
-      const aFav = favoriteIds.has(`analysis:${a.id}`) ? 0 : 1;
-      const bFav = favoriteIds.has(`analysis:${b.id}`) ? 0 : 1;
-      if (aFav !== bFav) return aFav - bFav;
-      const aPop = popularityOf(popularity, "analysis", a.id);
-      const bPop = popularityOf(popularity, "analysis", b.id);
-      if (aPop !== bPop) return bPop - aPop;
-      return a.name.localeCompare(b.name);
-    });
-  }, [
-    analysesList,
-    analysisSortMode,
-    analysisOrderState,
-    popularity,
-    favoriteIds,
-  ]);
-
-  const filteredAnalyses = useMemo(
-    () =>
-      sortedAnalyses.filter((analysis) =>
-        matchesVisibilityFilter(analysis, analysisFilter),
-      ),
-    [sortedAnalyses, analysisFilter],
-  );
-
-  const displayedAnalyses = useMemo(
-    () =>
-      analysesShowAll
-        ? filteredAnalyses
-        : filteredAnalyses.slice(0, SIDEBAR_PREVIEW_COUNT),
-    [filteredAnalyses, analysesShowAll],
-  );
-
-  const activeDashboardId = useMemo(() => {
-    const match = location.pathname.match(/^\/(?:adhoc|dashboards)\/([^/]+)/);
-    if (!match?.[1]) return null;
-    return new URLSearchParams(location.search).get("id") || match[1];
-  }, [location.pathname, location.search]);
+  const {
+    data: analysesList = [],
+    isLoading: analysesLoading,
+    isError: analysesError,
+    refetch: refetchAnalyses,
+  } = useQuery({
+    queryKey: ["analyses-sidebar", analysesSync],
+    queryFn: () => fetchSidebarAnalyses(t),
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
 
   // Only the active dashboard can display saved views in the sidebar, so avoid
   // issuing one request per dashboard on every sidebar mount.
@@ -1803,24 +1659,6 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
     [dashboardsSync, queryClient, t],
   );
 
-  const prefetchAnalysis = useCallback(
-    (id: string) => {
-      const queryKey = analysisDetailPrefetchKey(id);
-      const cached =
-        queryClient.getQueryData<PrefetchSnapshot<unknown | null>>(queryKey);
-      void import("@/pages/analyses/AnalysisDetail");
-      void queryClient.prefetchQuery({
-        queryKey,
-        queryFn: async () => ({
-          data: await fetchAnalysisDetailForPrefetch(id),
-          syncVersion: analysesSync,
-        }),
-        staleTime: cached?.syncVersion === analysesSync ? 30_000 : 0,
-      });
-    },
-    [analysesSync, queryClient],
-  );
-
   const visibleDashboards = useMemo<SidebarDashboard[]>(() => {
     const staticItems: SidebarDashboard[] = dashboards
       .filter((d) => !hiddenIds.has(d.id))
@@ -1837,7 +1675,14 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
       visibility: d.visibility,
       parentId: d.parentId,
     }));
-    const all = [...staticItems, ...sqlItems];
+    const analysisItems: SidebarDashboard[] = analysesList.map((a) => ({
+      id: `analysis:${a.id}`,
+      resourceId: a.id,
+      name: a.name,
+      source: "analysis",
+      visibility: a.visibility,
+    }));
+    const all = [...staticItems, ...sqlItems, ...analysisItems];
     if (dashboardSortMode === "alphabetical") {
       return sortByName(all);
     }
@@ -1845,13 +1690,27 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
       return applyOrder(all, dashboardOrderState);
     }
     return [...all].sort((a, b) => {
-      const aFav = favoriteIds.has(a.id) ? 0 : 1;
-      const bFav = favoriteIds.has(b.id) ? 0 : 1;
+      const aResourceId = a.resourceId ?? a.id;
+      const bResourceId = b.resourceId ?? b.id;
+      const aFavoriteKey =
+        a.source === "analysis" ? `analysis:${aResourceId}` : a.id;
+      const bFavoriteKey =
+        b.source === "analysis" ? `analysis:${bResourceId}` : b.id;
+      const aFav = favoriteIds.has(aFavoriteKey) ? 0 : 1;
+      const bFav = favoriteIds.has(bFavoriteKey) ? 0 : 1;
       if (aFav !== bFav) return aFav - bFav;
-      const aPop = popularityOf(popularity, "dashboard", a.id);
-      const bPop = popularityOf(popularity, "dashboard", b.id);
+      const aPop = popularityOf(
+        popularity,
+        a.source === "analysis" ? "analysis" : "dashboard",
+        aResourceId,
+      );
+      const bPop = popularityOf(
+        popularity,
+        b.source === "analysis" ? "analysis" : "dashboard",
+        bResourceId,
+      );
       if (aPop !== bPop) return bPop - aPop;
-      return a.name.localeCompare(b.name);
+      return a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
     });
   }, [
     hiddenIds,
@@ -1860,6 +1719,7 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
     dashboardSortMode,
     dashboardOrderState,
     sqlDashboards,
+    analysesList,
     popularity,
   ]);
 
@@ -1907,6 +1767,19 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
     [topLevelDashboards, dashShowAll],
   );
 
+  const dashboardListHasRendered = useRef(false);
+  const dashboardListReady = shouldRenderDashboardList({
+    sqlDashboardsLoading,
+    sqlDashboardsPlaceholder,
+    isInitialLoad: !dashboardListHasRendered.current,
+    favoritesLoading,
+    popularityReady,
+    sortMode: dashboardSortMode,
+  });
+  useEffect(() => {
+    if (dashboardListReady) dashboardListHasRendered.current = true;
+  }, [dashboardListReady]);
+
   // The flattened id order exactly as rendered (each parent immediately
   // followed by its nested children). Drag reordering must use this so the
   // arrayMove indices match what the user sees; the raw `visibleDashboards`
@@ -1923,6 +1796,12 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
 
   const handleDashboardDelete = useCallback(
     async (d: SidebarDashboard) => {
+      if (d.source === "analysis") {
+        await deleteAnalysisMut({ id: d.resourceId ?? d.id });
+        queryClient.invalidateQueries({ queryKey: ["analyses-sidebar"] });
+        queryClient.invalidateQueries({ queryKey: ["analyses-list"] });
+        return;
+      }
       if (d.source === "static") {
         hideDashboard(d.id);
         setHiddenIds(getHiddenDashboards());
@@ -1949,11 +1828,12 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
         throw err;
       }
     },
-    [queryClient, deleteSqlDashboard],
+    [deleteAnalysisMut, deleteSqlDashboard, queryClient],
   );
 
   const handleDashboardArchive = useCallback(
     async (d: SidebarDashboard) => {
+      if (d.source === "analysis") return;
       if (d.source === "static") {
         // Static dashboards can only be hidden, not archived; route to delete
         // (which calls hideDashboard for static items).
@@ -1988,6 +1868,16 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
       const trimmed = name.trim();
       if (!trimmed || trimmed === d.name) return;
 
+      if (d.source === "analysis") {
+        await renameAnalysis({ id: d.resourceId ?? d.id, name: trimmed });
+        queryClient.invalidateQueries({ queryKey: ["analyses-sidebar"] });
+        queryClient.invalidateQueries({ queryKey: ["analyses-list"] });
+        queryClient.invalidateQueries({
+          queryKey: ["analysis-detail", d.resourceId ?? d.id],
+        });
+        return;
+      }
+
       if (d.source === "static") {
         setStaticDashboardRenamesState((prev) => {
           const next = { ...prev, [d.id]: trimmed };
@@ -2019,38 +1909,27 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
         throw err;
       }
     },
-    [queryClient, renameDashboard],
-  );
-
-  const handleAnalysisDelete = useCallback(
-    async (a: { id: string; name: string }) => {
-      const queryKey = ["analyses-sidebar"] as const;
-      const prev = getQuerySnapshots<{ id: string; name: string }[]>(
-        queryClient,
-        queryKey,
-      );
-      queryClient.setQueriesData<{ id: string; name: string }[]>(
-        { queryKey },
-        (old) => (old ?? []).filter((item) => item.id !== a.id),
-      );
-      try {
-        await deleteAnalysisMut({ id: a.id });
-        queryClient.removeQueries({
-          queryKey: analysisDetailPrefetchKey(a.id),
-        });
-        queryClient.invalidateQueries({ queryKey });
-        queryClient.invalidateQueries({ queryKey: ["analyses-list"] });
-      } catch (err) {
-        restoreQuerySnapshots(queryClient, prev);
-        throw err;
-      }
-    },
-    [queryClient, deleteAnalysisMut],
+    [queryClient, renameAnalysis, renameDashboard],
   );
 
   const handleDashboardSetVisibility = useCallback(
     async (d: SidebarDashboard, visibility: Visibility) => {
       if (d.source === "static") return;
+      if (d.source === "analysis") {
+        await setResourceVisibility({
+          resourceType: "analysis",
+          resourceId: d.resourceId ?? d.id,
+          visibility,
+        } as any);
+        queryClient.invalidateQueries({ queryKey: ["analyses-sidebar"] });
+        queryClient.invalidateQueries({ queryKey: ["analyses-list"] });
+        toast.success(
+          visibility === "org"
+            ? t("sidebar.nameSharedWithOrg", { name: d.name })
+            : t("sidebar.nameMadePrivate", { name: d.name }),
+        );
+        return;
+      }
       const queryKey = [
         "sql-dashboards-sidebar",
         dashboardsSyncRef.current,
@@ -2084,143 +1963,6 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
     [queryClient, setResourceVisibility, t],
   );
 
-  const handleAnalysisSetVisibility = useCallback(
-    async (a: { id: string; name: string }, visibility: Visibility) => {
-      const sidebarKey = ["analyses-sidebar", analysesSyncRef.current] as const;
-      const listKey = ["analyses-list"] as const;
-      const prevSidebar = getQuerySnapshots<
-        { id: string; name: string; visibility?: Visibility }[]
-      >(queryClient, sidebarKey);
-      const prevList = getQuerySnapshots<any[]>(queryClient, listKey);
-      queryClient.setQueriesData<
-        { id: string; name: string; visibility?: Visibility }[]
-      >({ queryKey: sidebarKey }, (old) =>
-        (old ?? []).map((item) =>
-          item.id === a.id ? { ...item, visibility } : item,
-        ),
-      );
-      queryClient.setQueriesData<any[]>({ queryKey: listKey }, (old) =>
-        (old ?? []).map((item) =>
-          item.id === a.id ? { ...item, visibility } : item,
-        ),
-      );
-      try {
-        await setResourceVisibility({
-          resourceType: "analysis",
-          resourceId: a.id,
-          visibility,
-        } as any);
-        queryClient.invalidateQueries({ queryKey: sidebarKey });
-        queryClient.invalidateQueries({ queryKey: listKey });
-        toast.success(
-          visibility === "org"
-            ? t("sidebar.nameSharedWithOrg", { name: a.name })
-            : t("sidebar.nameMadePrivate", { name: a.name }),
-        );
-      } catch (err) {
-        restoreQuerySnapshots(queryClient, prevSidebar);
-        restoreQuerySnapshots(queryClient, prevList);
-        throw err;
-      }
-    },
-    [queryClient, setResourceVisibility, t],
-  );
-
-  const handleAnalysisRename = useCallback(
-    async (a: { id: string; name: string }, name: string) => {
-      const trimmed = name.trim();
-      if (!trimmed || trimmed === a.name) return;
-
-      const sidebarKey = ["analyses-sidebar"] as const;
-      const listKey = ["analyses-list"] as const;
-      const detailKey = ["analysis-detail", a.id] as const;
-      const prevSidebar = getQuerySnapshots<{ id: string; name: string }[]>(
-        queryClient,
-        sidebarKey,
-      );
-      const prevList = getQuerySnapshots<any[]>(queryClient, listKey);
-      const prevDetail = getQuerySnapshots<any>(queryClient, detailKey);
-
-      queryClient.setQueriesData<{ id: string; name: string }[]>(
-        { queryKey: sidebarKey },
-        (old) =>
-          (old ?? []).map((item) =>
-            item.id === a.id ? { ...item, name: trimmed } : item,
-          ),
-      );
-      queryClient.setQueriesData<any[]>({ queryKey: listKey }, (old) =>
-        (old ?? []).map((item) =>
-          item.id === a.id ? { ...item, name: trimmed } : item,
-        ),
-      );
-      queryClient.setQueriesData<any>({ queryKey: detailKey }, (old: any) =>
-        old ? { ...old, name: trimmed } : old,
-      );
-
-      try {
-        await renameAnalysis({ id: a.id, name: trimmed });
-        queryClient.removeQueries({
-          queryKey: analysisDetailPrefetchKey(a.id),
-        });
-        queryClient.invalidateQueries({ queryKey: sidebarKey });
-        queryClient.invalidateQueries({ queryKey: listKey });
-        queryClient.invalidateQueries({ queryKey: detailKey });
-      } catch (err) {
-        restoreQuerySnapshots(queryClient, prevSidebar);
-        restoreQuerySnapshots(queryClient, prevList);
-        restoreQuerySnapshots(queryClient, prevDetail);
-        throw err;
-      }
-    },
-    [queryClient, renameAnalysis],
-  );
-
-  const handleAnalysisHide = useCallback(
-    async (a: { id: string; name: string }) => {
-      const sidebarKey = ["analyses-sidebar"] as const;
-      const prev = getQuerySnapshots<{ id: string }[]>(queryClient, sidebarKey);
-      // Optimistically drop it from the visible list (the hidden-filter
-      // variant is invalidated below to pick it up).
-      queryClient.setQueriesData<{ id: string }[]>(
-        { queryKey: sidebarKey },
-        (old) => (old ?? []).filter((item) => item.id !== a.id),
-      );
-      try {
-        await hideAnalysisMut({ id: a.id, hidden: true });
-        queryClient.invalidateQueries({ queryKey: sidebarKey });
-        queryClient.invalidateQueries({ queryKey: ["analyses-list"] });
-        toast.success(t("sidebar.nameHidden", { name: a.name }));
-      } catch (err) {
-        restoreQuerySnapshots(queryClient, prev);
-        throw err;
-      }
-    },
-    [queryClient, hideAnalysisMut, t],
-  );
-
-  const handleAnalysisUnhide = useCallback(
-    async (a: { id: string; name: string }) => {
-      const sidebarKey = ["analyses-sidebar"] as const;
-      const prev = getQuerySnapshots<{ id: string }[]>(queryClient, sidebarKey);
-      // Optimistically drop it from the hidden list (the visible variant is
-      // invalidated below to pick it up).
-      queryClient.setQueriesData<{ id: string }[]>(
-        { queryKey: sidebarKey },
-        (old) => (old ?? []).filter((item) => item.id !== a.id),
-      );
-      try {
-        await hideAnalysisMut({ id: a.id, hidden: false });
-        queryClient.invalidateQueries({ queryKey: sidebarKey });
-        queryClient.invalidateQueries({ queryKey: ["analyses-list"] });
-        toast.success(t("sidebar.nameUnhidden", { name: a.name }));
-      } catch (err) {
-        restoreQuerySnapshots(queryClient, prev);
-        throw err;
-      }
-    },
-    [queryClient, hideAnalysisMut, t],
-  );
-
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor, {
@@ -2242,24 +1984,6 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
       setDashboardOrderState(newOrder);
     },
     [setDashboardSortMode, dashboardRenderOrderIds],
-  );
-
-  const handleAnalysisDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const { active, over } = event;
-      if (!over || active.id === over.id) return;
-      setAnalysisSortMode("manual");
-      setAnalysisOrderState((prev) => {
-        const ids = prev.length > 0 ? prev : sortedAnalyses.map((a) => a.id);
-        const oldIndex = ids.indexOf(active.id as string);
-        const newIndex = ids.indexOf(over.id as string);
-        if (oldIndex === -1 || newIndex === -1) return prev;
-        const newOrder = arrayMove(ids, oldIndex, newIndex);
-        setAnalysisOrder(newOrder);
-        return newOrder;
-      });
-    },
-    [setAnalysisSortMode, sortedAnalyses],
   );
 
   const handleResizeStart = useCallback(
@@ -2301,7 +2025,8 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
 
   const isAdhocActive =
     location.pathname.startsWith("/adhoc") ||
-    location.pathname.startsWith("/dashboards");
+    location.pathname.startsWith("/dashboards") ||
+    location.pathname.startsWith("/analyses");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2335,10 +2060,22 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
       },
     },
     {
+      icon: IconChartBar,
+      label: t("navigation.dashboards"),
+      href: "/dashboards",
+      active: isAdhocActive,
+    },
+    {
       icon: IconPlayerPlay,
       label: t("navigation.sessions"),
       href: "/sessions",
       active: location.pathname.startsWith("/sessions"),
+    },
+    {
+      icon: IconHeartbeat,
+      label: t("navigation.monitoring"),
+      href: "/monitoring",
+      active: location.pathname.startsWith("/monitoring"),
     },
     {
       icon: IconActivity,
@@ -2359,24 +2096,69 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
       active: location.pathname.startsWith("/data-dictionary"),
     },
     {
-      icon: IconChartBar,
-      label: t("navigation.dashboards"),
-      href: "/dashboards",
-      active: isAdhocActive,
-    },
-    {
-      icon: IconReportAnalytics,
-      label: t("navigation.analyses"),
-      href: "/analyses",
-      active: location.pathname.startsWith("/analyses"),
-    },
-    {
       icon: IconSettings,
       label: t("navigation.settings"),
       href: "/settings",
       active: location.pathname === "/settings",
     },
   ];
+
+  const footerSearch = (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={openCommandMenu}
+          aria-label={t("sidebar.search")}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground"
+        >
+          <IconSearch className="h-4 w-4" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        {t("sidebar.searchShortcut", {
+          shortcut: `${shortcutModifierLabel()}+K`,
+        })}
+      </TooltipContent>
+    </Tooltip>
+  );
+  const footerTranslate = (
+    <LanguagePicker variant="ghost-icon" label={t("settings.languageLabel")} />
+  );
+  const footerCollapse = !mobile ? (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={() => setSidebarCollapsed(!effectiveCollapsed)}
+          aria-label={
+            effectiveCollapsed
+              ? t("sidebar.expandSidebar")
+              : t("sidebar.collapseSidebar")
+          }
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground"
+        >
+          {effectiveCollapsed ? (
+            <IconLayoutSidebarLeftExpand className="h-4 w-4 rtl:-scale-x-100" />
+          ) : (
+            <IconLayoutSidebarLeftCollapse className="h-4 w-4 rtl:-scale-x-100" />
+          )}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        {effectiveCollapsed
+          ? t("sidebar.expandSidebar")
+          : t("sidebar.collapseSidebar")}
+      </TooltipContent>
+    </Tooltip>
+  ) : null;
+  const footerFeedback = (
+    <FeedbackButton
+      variant={effectiveCollapsed ? "icon" : "sidebar"}
+      side="right"
+      className={effectiveCollapsed ? "h-8 w-8" : "min-w-0"}
+    />
+  );
 
   return (
     <div
@@ -2393,24 +2175,6 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
       )}
       {effectiveCollapsed ? (
         <>
-          <div className="flex h-12 shrink-0 items-center justify-center border-b border-border px-1">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => setSidebarCollapsed(false)}
-                  aria-label={t("sidebar.expandSidebar")}
-                  className="flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground"
-                >
-                  <IconLayoutSidebarLeftExpand className="h-4 w-4 rtl:-scale-x-100" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="right">
-                {t("sidebar.expandSidebar")}
-              </TooltipContent>
-            </Tooltip>
-          </div>
-
           <nav className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto px-1 py-2">
             {collapsedNavItems.map((item) => {
               const Icon = item.icon;
@@ -2436,6 +2200,13 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
               );
             })}
           </nav>
+          <SidebarFooterActions
+            collapsed
+            feedback={footerFeedback}
+            translate={footerTranslate}
+            search={footerSearch}
+            collapse={footerCollapse}
+          />
         </>
       ) : (
         <>
@@ -2460,60 +2231,69 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
                 {t("navigation.brand")}
               </span>
             </Link>
-            {!mobile && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => setSidebarCollapsed(true)}
-                    aria-label={t("sidebar.collapseSidebar")}
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground"
-                  >
-                    <IconLayoutSidebarLeftCollapse className="h-4 w-4 rtl:-scale-x-100" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="right">
-                  {t("sidebar.collapseSidebar")}
-                </TooltipContent>
-              </Tooltip>
-            )}
           </div>
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden py-2">
             <nav className="grid min-w-0 items-start px-2 text-sm font-medium lg:px-4 space-y-1">
-              {/* Ask link */}
-              <div className="min-w-0 space-y-1">
-                <Link
-                  to="/ask"
-                  onClick={(event) => {
-                    if (
-                      location.pathname !== "/ask" &&
-                      !event.metaKey &&
-                      !event.ctrlKey &&
-                      !event.shiftKey &&
-                      !event.altKey
-                    ) {
-                      event.preventDefault();
-                      navigateWithAgentChatViewTransition(navigate, "/ask");
-                    }
-                  }}
+              {/* Ask section */}
+              <div className="order-1 group/section min-w-0 space-y-1">
+                <div
                   className={cn(
-                    "flex items-center gap-3 rounded-lg px-3 py-2 transition-all hover:text-primary",
-                    location.pathname === "/ask"
+                    "flex w-full min-w-0 items-center rounded-lg transition-colors hover:text-primary",
+                    isAskRoute
                       ? "bg-sidebar-accent text-sidebar-accent-foreground"
                       : "text-muted-foreground hover:bg-sidebar-accent/50",
                   )}
                 >
-                  <IconMessageCircle className="h-4 w-4" />
-                  {t("navigation.ask")}
-                </Link>
-                {location.pathname === "/ask" && <AnalyticsChatsSection />}
+                  <Link
+                    to="/ask"
+                    onClick={(event) => {
+                      if (
+                        !isAskRoute &&
+                        !event.metaKey &&
+                        !event.ctrlKey &&
+                        !event.shiftKey &&
+                        !event.altKey
+                      ) {
+                        event.preventDefault();
+                        navigateWithAgentChatViewTransition(navigate, "/ask");
+                      }
+                    }}
+                    className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2"
+                  >
+                    <IconMessageCircle className="h-4 w-4 shrink-0" />
+                    <span className="min-w-0 flex-1 truncate">
+                      {t("navigation.ask")}
+                    </span>
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={toggleAskOpen}
+                    className="me-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 hover:bg-sidebar-accent hover:text-foreground"
+                    aria-label={
+                      askOpen
+                        ? t("sidebar.collapseAsk")
+                        : t("sidebar.expandAsk")
+                    }
+                    aria-expanded={askOpen}
+                  >
+                    <IconChevronDown
+                      className={cn(
+                        "h-3.5 w-3.5 shrink-0 transition-transform",
+                        !askOpen && "-rotate-90",
+                      )}
+                    />
+                  </button>
+                </div>
+                {askOpen && isAskRoute ? (
+                  <AnalyticsChatsSection isAskRoute open />
+                ) : null}
               </div>
 
               {/* Sessions link */}
               <Link
                 to="/sessions"
                 className={cn(
-                  "flex items-center gap-3 rounded-lg px-3 py-2 transition-all hover:text-primary",
+                  "order-4 flex items-center gap-3 rounded-lg px-3 py-2 transition-colors hover:text-primary",
                   location.pathname.startsWith("/sessions")
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "text-muted-foreground hover:bg-sidebar-accent/50",
@@ -2523,11 +2303,25 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
                 {t("navigation.sessions")}
               </Link>
 
+              {/* Monitoring link */}
+              <Link
+                to="/monitoring"
+                className={cn(
+                  "order-5 flex items-center gap-3 rounded-lg px-3 py-2 transition-colors hover:text-primary",
+                  location.pathname.startsWith("/monitoring")
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    : "text-muted-foreground hover:bg-sidebar-accent/50",
+                )}
+              >
+                <IconHeartbeat className="h-4 w-4" />
+                {t("navigation.monitoring")}
+              </Link>
+
               {/* Agents link */}
               <Link
                 to="/agents"
                 className={cn(
-                  "flex items-center gap-3 rounded-lg px-3 py-2 transition-all hover:text-primary",
+                  "order-6 flex items-center gap-3 rounded-lg px-3 py-2 transition-colors hover:text-primary",
                   location.pathname.startsWith("/agents")
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "text-muted-foreground hover:bg-sidebar-accent/50",
@@ -2541,7 +2335,7 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
               <Link
                 to="/data-sources"
                 className={cn(
-                  "flex items-center gap-3 rounded-lg px-3 py-2 transition-all hover:text-primary",
+                  "order-7 flex items-center gap-3 rounded-lg px-3 py-2 transition-colors hover:text-primary",
                   location.pathname === "/data-sources"
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "text-muted-foreground hover:bg-sidebar-accent/50",
@@ -2555,7 +2349,7 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
               <Link
                 to="/data-dictionary"
                 className={cn(
-                  "flex items-center gap-3 rounded-lg px-3 py-2 transition-all hover:text-primary",
+                  "order-8 flex items-center gap-3 rounded-lg px-3 py-2 transition-colors hover:text-primary",
                   location.pathname.startsWith("/data-dictionary")
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "text-muted-foreground hover:bg-sidebar-accent/50",
@@ -2566,10 +2360,10 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
               </Link>
 
               {/* Dashboards section */}
-              <div className="group/section min-w-0 space-y-1">
+              <div className="order-2 group/section min-w-0 space-y-1">
                 <div
                   className={cn(
-                    "flex w-full min-w-0 items-center rounded-lg transition-all hover:text-primary",
+                    "flex w-full min-w-0 items-center rounded-lg transition-colors hover:text-primary",
                     isAdhocActive
                       ? "text-sidebar-accent-foreground"
                       : "text-muted-foreground hover:bg-sidebar-accent/50",
@@ -2626,64 +2420,74 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
                       strategy={verticalListSortingStrategy}
                     >
                       <div className="ms-4 min-w-0 space-y-0.5">
-                        {displayedDashboards.map((d) => {
-                          const children = dashboardChildren.get(d.id) ?? [];
-                          return (
-                            <Fragment key={d.id}>
-                              <SortableDashboardItem
-                                d={d}
-                                isActive={activeDashboardId === d.id}
-                                location={location}
-                                favoriteIds={favoriteIds}
-                                onToggleFavorite={toggleFavorite}
-                                onDelete={handleDashboardDelete}
-                                onRename={handleDashboardRename}
-                                onArchive={handleDashboardArchive}
-                                onSetVisibility={handleDashboardSetVisibility}
-                                onPrefetch={prefetchDashboard}
-                                views={allViewsMap[d.id]}
-                              />
-                              {children.length > 0 && (
-                                <div className="ms-3 space-y-0.5 border-s border-sidebar-border/60 ps-1">
-                                  {children.map((child) => (
-                                    <SortableDashboardItem
-                                      key={child.id}
-                                      d={child}
-                                      isActive={activeDashboardId === child.id}
-                                      location={location}
-                                      favoriteIds={favoriteIds}
-                                      onToggleFavorite={toggleFavorite}
-                                      onDelete={handleDashboardDelete}
-                                      onRename={handleDashboardRename}
-                                      onArchive={handleDashboardArchive}
-                                      onSetVisibility={
-                                        handleDashboardSetVisibility
-                                      }
-                                      onPrefetch={prefetchDashboard}
-                                      views={allViewsMap[child.id]}
-                                    />
-                                  ))}
-                                </div>
-                              )}
-                            </Fragment>
-                          );
-                        })}
-                        {topLevelDashboards.length > SIDEBAR_PREVIEW_COUNT && (
-                          <button
-                            onClick={() => setDashShowAll(!dashShowAll)}
-                            className="flex items-center gap-1 px-3 py-1 text-[11px] text-muted-foreground/70 hover:text-primary"
-                          >
-                            {dashShowAll
-                              ? t("sidebar.showLess")
-                              : t("sidebar.showMore", {
-                                  count:
-                                    topLevelDashboards.length -
-                                    SIDEBAR_PREVIEW_COUNT,
-                                })}
-                          </button>
-                        )}
-                        {sqlDashboardsLoading &&
-                          sqlDashboards.length === 0 &&
+                        {dashboardListReady &&
+                          displayedDashboards.map((d) => {
+                            const children = dashboardChildren.get(d.id) ?? [];
+                            return (
+                              <Fragment key={d.id}>
+                                <SortableDashboardItem
+                                  d={d}
+                                  isActive={
+                                    d.source === "analysis"
+                                      ? activeAnalysisId === d.resourceId
+                                      : activeDashboardId === d.id
+                                  }
+                                  location={location}
+                                  favoriteIds={favoriteIds}
+                                  onToggleFavorite={toggleFavorite}
+                                  onDelete={handleDashboardDelete}
+                                  onRename={handleDashboardRename}
+                                  onArchive={handleDashboardArchive}
+                                  onSetVisibility={handleDashboardSetVisibility}
+                                  onPrefetch={prefetchDashboard}
+                                  views={allViewsMap[d.id]}
+                                />
+                                {children.length > 0 && (
+                                  <div className="ms-3 space-y-0.5 border-s border-sidebar-border/60 ps-1">
+                                    {children.map((child) => (
+                                      <SortableDashboardItem
+                                        key={child.id}
+                                        d={child}
+                                        isActive={
+                                          child.source === "analysis"
+                                            ? activeAnalysisId ===
+                                              child.resourceId
+                                            : activeDashboardId === child.id
+                                        }
+                                        location={location}
+                                        favoriteIds={favoriteIds}
+                                        onToggleFavorite={toggleFavorite}
+                                        onDelete={handleDashboardDelete}
+                                        onRename={handleDashboardRename}
+                                        onArchive={handleDashboardArchive}
+                                        onSetVisibility={
+                                          handleDashboardSetVisibility
+                                        }
+                                        onPrefetch={prefetchDashboard}
+                                        views={allViewsMap[child.id]}
+                                      />
+                                    ))}
+                                  </div>
+                                )}
+                              </Fragment>
+                            );
+                          })}
+                        {dashboardListReady &&
+                          topLevelDashboards.length > SIDEBAR_PREVIEW_COUNT && (
+                            <button
+                              onClick={() => setDashShowAll(!dashShowAll)}
+                              className="flex items-center gap-1 px-3 py-1 text-[11px] text-muted-foreground/70 hover:text-primary"
+                            >
+                              {dashShowAll
+                                ? t("sidebar.showLess")
+                                : t("sidebar.showMore", {
+                                    count:
+                                      topLevelDashboards.length -
+                                      SIDEBAR_PREVIEW_COUNT,
+                                  })}
+                            </button>
+                          )}
+                        {!dashboardListReady &&
                           Array.from({ length: 3 }).map((_, i) => (
                             <div
                               key={`sql-skeleton-${i}`}
@@ -2704,147 +2508,37 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
                               />
                             </div>
                           ))}
-                        <NewDashboardDialog />
-                      </div>
-                    </SortableContext>
-                  </DndContext>
-                )}
-              </div>
-
-              {/* Analyses section */}
-              <div className="group/section min-w-0 space-y-1">
-                <div
-                  className={cn(
-                    "flex w-full min-w-0 items-center rounded-lg transition-all hover:text-primary",
-                    location.pathname.startsWith("/analyses")
-                      ? "text-sidebar-accent-foreground"
-                      : "text-muted-foreground hover:bg-sidebar-accent/50",
-                  )}
-                >
-                  <button
-                    type="button"
-                    onClick={toggleAnalysesOpen}
-                    className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-start"
-                    aria-expanded={analysesOpen}
-                  >
-                    <IconReportAnalytics className="h-4 w-4 shrink-0" />
-                    <span className="min-w-0 flex-1 truncate">
-                      {t("navigation.analyses")}
-                    </span>
-                  </button>
-                  <SidebarSectionSettingsPopover
-                    label={t("navigation.analyses")}
-                    sortMode={analysisSortMode}
-                    onSortModeChange={setAnalysisSortMode}
-                    visibilityFilter={analysisFilter}
-                    onVisibilityFilterChange={setAnalysisFilter}
-                    showHidden={analysisHiddenFilter === "hidden"}
-                    onShowHiddenChange={(checked) =>
-                      setAnalysisHiddenFilter(checked ? "hidden" : "visible")
-                    }
-                  />
-                  <button
-                    type="button"
-                    onClick={toggleAnalysesOpen}
-                    className="me-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 hover:bg-sidebar-accent hover:text-foreground"
-                    aria-label={
-                      analysesOpen
-                        ? t("sidebar.collapseAnalyses")
-                        : t("sidebar.expandAnalyses")
-                    }
-                  >
-                    <IconChevronDown
-                      className={cn(
-                        "h-3.5 w-3.5 shrink-0 transition-transform",
-                        !analysesOpen && "-rotate-90",
-                      )}
-                    />
-                  </button>
-                </div>
-
-                {analysesOpen && (
-                  <DndContext
-                    sensors={sensors}
-                    collisionDetection={closestCenter}
-                    onDragEnd={handleAnalysisDragEnd}
-                  >
-                    <SortableContext
-                      items={displayedAnalyses.map((a) => a.id)}
-                      strategy={verticalListSortingStrategy}
-                    >
-                      <div className="ms-4 min-w-0 space-y-0.5">
-                        {displayedAnalyses.map((a) => (
-                          <SortableRow
-                            key={a.id}
-                            id={a.id}
-                            favoriteKey={`analysis:${a.id}`}
-                            name={a.name}
-                            href={`/analyses/${a.id}`}
-                            isActive={location.pathname === `/analyses/${a.id}`}
-                            favoriteIds={favoriteIds}
-                            onToggleFavorite={toggleFavorite}
-                            onDelete={() => handleAnalysisDelete(a)}
-                            onRename={(name) => handleAnalysisRename(a, name)}
-                            hidden={analysisHiddenFilter === "hidden"}
-                            onHide={
-                              analysisHiddenFilter === "hidden"
-                                ? undefined
-                                : () => handleAnalysisHide(a)
-                            }
-                            onUnhide={
-                              analysisHiddenFilter === "hidden"
-                                ? () => handleAnalysisUnhide(a)
-                                : undefined
-                            }
-                            visibility={a.visibility}
-                            onSetVisibility={(v) =>
-                              handleAnalysisSetVisibility(a, v)
-                            }
-                            onPrefetch={() => prefetchAnalysis(a.id)}
+                        {sqlDashboardsError && sqlDashboards.length === 0 && (
+                          <SidebarLoadError
+                            message={t("sidebar.dashboardsLoadFailed")}
+                            retryLabel={t("sidebar.retry")}
+                            onRetry={() => void refetchSqlDashboards()}
                           />
-                        ))}
-                        {filteredAnalyses.length > SIDEBAR_PREVIEW_COUNT && (
-                          <button
-                            onClick={() => setAnalysesShowAll(!analysesShowAll)}
-                            className="flex items-center gap-1 px-3 py-1 text-[11px] text-muted-foreground/70 hover:text-primary"
-                          >
-                            {analysesShowAll
-                              ? t("sidebar.showLess")
-                              : t("sidebar.showMore", {
-                                  count:
-                                    filteredAnalyses.length -
-                                    SIDEBAR_PREVIEW_COUNT,
-                                })}
-                          </button>
                         )}
-                        {analysesLoading &&
-                          sortedAnalyses.length === 0 &&
-                          Array.from({ length: 3 }).map((_, i) => (
-                            <div
-                              key={`analysis-skeleton-${i}`}
-                              className="flex items-center gap-2 px-3 py-1"
-                            >
-                              <Skeleton
-                                className={cn(
-                                  "h-3.5 w-3.5 shrink-0 rounded-sm",
-                                  SIDEBAR_SKELETON_CLASS,
-                                )}
-                              />
-                              <Skeleton
-                                className={cn(
-                                  "h-3 rounded",
-                                  SIDEBAR_SKELETON_CLASS,
-                                )}
-                                style={{ width: `${60 + ((i * 17) % 30)}%` }}
-                              />
-                            </div>
-                          ))}
-                        {!analysesLoading && sortedAnalyses.length === 0 && (
-                          <p className="px-3 py-1 text-[11px] text-muted-foreground/60">
-                            {t("sidebar.noAnalysesYet")}
-                          </p>
+                        {analysesLoading && analysesList.length === 0 && (
+                          <div className="flex items-center gap-2 px-3 py-1">
+                            <Skeleton
+                              className={cn(
+                                "h-3.5 w-3.5 shrink-0 rounded-sm",
+                                SIDEBAR_SKELETON_CLASS,
+                              )}
+                            />
+                            <Skeleton
+                              className={cn(
+                                "h-3 w-3/4 rounded",
+                                SIDEBAR_SKELETON_CLASS,
+                              )}
+                            />
+                          </div>
                         )}
-                        <NewAnalysisDialog />
+                        {analysesError && analysesList.length === 0 && (
+                          <SidebarLoadError
+                            message={t("sidebar.analysesLoadFailed")}
+                            retryLabel={t("sidebar.retry")}
+                            onRetry={() => void refetchAnalyses()}
+                          />
+                        )}
+                        <NewDashboardDialog />
                       </div>
                     </SortableContext>
                   </DndContext>
@@ -2862,61 +2556,30 @@ export function Sidebar({ mobile }: { mobile?: boolean } = {}) {
                       key={item.href}
                       to={item.href}
                       className={cn(
-                        "flex items-center gap-3 rounded-lg px-3 py-2 transition-all hover:text-primary",
+                        "flex items-center gap-3 rounded-lg px-3 py-2 transition-colors hover:text-primary",
                         isActive
                           ? "bg-sidebar-accent text-sidebar-accent-foreground"
                           : "text-muted-foreground hover:bg-sidebar-accent/50",
                       )}
                     >
                       <Icon className="h-4 w-4" />
-                      {t(item.labelKey)}
+                      <span className="truncate">{t(item.labelKey)}</span>
                     </Link>
                   );
                 })}
               </nav>
 
-              <div className="min-w-0">
-                <ExtensionsSidebarSection />
-              </div>
-
               <div className="space-y-2 pt-2">
                 <OrgSwitcher />
+                <DevDatabaseLink />
                 <TooltipProvider delayDuration={200}>
-                  <div className="flex items-center gap-1">
-                    <DevDatabaseLink />
-                    <FeedbackButton className="min-w-0 flex-1" />
-                    <div className="flex shrink-0 items-center gap-0.5">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            onClick={() =>
-                              window.dispatchEvent(
-                                new CustomEvent(
-                                  "analytics:open-command-palette",
-                                ),
-                              )
-                            }
-                            aria-label={t("sidebar.search")}
-                            className="flex items-center justify-center rounded-lg p-2 text-muted-foreground transition-all hover:text-primary cursor-pointer hover:bg-sidebar-accent/50"
-                          >
-                            <IconSearch className="h-4 w-4" />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="top">
-                          <p>
-                            {t("sidebar.searchShortcut", {
-                              shortcut: `${shortcutModifierLabel()}+K`,
-                            })}
-                          </p>
-                        </TooltipContent>
-                      </Tooltip>
-                      <LanguagePicker
-                        variant="icon"
-                        label={t("settings.languageLabel")}
-                        className="[&_[data-language-picker-trigger]]:rounded-lg [&_[data-language-picker-trigger]]:border-0 [&_[data-language-picker-trigger]]:bg-transparent [&_[data-language-picker-trigger]]:text-muted-foreground [&_[data-language-picker-trigger]]:hover:bg-sidebar-accent/50 [&_[data-language-picker-trigger]]:hover:text-primary"
-                      />
-                    </div>
-                  </div>
+                  <SidebarFooterActions
+                    feedback={footerFeedback}
+                    translate={footerTranslate}
+                    search={footerSearch}
+                    collapse={footerCollapse}
+                    className="px-0 py-0"
+                  />
                 </TooltipProvider>
               </div>
             </div>

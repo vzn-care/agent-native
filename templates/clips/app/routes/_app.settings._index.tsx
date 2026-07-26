@@ -1,17 +1,19 @@
 import {
-  useSession,
   agentNativePath,
   appApiPath,
-  LanguagePicker,
-  useActionQuery,
+} from "@agent-native/core/client/api-path";
+import { ChangelogSettingsCard } from "@agent-native/core/client/changelog";
+import { useSession, useActionQuery } from "@agent-native/core/client/hooks";
+import { LanguagePicker, useT } from "@agent-native/core/client/i18n";
+import { TeamPage, useOrg, useSwitchOrg } from "@agent-native/core/client/org";
+import {
+  AccountSettingsCard,
   useBuilderConnectFlow,
   useBuilderStatus,
-  ChangelogSettingsCard,
   SettingsTabsPage,
   useAgentSettingsTabs,
-  useT,
-} from "@agent-native/core/client";
-import { TeamPage } from "@agent-native/core/client/org";
+  type SettingsSearchEntry,
+} from "@agent-native/core/client/settings";
 import {
   BUILDER_CREDITS_UPGRADE_URL,
   type BuilderCreditsStatus,
@@ -29,8 +31,9 @@ import {
   IconServer,
   IconTrash,
   IconUser,
+  IconUsersGroup,
 } from "@tabler/icons-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/library/page-header";
@@ -393,6 +396,8 @@ export default function SettingsIndexRoute() {
   const { session } = useSession();
   const t = useT();
   const agentSettingsTabs = useAgentSettingsTabs();
+  const { data: org } = useOrg();
+  const switchOrg = useSwitchOrg();
   const email = session?.email ?? "";
   const storageStatus = useVideoStorageStatus();
   const builderStatus = useBuilderStatus();
@@ -503,6 +508,22 @@ export default function SettingsIndexRoute() {
   useEffect(() => {
     void refreshApiKeyStatus();
   }, [refreshApiKeyStatus]);
+
+  const orgs = org?.orgs ?? [];
+
+  async function handleUploadWorkspaceChange(organizationId: string) {
+    if (!organizationId || organizationId === org?.orgId) return;
+    try {
+      await switchOrg.mutateAsync(organizationId);
+      toast.success(t("settings.uploadWorkspaceSaved"));
+    } catch (err) {
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : t("settings.uploadWorkspaceSaveFailed"),
+      );
+    }
+  }
 
   async function handleSave() {
     setSaving(true);
@@ -733,7 +754,7 @@ export default function SettingsIndexRoute() {
     builderStatus.loading ||
     !builderConnect.hasFetchedStatus;
   const s3Configured = activeProviderId === "s3";
-  const s3Collapsed = builderConnected && !s3Expanded;
+  const s3Collapsed = !s3Expanded;
   const configuredApiKeyCount = AI_PROVIDER_FIELDS.filter(
     (field) => apiKeyStatus[field.key],
   ).length;
@@ -746,6 +767,68 @@ export default function SettingsIndexRoute() {
   const builderCreditsUpgradeUrl =
     builderCreditStatus.data?.upgradeUrl ?? BUILDER_CREDITS_UPGRADE_URL;
 
+  const generalSearchEntries = useMemo<SettingsSearchEntry[]>(
+    () => [
+      {
+        id: "clips-language",
+        label: t("settings.languageTitle"),
+        keywords: "language locale translation i18n",
+        hash: "language",
+      },
+      {
+        id: "clips-video-storage",
+        label: t("settings.videoStorage"),
+        keywords: "storage s3 builder bucket cloud video",
+        hash: "video-storage",
+      },
+      {
+        id: "clips-upload-workspace",
+        label: t("settings.uploadWorkspaceTitle"),
+        keywords:
+          "upload recordings desktop destination organization workspace",
+        hash: "upload-workspace",
+      },
+      {
+        id: "clips-slack",
+        label: t("settings.slackTitle"),
+        keywords: "slack integration notifications workspace",
+        hash: "slack",
+      },
+      {
+        id: "clips-ai-providers",
+        label: t("settings.apiSetup"),
+        keywords:
+          "ai provider api key anthropic openai gemini groq openrouter builder",
+        hash: "ai-providers",
+      },
+      {
+        id: "clips-profile",
+        label: t("settings.profile"),
+        keywords: "profile email display name",
+        hash: "profile",
+      },
+      {
+        id: "clips-playback",
+        label: t("settings.playback"),
+        keywords: "playback speed video default",
+        hash: "playback",
+      },
+      {
+        id: "clips-transcript",
+        label: t("settings.transcript"),
+        keywords: "transcript cleanup captions",
+        hash: "transcript",
+      },
+      {
+        id: "clips-notifications",
+        label: t("settings.notifications"),
+        keywords: "email notifications alerts",
+        hash: "notifications",
+      },
+    ],
+    [t],
+  );
+
   return (
     <>
       <PageHeader>
@@ -754,8 +837,10 @@ export default function SettingsIndexRoute() {
         </h1>
       </PageHeader>
       <SettingsTabsPage
+        account={<AccountSettingsCard />}
         whatsNewLabel={t("settings.whatsNew")}
         extraTabs={agentSettingsTabs}
+        generalSearchEntries={generalSearchEntries}
         general={
           <div className="mx-auto w-full max-w-4xl space-y-6">
             <div className="min-w-0 space-y-6">
@@ -763,7 +848,7 @@ export default function SettingsIndexRoute() {
                 {t("settings.intro")}
               </p>
 
-              <Card>
+              <Card id="language" className="scroll-mt-16">
                 <CardHeader>
                   <CardTitle className="text-base">
                     {t("settings.languageTitle")}
@@ -777,6 +862,51 @@ export default function SettingsIndexRoute() {
                   <LanguagePicker label={t("settings.languageLabel")} />
                 </CardContent>
               </Card>
+
+              {orgs.length > 0 ? (
+                <Card id="upload-workspace" className="scroll-mt-16">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <IconUsersGroup className="size-4 text-primary" />
+                      {t("settings.uploadWorkspaceTitle")}
+                    </CardTitle>
+                    <CardDescription>
+                      {t("settings.uploadWorkspaceDescription")}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="max-w-md space-y-1.5">
+                    <Label htmlFor="upload-workspace-select">
+                      {t("settings.uploadWorkspaceLabel")}
+                    </Label>
+                    <Select
+                      value={org?.orgId ?? undefined}
+                      onValueChange={handleUploadWorkspaceChange}
+                      disabled={switchOrg.isPending || orgs.length < 2}
+                    >
+                      <SelectTrigger id="upload-workspace-select">
+                        <SelectValue
+                          placeholder={t("settings.uploadWorkspacePlaceholder")}
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {orgs.map((workspace) => (
+                          <SelectItem
+                            key={workspace.orgId}
+                            value={workspace.orgId}
+                          >
+                            {workspace.orgName}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      {switchOrg.isPending
+                        ? t("settings.uploadWorkspaceSaving")
+                        : t("settings.uploadWorkspaceHint")}
+                    </p>
+                  </CardContent>
+                </Card>
+              ) : null}
 
               <Card id="video-storage" className="scroll-mt-16">
                 <CardHeader>
@@ -851,7 +981,7 @@ export default function SettingsIndexRoute() {
                   </div>
 
                   <Collapsible
-                    open={builderConnected ? !s3Collapsed : true}
+                    open={!s3Collapsed}
                     onOpenChange={(open) => setS3Expanded(open)}
                   >
                     <div className="rounded-md border border-border">
@@ -882,26 +1012,24 @@ export default function SettingsIndexRoute() {
                                 : t("settings.s3OwnBucketDescription")}
                           </p>
                         </div>
-                        {builderConnected ? (
-                          <CollapsibleTrigger asChild>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              className="shrink-0"
-                            >
-                              {s3Collapsed
-                                ? t("settings.configureS3")
-                                : t("settings.hideS3")}
-                              <IconChevronDown
-                                className={cn(
-                                  "h-4 w-4 transition-transform",
-                                  !s3Collapsed && "rotate-180",
-                                )}
-                              />
-                            </Button>
-                          </CollapsibleTrigger>
-                        ) : null}
+                        <CollapsibleTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="shrink-0"
+                          >
+                            {s3Collapsed
+                              ? t("settings.configureS3")
+                              : t("settings.hideS3")}
+                            <IconChevronDown
+                              className={cn(
+                                "h-4 w-4 transition-transform",
+                                !s3Collapsed && "rotate-180",
+                              )}
+                            />
+                          </Button>
+                        </CollapsibleTrigger>
                       </div>
 
                       <CollapsibleContent>
@@ -1132,7 +1260,7 @@ export default function SettingsIndexRoute() {
                     className={cn(
                       "flex flex-col gap-3 rounded-md border px-3 py-3 sm:flex-row sm:items-center sm:justify-between",
                       builderConnected
-                        ? "border-primary/35 bg-primary/5"
+                        ? "border-border bg-muted/20"
                         : "border-border bg-accent/30",
                     )}
                   >
@@ -1146,20 +1274,16 @@ export default function SettingsIndexRoute() {
                         {builderStatusLoading
                           ? t("settings.checkingBuilder")
                           : builderConnected
-                            ? t("settings.builderConnected")
+                            ? t("settings.builderAiAvailable")
                             : t("settings.builderEasySetup")}
                       </div>
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         {builderConnected
-                          ? t("settings.builderAiAvailable")
+                          ? t("settings.apiSetupDescription")
                           : t("settings.builderAiDescription")}
                       </p>
                     </div>
-                    {builderConnected ? (
-                      <Badge variant="secondary" className="shrink-0">
-                        {t("common.connected")}
-                      </Badge>
-                    ) : (
+                    {!builderConnected ? (
                       <Button
                         type="button"
                         variant="outline"
@@ -1182,7 +1306,7 @@ export default function SettingsIndexRoute() {
                         )}
                         {t("settings.connectBuilder")}
                       </Button>
-                    )}
+                    ) : null}
                   </div>
 
                   {builderCreditsPaused ? (
@@ -1353,7 +1477,7 @@ export default function SettingsIndexRoute() {
                 </CardContent>
               </Card>
 
-              <Card>
+              <Card id="profile" className="scroll-mt-16">
                 <CardHeader>
                   <CardTitle className="text-base flex items-center gap-2">
                     <IconUser className="size-4 text-primary" />
@@ -1380,7 +1504,7 @@ export default function SettingsIndexRoute() {
                 </CardContent>
               </Card>
 
-              <Card>
+              <Card id="playback" className="scroll-mt-16">
                 <CardHeader>
                   <CardTitle className="text-base">
                     {t("settings.playback")}
@@ -1414,7 +1538,7 @@ export default function SettingsIndexRoute() {
                 </CardContent>
               </Card>
 
-              <Card>
+              <Card id="transcript" className="scroll-mt-16">
                 <CardHeader>
                   <CardTitle className="text-base">
                     {t("settings.transcript")}
@@ -1443,7 +1567,7 @@ export default function SettingsIndexRoute() {
                 </CardContent>
               </Card>
 
-              <Card>
+              <Card id="notifications" className="scroll-mt-16">
                 <CardHeader>
                   <CardTitle className="text-base">
                     {t("settings.notifications")}

@@ -32,7 +32,42 @@ Some recordings are linked to a meeting — when `meeting_id` is non-null on the
 5. **Upload each chunk.** `ondataavailable` POSTs the chunk bytes to `/api/uploads/chunk` with headers `X-Recording-Id` and `X-Chunk-Index`. Don't retry inline — buffer failed chunks in `IndexedDB` and let a background worker re-send.
 6. **Live transcription.** Alongside the MediaRecorder, `useLiveTranscription` runs the Web Speech API to accumulate transcript text in real time. On stop, the client calls `save-browser-transcript` to persist the result immediately — no API key needed. Desktop recordings use local Whisper/macOS speech first when available, and fall back to Web Speech in the webview on non-mac before relying on upload transcription.
 7. **Finalize.** On stop, send the final chunk to `/api/uploads/:id/chunk?isFinal=1`. The route calls `finalize-recording`, which stitches chunks, makes the media seekable (see below), uploads the finished media when storage is configured, transitions `status` to `ready`, then kicks off `request-transcript` for higher-quality output (see `ai-video-tools`).
-8. **Navigate.** Once the row is `ready` the UI navigates to `/r/:id`.
+8. **Navigate immediately.** Desktop recorders open `/r/:id` as soon as Stop
+   starts finalization. The recording row already exists, so the page can show
+   the title, share link, and upload progress while it polls from `uploading` or
+   `processing` to `ready`. Do not wait for the upload/finalize response before
+   opening the page.
+
+## Mobile companion lifecycle
+
+The Agent Native mobile app uses the same recording rows and binary upload
+routes with native capture primitives:
+
+1. Camera video/import uses `expo-camera` / the system photo picker; meeting
+   audio uses `expo-audio` with background recording enabled.
+2. The native file is copied into the documents directory and a typed
+   AsyncStorage capture job is written before upload starts.
+3. `create-recording` receives a stable client-generated id,
+   `sourceAppName: "Agent Native Mobile"`, and the container MIME type.
+4. Upload reads at most 3 MiB through an Expo FileHandle and persists the next
+   chunk index after every acknowledged POST. The 4 MiB server cap still
+   applies.
+5. Foreground/resume reconciliation polls `/api/uploads/:id/status`; retryable
+   failures back off and never discard the local file. Completion can post a
+   local notification and the recording appears in Clips everywhere.
+
+Mobile audio M4A is an MP4 container and uses the recording route's MP4 MIME
+alias. The bytes are not converted or loaded whole into JavaScript memory.
+
+Because the phone persists each audio/video file before any network work and
+resumes bounded chunk uploads from its durable queue, a transient upload failure
+never loses the capture. Do not ask users to keep a capture screen open or to
+re-record after a failed upload; tell them to reconnect Clips and retry the
+saved job from mobile Home.
+
+Mobile meeting capture is microphone-only; never claim it has the desktop
+mic-plus-system-audio fidelity. See the **meetings** skill for what that means
+for attendee attribution.
 
 ## Seekable playback (don't ship raw MediaRecorder output)
 
@@ -40,7 +75,7 @@ Raw `MediaRecorder` files are not friendly to progressive HTTP playback, which
 shows up as "clip takes minutes to load" and "re-buffers every time I seek"
 even though the file downloads fine:
 
-- **MP4** is written with the `moov` metadata atom *after* `mdat`, so a player
+- **MP4** is written with the `moov` metadata atom _after_ `mdat`, so a player
   must fetch the whole file before it can start or seek.
 - **WebM** is a live stream with no Cues (seek index) and an unknown Segment
   duration, so Chrome won't honor `currentTime = X` and has to scan/download.
@@ -63,6 +98,18 @@ idempotent (already-seekable clips are skipped unless `--force`) and only touche
 provider-hosted clips owned by the caller. This is the right tool when a user
 reports a specific slow/buffering clip.
 
+Seekability remuxing cannot repair a recording whose audio continues while the
+video track has a large timestamp gap (common when a mobile browser suspends the
+camera after the user switches apps). For a clip that freezes or appears to stop
+before its declared duration, call `reprocess-recording` with
+`--normalizeTimeline=true`. That explicit mode uses the same owner-scoped fetch
+and upload flow but fully transcodes to a constant-30-fps faststart MP4 (H.264 +
+AAC). It preserves audio and duplicates the last decoded video frame through
+missing-frame gaps. The action uploads to a new media object and atomically
+repoints the row only after verified output is stored; any transcode, audio
+verification, upload, or concurrent-update failure leaves the original URL and
+format untouched.
+
 ## Loom import
 
 Use `import-loom-recording` for Loom share or embed URLs. The action validates
@@ -71,6 +118,12 @@ a `ready` recording with Loom's embed URL, thumbnail, title, duration, and
 dimensions. When Loom exposes a signed public transcript JSON URL on the share
 page, the action imports that transcript into Clips and stores normalized
 segments; never store Loom's signed CDN URLs.
+
+When Loom exposes a downloadable public MP4, `import-loom-recording` downloads
+it, reuploads the bytes to Clips storage, and creates a ready, playable
+Clips-hosted recording, importing Loom's public transcript when the share page
+exposes one. If Loom does not expose a downloadable MP4, ask the user to download
+the original from Loom and use "Upload video".
 
 Loom imports are embed-backed, not Clips-owned video files. The player renders a
 Loom iframe and the native Clips editor is hidden for those recordings. If the
@@ -94,13 +147,47 @@ most seamless native capture. Set `VITE_CLIPS_CHROME_EXTENSION_ENABLED=0` to hid
 the Chrome option again, or `VITE_CLIPS_CHROME_EXTENSION_URL` to point at a
 different listing.
 
+`save-browser-diagnostics` is UI/internal. It stores bounded console logs plus
+fetch/XHR method, URL path/query keys, status, and duration. It never captures
+headers, bodies, cookies, or network URL query values. Console text keeps useful
+non-secret values while redacting credential-looking keys and headers. Use
+`get-recording-player-data` for the full diagnostics payload when you have
+editor access; see the **video-sharing** skill for the narrower redacted stream
+that public agent context exposes.
+
+## Chrome extension
+
+The extension lives in `chrome-extension/`. It launches `/record` with
+`clipsExtensionId` and `clipsCaptureSessionId`, and the recorder sends
+`CLIPS_CAPTURE_START` / `CLIPS_CAPTURE_STOP` / `CLIPS_CAPTURE_CANCEL` back to the
+extension. It uses the Chrome debugger API only on the tab the user launched
+from, only while a recording is active, and returns the same redacted
+diagnostics shape saved by `save-browser-diagnostics`.
+
+The extension also enhances GitHub issue and PR markdown: a narrow `github.com`
+content script detects Clips `/r/`, `/share/`, and `/embed/` links, then renders
+the existing `/embed/:id` player in an extension-owned preview iframe so the
+video is playable without leaving GitHub. Keep this scoped to GitHub unless there
+is a deliberate permission review.
+
+## Folders, spaces, and bulk moves
+
+Use `move-recording` for both single and bulk folder moves. Pass `id` for one
+clip or `ids` for the selected clips, and `folderId: null` to move them to the
+library or space root.
+
 ## Pause / resume
 
 `MediaRecorder.pause()` / `.resume()` are supported in all evergreen browsers. Keep a single `MediaRecorder` instance across pauses — don't tear down the stream, or the permission prompt will fire again. While paused, the upload worker keeps draining its buffer so we catch up before the user stops.
 
 ## Camera bubble
 
-When mode is `screen+camera`, we composite a circular camera feed in the corner. Render the bubble in a separate `<video>` element and record it into a second `MediaRecorder`; the server side stitches them with ffmpeg.wasm during `processing`. Do **not** try to pre-composite in the browser — that burns GPU and drops frames.
+When mode is `screen+camera`, "the bubble" is two different things:
+
+- **On-screen self-view.** `CameraBubble` renders a plain, unrecorded `<video>` element the user drags around to frame themselves during countdown/recording. It is never captured — it's just local framing UI.
+- **Recorded composite.** Display capture can't include that DOM element once the user records another window/app, so the saved video has to bake the camera circle in before `MediaRecorder` ever sees a frame. `createCameraCompositeStream` (`app/lib/camera-composite.ts`) draws the display video plus a clipped, mirrored camera circle onto an offscreen `<canvas>` and feeds `canvas.captureStream()` into a single `MediaRecorder`. There is **no** second `MediaRecorder` and **no** server-side ffmpeg stitching — the composite happens client-side, live, before upload.
+
+Because that draw loop runs continuously for the whole recording, keep its CPU/GPU cost bounded: a Worker-based timer drives the draw loop at the capture frame rate (`SCREEN_CAPTURE_FRAME_RATE`, 24fps — falling back to `requestAnimationFrame` only if Worker creation fails, e.g. under a strict CSP), the canvas is hard-capped to 1080p-class dimensions (1920px on its longest edge) even if the source display track is Retina/4K, and the bubble's drop shadow is pre-rendered into a small cached sprite (keyed by bubble size) instead of re-blurring with `shadowBlur` every frame.
 
 ## Error recovery
 
@@ -170,6 +257,8 @@ export function useRecorder() {
 - **Never** start a `MediaRecorder` without a user gesture (or a user-initiated `record-intent`).
 - **Never** re-prompt for permissions on pause/resume — reuse the stream.
 - **Never** fire the upload from the main thread if the chunks are large — prefer a web worker for anything longer than ~60s.
+- **Never** read a complete mobile recording into JavaScript memory. Use bounded
+  FileHandle reads and checkpoint every acknowledged chunk.
 - The `recordings` row must exist **before** the first chunk is sent.
 - On every lifecycle change, write `navigation` → `{ view: "record" }` → `{ view: "recording", recordingId }` so the agent can see what's happening.
 - All AI generated during/after recording goes through the agent chat — see `ai-video-tools`.

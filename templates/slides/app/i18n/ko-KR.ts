@@ -1,4 +1,7 @@
+import { creativeContextMessagesByLocale } from "@agent-native/creative-context/messages";
+
 const messages = {
+  creativeContext: creativeContextMessagesByLocale["ko-KR"],
   root: {
     commandPresentations: "프레젠테이션",
     searchDecks: "덱 검색",
@@ -34,10 +37,10 @@ const messages = {
       "팀원, 조직 접근 권한, 공유 워크스페이스 환경설정을 관리합니다.",
     openTeamSettings: "팀 설정 열기",
     openResourceSettings: "리소스 설정 열기",
-    agentTitle: "에이전트 설정",
+    agentTitle: "에이전트 관리",
     agentDescription:
-      "오른쪽 사이드바의 에이전트 설정을 열어 모델, API 키, 자동화, 음성 및 기타 제어를 관리합니다.",
-    openAgentSettings: "에이전트 설정 열기",
+      "에이전트의 모델, API 키, 자동화, 음성 및 기타 제어를 관리합니다.",
+    openAgentSettings: "에이전트 관리",
   },
   agent: {
     emptyState: "프레젠테이션에 대해 무엇이든 물어보세요",
@@ -92,6 +95,8 @@ const messages = {
     googlePickerNeedsKeys:
       "Google PickerにはGOOGLE_PICKER_API_KEYとGOOGLE_PICKER_APP_IDが必要です。",
     imageUploadFailed: "画像のアップロードに失敗しました",
+    imageUploadNeedsBuilder:
+      "슬라이드에 이미지를 업로드하려면 에이전트 작성기의 모델 메뉴에서 Builder.io를 연결하세요. 빈 캔버스에 이미지를 놓으면 제공자 없이도 에이전트로 보낼 수 있습니다.",
     sentToAgent: "エージェントに送信しました",
     imageUploadGenericError: "この画像のアップロード中に問題が発生しました。",
     uploading: "アップロード中…",
@@ -102,6 +107,7 @@ const messages = {
     searchImagesPlaceholder: "画像を検索...",
     searchForLogosImagesIcons: "ロゴ、画像、アイコンを検索...",
     search: "검색",
+    searchFailed: "검색 실패",
     logoSearchTitle: "로고 검색",
     searchCompanyLogo: "会社を検索してロゴを見つける",
     searchCompanyPlaceholder: "会社名を検索（例: Intuit）",
@@ -115,6 +121,7 @@ const messages = {
     uploadAttachedFailed: "添付ファイルをアップロードできませんでした。",
     uploadFailed: "アップロード失敗",
     doubleClickEdit: "テキストをダブルクリックして編集",
+    dragToMove: "드래그하여 이동",
     aiEditing: "AIが編集中",
     startTypingCommands: "入力を開始…または / でコマンド",
     pinDropHint: "任意の場所をクリックしてコメントピンを追加",
@@ -204,6 +211,7 @@ const messages = {
     elementAnimations: "요소 애니메이션",
     tweaks: "조정",
     drawOnSlide: "슬라이드에 그리기",
+    addTextBox: "텍스트 상자 추가",
     pinComments: "댓글 고정",
     pinCommentsDescription:
       "슬라이드의 지점을 클릭해 여러 편집을 대기열에 넣고 한 번에 보냅니다.",
@@ -327,6 +335,8 @@ const messages = {
     hideResolved: "해결됨 숨기기",
     showResolved: "해결됨 {{count}}개 표시",
     noCommentsYet: "아직 댓글 없음",
+    loadFailed: "댓글을 불러올 수 없습니다",
+    retry: "다시 시도",
     clickToAddComment: "클릭하여 댓글 추가",
     selectSlideToAdd: "추가하려면 슬라이드를 선택하세요",
   },
@@ -469,6 +479,8 @@ const messages = {
     backToDecks: "返回幻灯片",
     tryAgain: "重试",
     imageUploadFailed: "图片上传失败",
+    imageUploadNeedsBuilder:
+      "슬라이드에 이미지를 업로드하려면 에이전트 작성기의 모델 메뉴에서 Builder.io를 연결하세요. 빈 캔버스에 이미지를 놓으면 제공자 없이도 에이전트로 보낼 수 있습니다.",
     imageAdded: "图片已添加",
     imageUploadError: "上传此图片时出了点问题。",
     exportFailed: "导出失败",
@@ -532,6 +544,10 @@ const messages = {
     chooseAnotherFile: "다른 파일 선택",
   },
   home: {
+    loadFailed: "콘텐츠를 불러올 수 없습니다",
+    loadFailedDescription:
+      "저장된 콘텐츠는 그대로 있습니다. 연결을 확인하고 다시 시도하세요.",
+    retry: "다시 시도",
     decksTitle: "덱",
     newDeck: "새 덱",
     deckLengthQuestion: "이 덱은 얼마나 길어야 하나요?",

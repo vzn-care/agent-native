@@ -17,6 +17,7 @@ import { getDb, schema } from "../server/db/index.js";
 import {
   getCurrentOwnerEmail,
   getActiveOrganizationId,
+  getOrganizationDefaultVisibility,
   nanoid,
 } from "../server/lib/recordings.js";
 
@@ -64,7 +65,15 @@ export default defineAction({
       visibility: z
         .enum(["private", "org", "public"])
         .optional()
-        .describe("Initial visibility — defaults to private"),
+        .describe(
+          "Initial visibility. When omitted, uses the organization default and falls back to public.",
+        ),
+      source: z
+        .enum(["calendar", "adhoc", "manual"])
+        .optional()
+        .describe(
+          "How the meeting was created. Desktop adhoc Zoom/Teams detection passes `adhoc`; omit to infer from title/calendarEventId.",
+        ),
     })
     .refine((v) => v.title || v.calendarEventId, {
       message: "Provide either title or calendarEventId",
@@ -86,9 +95,8 @@ export default defineAction({
       isOrganizer?: boolean;
     }> = args.participants ?? [];
     let calendarEventIdLink: string | null = null;
-    let source: "calendar" | "adhoc" | "manual" = args.title
-      ? "manual"
-      : "adhoc";
+    let source: "calendar" | "adhoc" | "manual" =
+      args.source ?? (args.title ? "manual" : "adhoc");
 
     if (args.calendarEventId) {
       // Verify the user owns the calendar account that hosts this event.
@@ -182,7 +190,8 @@ export default defineAction({
       }
     }
 
-    const visibility = args.visibility ?? "private";
+    const visibility =
+      args.visibility ?? (await getOrganizationDefaultVisibility(orgId));
 
     try {
       await db.insert(schema.meetings).values({

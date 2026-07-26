@@ -8,6 +8,7 @@ import {
   isAgentEnginePackageInstalled,
   isStoredEngineUsableForRequest,
   normalizeModelForEngine,
+  resolveEnginePreservesCustomModels,
   registerBuiltinEngines,
 } from "../../agent/engine/index.js";
 import type { ActionTool } from "../../agent/types.js";
@@ -27,7 +28,7 @@ export const tool: ActionTool = {
       model: {
         type: "string",
         description:
-          "Model ID to use with this engine (e.g. 'gpt-5.5', 'claude-sonnet-5'). Defaults to the engine's default model if omitted.",
+          "Model ID to use with this engine (e.g. 'gpt-5.6-sol', 'claude-sonnet-5'). Defaults to the engine's default model if omitted.",
       },
     },
     required: ["engine"],
@@ -53,20 +54,15 @@ export async function run(args: Record<string, string>): Promise<string> {
     return `Error: Engine "${engineName}" requires optional packages that are not installed in this app. Run: pnpm add ${entry.installPackage}`;
   }
 
-  const resolvedModel = model ?? entry.defaultModel;
-  if (
-    entry.name === "builder" &&
-    normalizeModelForEngine(entry, resolvedModel) !== resolvedModel
-  ) {
-    return `Error: Model "${resolvedModel}" is not supported by Builder. Choose one of: ${entry.supportedModels.join(", ")}`;
-  }
-
-  // supportedModels is a suggestion list, not an allowlist — accept any
-  // string for BYO/custom engines (OpenRouter / Ollama / previews) and flag
-  // uncurated saves. Builder is an enumerated gateway and is checked above.
-  const modelIsCurated =
-    entry.supportedModels.length === 0 ||
-    entry.supportedModels.includes(resolvedModel);
+  const requestedModel = model ?? entry.defaultModel;
+  // A static registry entry can't carry the runtime `preserveCustomModels`
+  // flag, so resolve the OpenAI-compatible-endpoint capability here and pass it
+  // through — otherwise a gateway model (e.g. an Ollama id) is rewritten to the
+  // engine default on save.
+  const preserveCustomModels = await resolveEnginePreservesCustomModels(entry);
+  const resolvedModel = normalizeModelForEngine(entry, requestedModel, {
+    preserveCustomModels,
+  });
 
   const usable = await isStoredEngineUsableForRequest(
     { engine: engineName },
@@ -82,14 +78,15 @@ export async function run(args: Record<string, string>): Promise<string> {
     model: resolvedModel,
   });
 
-  const customNote = modelIsCurated
-    ? ""
-    : ` (model "${resolvedModel}" isn't in the curated list for ${entry.label}; saved as a custom model — verify it's a real ID for this provider)`;
+  const normalizedNote =
+    resolvedModel === requestedModel
+      ? ""
+      : ` Requested model "${requestedModel}" is no longer supported, so "${resolvedModel}" was saved instead.`;
 
   return JSON.stringify({
     ok: true,
     engine: engineName,
     model: resolvedModel,
-    message: `Agent engine set to ${entry.label} with model ${resolvedModel}. Takes effect on the next conversation.${customNote}`,
+    message: `Agent engine set to ${entry.label} with model ${resolvedModel}. Takes effect on the next conversation.${normalizedNote}`,
   });
 }

@@ -1,4 +1,7 @@
+import { creativeContextMessagesByLocale } from "@agent-native/creative-context/messages";
+
 const messages = {
+  creativeContext: creativeContextMessagesByLocale["ar-SA"],
   root: {
     commandPresentations: "العروض التقديمية",
     searchDecks: "البحث في العروض",
@@ -33,10 +36,10 @@ const messages = {
       "إدارة أعضاء الفريق ووصول المؤسسة وتفضيلات مساحة العمل المشتركة.",
     openTeamSettings: "فتح إعدادات الفريق",
     openResourceSettings: "فتح إعدادات الموارد",
-    agentTitle: "إعدادات الوكيل",
+    agentTitle: "إدارة الوكيل",
     agentDescription:
-      "افتح إعدادات الوكيل في الشريط الجانبي لإدارة النموذج ومفاتيح API والأتمتة والصوت وعناصر التحكم الأخرى.",
-    openAgentSettings: "فتح إعدادات الوكيل",
+      "أدر نموذج الوكيل ومفاتيح API والأتمتة والصوت وعناصر التحكم الأخرى.",
+    openAgentSettings: "إدارة الوكيل",
   },
   agent: {
     emptyState: "اسألني أي شيء عن عروضك التقديمية",
@@ -91,6 +94,8 @@ const messages = {
     googlePickerNeedsKeys:
       "Google Picker precisa de GOOGLE_PICKER_API_KEY e GOOGLE_PICKER_APP_ID.",
     imageUploadFailed: "Falha ao enviar imagem",
+    imageUploadNeedsBuilder:
+      "وصّل Builder.io من قائمة النموذج في مؤلف الوكيل لتحميل الصور إلى الشرائح. لا يزال بإمكانك إفلات صورة على اللوحة الفارغة لإرسالها إلى الوكيل بدون مزود.",
     sentToAgent: "Enviado ao agente",
     imageUploadGenericError: "Algo deu errado ao enviar esta imagem.",
     uploading: "Enviando…",
@@ -101,6 +106,7 @@ const messages = {
     searchImagesPlaceholder: "Buscar imagens...",
     searchForLogosImagesIcons: "Buscar logos, imagens, ícones...",
     search: "بحث",
+    searchFailed: "فشل البحث",
     logoSearchTitle: "بحث عن الشعار",
     searchCompanyLogo: "Busque uma empresa para encontrar seu logo",
     searchCompanyPlaceholder: "Buscar nome da empresa (ex.: Intuit)",
@@ -114,6 +120,7 @@ const messages = {
     uploadAttachedFailed: "Não foi possível enviar o arquivo anexado.",
     uploadFailed: "Falha no envio",
     doubleClickEdit: "Clique duas vezes em qualquer texto para editar",
+    dragToMove: "اسحب للتحريك",
     aiEditing: "IA editando",
     startTypingCommands: "Comece a digitar… ou pressione / para comandos",
     pinDropHint: "Clique em qualquer lugar para soltar um pin de comentário",
@@ -207,6 +214,7 @@ const messages = {
     elementAnimations: "حركات العناصر",
     tweaks: "تعديلات",
     drawOnSlide: "الرسم على الشريحة",
+    addTextBox: "إضافة مربع نص",
     pinComments: "تثبيت التعليقات",
     pinCommentsDescription:
       "انقر على مواضع في الشريحة لإضافة عدة تعديلات إلى الطابور، ثم أرسلها دفعة واحدة.",
@@ -329,6 +337,8 @@ const messages = {
     hideResolved: "إخفاء المحلول",
     showResolved: "إظهار {{count}} محلولة",
     noCommentsYet: "لا توجد تعليقات بعد",
+    loadFailed: "تعذر تحميل التعليقات",
+    retry: "إعادة المحاولة",
     clickToAddComment: "انقر لإضافة تعليق",
     selectSlideToAdd: "حدد شريحة لإضافة تعليق",
   },
@@ -489,6 +499,8 @@ const messages = {
     backToDecks: "Volver a decks",
     tryAgain: "Intentar de nuevo",
     imageUploadFailed: "Error al subir imagen",
+    imageUploadNeedsBuilder:
+      "وصّل Builder.io من قائمة النموذج في مؤلف الوكيل لتحميل الصور إلى الشرائح. لا يزال بإمكانك إفلات صورة على اللوحة الفارغة لإرسالها إلى الوكيل بدون مزود.",
     imageAdded: "Imagen añadida",
     imageUploadError: "Algo salió mal al subir esta imagen.",
     exportFailed: "Error al exportar",
@@ -557,6 +569,10 @@ const messages = {
     chooseAnotherFile: "اختيار ملف آخر",
   },
   home: {
+    loadFailed: "تعذر تحميل المحتوى",
+    loadFailedDescription:
+      "لا يزال المحتوى المحفوظ متاحًا. تحقق من الاتصال وأعد المحاولة.",
+    retry: "إعادة المحاولة",
     decksTitle: "العروض",
     newDeck: "عرض جديد",
     deckLengthQuestion: "ما طول هذا العرض؟",

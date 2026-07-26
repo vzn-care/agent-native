@@ -7,8 +7,10 @@ import {
   databaseItemBodyHydrationIsPending,
   documentBodyHydrationIsPending,
   isEffectivelyEmptyDocumentContent,
+  newDocumentPageChoiceIsDisabled,
   previewBodyHydrationIsPending,
   previewBodyHydrationIsTerminalError,
+  previewDraftConflictsWithHydratedBody,
   shouldIgnorePreviewEmptyNormalization,
 } from "./body-hydration";
 
@@ -54,7 +56,10 @@ describe("body hydration editing gates", () => {
       false,
     );
     expect(
-      documentBodyHydrationIsPending(documentWithHydration("hydrated")),
+      documentBodyHydrationIsPending({
+        ...documentWithHydration("hydrated"),
+        content: "Hydrated body",
+      }),
     ).toBe(false);
   });
 
@@ -156,6 +161,42 @@ describe("body hydration editing gates", () => {
     expect(previewBodyHydrationIsPending({ item, document: null })).toBe(true);
   });
 
+  it("treats source-backed empty documents with no body hydration as pending", () => {
+    const document = {
+      ...documentWithHydration("hydrated"),
+      databaseMembership: {
+        databaseId: "database",
+        databaseDocumentId: "database-page",
+        databaseTitle: "Content calendar",
+        position: 0,
+        sourceId: "builder-source",
+      },
+    } satisfies Document;
+
+    expect(documentBodyHydrationIsPending(document)).toBe(true);
+  });
+
+  it("treats source-backed empty documents marked hydrated without a version as pending", () => {
+    expect(
+      documentBodyHydrationIsPending(documentWithHydration("hydrated")),
+    ).toBe(true);
+  });
+
+  it("keeps non-empty source-backed documents editable even when the old body version is missing", () => {
+    expect(
+      documentBodyHydrationIsPending({
+        ...documentWithHydration("hydrated"),
+        content: "The Builder body is here.",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not hide source-backed body hydration errors behind a pending gate", () => {
+    expect(documentBodyHydrationIsPending(documentWithHydration("error"))).toBe(
+      false,
+    );
+  });
+
   it("uses fresh document-level hydration for preview gating", () => {
     const item = {
       id: "item-a",
@@ -202,10 +243,87 @@ describe("body hydration editing gates", () => {
     ).toBe(true);
   });
 
+  it("keeps a non-empty draft recoverable when Builder hydrates a body over its empty baseline", () => {
+    expect(
+      previewDraftConflictsWithHydratedBody({
+        loadedContent: "",
+        loadedUpdatedAt: "v1",
+        loadedContentWasEmpty: true,
+        pendingContent: "My local draft",
+        hydratedContent: "Fresh Builder body",
+        hydratedUpdatedAt: "v2",
+      }),
+    ).toBe(true);
+    expect(
+      previewDraftConflictsWithHydratedBody({
+        loadedContent: "Original Builder body",
+        loadedUpdatedAt: "v1",
+        loadedContentWasEmpty: false,
+        pendingContent: "My local draft",
+        hydratedContent: "Fresh Builder body",
+        hydratedUpdatedAt: "v2",
+      }),
+    ).toBe(true);
+    expect(
+      previewDraftConflictsWithHydratedBody({
+        loadedContent: "Original Builder body",
+        loadedUpdatedAt: "v1",
+        loadedContentWasEmpty: false,
+        pendingContent: "My local draft",
+        hydratedContent: "Original Builder body",
+        hydratedUpdatedAt: "v1",
+      }),
+    ).toBe(false);
+    expect(
+      previewDraftConflictsWithHydratedBody({
+        loadedContent: "",
+        loadedUpdatedAt: "v1",
+        loadedContentWasEmpty: true,
+        pendingContent: "<empty-block/>",
+        hydratedContent: "Fresh Builder body",
+        hydratedUpdatedAt: "v2",
+      }),
+    ).toBe(false);
+  });
+
   it("treats the editor empty block sentinel as empty content", () => {
     expect(isEffectivelyEmptyDocumentContent("")).toBe(true);
     expect(isEffectivelyEmptyDocumentContent(" <empty-block/> ")).toBe(true);
     expect(isEffectivelyEmptyDocumentContent("Hydrated body")).toBe(false);
+  });
+
+  it("keeps the page choice usable while collaboration connects", () => {
+    expect(
+      newDocumentPageChoiceIsDisabled({
+        canEdit: true,
+        bodyHydrationPending: false,
+        databaseCreationPending: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("disables the page choice for viewers, body hydration, or database conversion", () => {
+    expect(
+      newDocumentPageChoiceIsDisabled({
+        canEdit: false,
+        bodyHydrationPending: false,
+        databaseCreationPending: false,
+      }),
+    ).toBe(true);
+    expect(
+      newDocumentPageChoiceIsDisabled({
+        canEdit: true,
+        bodyHydrationPending: true,
+        databaseCreationPending: false,
+      }),
+    ).toBe(true);
+    expect(
+      newDocumentPageChoiceIsDisabled({
+        canEdit: true,
+        bodyHydrationPending: false,
+        databaseCreationPending: true,
+      }),
+    ).toBe(true);
   });
 
   it("ignores untouched empty preview normalization before it can dirty-save", () => {

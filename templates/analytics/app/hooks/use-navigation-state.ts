@@ -1,13 +1,5 @@
-import {
-  markAgentChatHomeHandoff,
-  useAgentRouteState,
-} from "@agent-native/core/client";
-import { useLocation } from "react-router";
+import { useAgentRouteState } from "@agent-native/core/client/navigation";
 
-import {
-  ANALYTICS_CHAT_STORAGE_KEY,
-  hasRecentAnalyticsChat,
-} from "@/lib/chat-handoff";
 import { rememberLastOpened } from "@/lib/last-opened";
 import { TAB_ID } from "@/lib/tab-id";
 
@@ -19,13 +11,16 @@ interface NavigationState {
   recordingId?: string;
   agentsView?: string;
   dbAdminConnectionId?: string;
+  monitoringView?: string;
+  monitorId?: string;
+  statusPageId?: string;
+  errorIssueId?: string;
   filters?: Record<string, string>;
 }
 
 const SESSION_FILTER_KEYS = ["range", "app", "q"] as const;
 
 export function useNavigationState() {
-  const location = useLocation();
   useAgentRouteState<NavigationState>({
     browserTabId: TAB_ID,
     getNavigationState: ({ pathname, searchParams }) => {
@@ -82,6 +77,23 @@ export function useNavigationState() {
           if (dbAdminConnectionId)
             state.dbAdminConnectionId = dbAdminConnectionId;
         }
+      } else if (pathname === "/monitoring") {
+        state.view = "monitoring";
+        state.monitoringView =
+          searchParams.get("view") === "errors" ? "errors" : "uptime";
+        if (state.monitoringView === "errors") {
+          const issue = searchParams.get("issue");
+          if (issue) state.errorIssueId = issue;
+        } else {
+          const statusPage = searchParams.get("statuspage");
+          if (statusPage) {
+            // "list" | "new" | <id> - the status-pages config sub-view.
+            state.statusPageId = statusPage;
+          } else {
+            const monitor = searchParams.get("monitor");
+            if (monitor) state.monitorId = monitor;
+          }
+        }
       } else if (pathname === "/data-sources") {
         state.view = "data-sources";
       } else if (pathname === "/data-dictionary") {
@@ -99,19 +111,39 @@ export function useNavigationState() {
         return `/dashboards/${cmd.dashboardId}`;
       if (cmd.view === "analyses" && cmd.analysisId)
         return `/analyses/${cmd.analysisId}`;
-      if (cmd.view === "analyses") return "/analyses";
+      if (cmd.view === "analyses") return "/dashboards";
       if (cmd.view === "extensions" && cmd.extensionId)
         return `/extensions/${cmd.extensionId}`;
-      if (cmd.view === "extensions") return "/extensions";
+      if (cmd.view === "extensions") return "/settings#extensions";
       if (cmd.view === "sessions" && cmd.recordingId)
         return `/sessions/${encodeURIComponent(cmd.recordingId)}`;
       if (cmd.view === "sessions") return "/sessions";
-      if (cmd.view === "agents" && cmd.agentsView === "database") {
-        const params = new URLSearchParams({ view: "database" });
-        if (cmd.dbAdminConnectionId) params.set("db", cmd.dbAdminConnectionId);
+      if (
+        cmd.view === "agents" &&
+        (cmd.agentsView === "database" ||
+          cmd.agentsView === "dashboards" ||
+          cmd.agentsView === "flags")
+      ) {
+        const params = new URLSearchParams({ view: cmd.agentsView });
+        if (cmd.agentsView === "database" && cmd.dbAdminConnectionId) {
+          params.set("db", cmd.dbAdminConnectionId);
+        }
         return `/agents?${params.toString()}`;
       }
       if (cmd.view === "agents") return "/agents";
+      if (cmd.view === "monitoring") {
+        const params = new URLSearchParams();
+        if (cmd.monitoringView === "errors") {
+          params.set("view", "errors");
+          if (cmd.errorIssueId) params.set("issue", cmd.errorIssueId);
+        } else if (cmd.statusPageId) {
+          params.set("statuspage", cmd.statusPageId);
+        } else if (cmd.monitorId) {
+          params.set("monitor", cmd.monitorId);
+        }
+        const qs = params.toString();
+        return qs ? `/monitoring?${qs}` : "/monitoring";
+      }
       if (cmd.view === "data-sources") return "/data-sources";
       if (cmd.view === "data-dictionary") return "/data-dictionary";
       if (cmd.view === "catalog") return "/catalog";
@@ -120,18 +152,7 @@ export function useNavigationState() {
       if (cmd.view === "overview" || cmd.view === "home") return "/ask";
       return "/";
     },
-    onNavigate: (_command, path) => {
-      if (location.pathname === "/ask" && pathnameFromPath(path) !== "/ask") {
-        if (hasRecentAnalyticsChat()) {
-          markAgentChatHomeHandoff(ANALYTICS_CHAT_STORAGE_KEY);
-        }
-      }
-    },
   });
-}
-
-function pathnameFromPath(path: string): string {
-  return path.split(/[?#]/, 1)[0] || "/";
 }
 
 function sessionFilters(

@@ -1,4 +1,7 @@
+import { creativeContextMessagesByLocale } from "@agent-native/creative-context/messages";
+
 const messages = {
+  creativeContext: creativeContextMessagesByLocale["de-DE"],
   root: {
     commandPresentations: "Präsentationen",
     searchDecks: "Decks suchen",
@@ -34,10 +37,10 @@ const messages = {
       "Verwalte Teammitglieder, Organisationszugriff und gemeinsame Arbeitsbereichseinstellungen.",
     openTeamSettings: "Teameinstellungen öffnen",
     openResourceSettings: "Ressourceneinstellungen öffnen",
-    agentTitle: "Agent-Einstellungen",
+    agentTitle: "Agent verwalten",
     agentDescription:
-      "Öffne die Agent-Einstellungen in der Seitenleiste für Modell, API-Schlüssel, Automatisierungen, Sprache und weitere Steuerungen.",
-    openAgentSettings: "Agent-Einstellungen öffnen",
+      "Verwalte das Modell, die API-Schlüssel, Automatisierungen, Sprache und weitere Steuerungen des Agents.",
+    openAgentSettings: "Agent verwalten",
   },
   agent: {
     emptyState: "Frag mich alles zu deinen Präsentationen",
@@ -93,6 +96,8 @@ const messages = {
     googlePickerNeedsKeys:
       "Google Picker benötigt GOOGLE_PICKER_API_KEY und GOOGLE_PICKER_APP_ID.",
     imageUploadFailed: "Bildupload fehlgeschlagen",
+    imageUploadNeedsBuilder:
+      "Verbinde Builder.io im Modellmenü des Agent-Composers, um Bilder auf Folien hochzuladen. Wenn du ein Bild auf die leere Arbeitsfläche ziehst, kann es auch ohne Anbieter an den Agenten gesendet werden.",
     sentToAgent: "An Agent gesendet",
     imageUploadGenericError:
       "Beim Hochladen dieses Bildes ist etwas schiefgelaufen.",
@@ -104,6 +109,7 @@ const messages = {
     searchImagesPlaceholder: "Nach Bildern suchen...",
     searchForLogosImagesIcons: "Nach Logos, Bildern, Icons suchen...",
     search: "Suchen",
+    searchFailed: "Suche fehlgeschlagen",
     logoSearchTitle: "Logo-Suche",
     searchCompanyLogo: "Suche nach einem Unternehmen, um sein Logo zu finden",
     searchCompanyPlaceholder: "Unternehmensname suchen (z. B. Intuit)",
@@ -118,6 +124,7 @@ const messages = {
       "Die angehängte Datei konnte nicht hochgeladen werden.",
     uploadFailed: "Upload fehlgeschlagen",
     doubleClickEdit: "Doppelklicke auf Text zum Bearbeiten",
+    dragToMove: "Ziehen zum Verschieben",
     aiEditing: "KI bearbeitet",
     startTypingCommands: "Beginne zu tippen… oder drücke / für Befehle",
     pinDropHint: "Klicke irgendwo, um eine Kommentar-Pin zu setzen",
@@ -208,6 +215,7 @@ const messages = {
     elementAnimations: "Elementanimationen",
     tweaks: "Feinabstimmung",
     drawOnSlide: "Auf Folie zeichnen",
+    addTextBox: "Textfeld hinzufügen",
     pinComments: "Kommentare anheften",
     pinCommentsDescription:
       "Klicke auf Stellen auf der Folie, um mehrere Änderungen vorzubereiten und sie dann gesammelt zu senden.",
@@ -332,6 +340,8 @@ const messages = {
     hideResolved: "Gelöste ausblenden",
     showResolved: "{{count}} gelöste anzeigen",
     noCommentsYet: "Noch keine Kommentare",
+    loadFailed: "Kommentare konnten nicht geladen werden",
+    retry: "Erneut versuchen",
     clickToAddComment: "Klicken, um einen Kommentar hinzuzufügen",
     selectSlideToAdd: "Wähle eine Folie aus, um einen hinzuzufügen",
   },
@@ -484,6 +494,8 @@ const messages = {
     backToDecks: "Volver a decks",
     tryAgain: "Intentar de nuevo",
     imageUploadFailed: "Error al subir imagen",
+    imageUploadNeedsBuilder:
+      "Verbinde Builder.io im Modellmenü des Agent-Composers, um Bilder auf Folien hochzuladen. Wenn du ein Bild auf die leere Arbeitsfläche ziehst, kann es auch ohne Anbieter an den Agenten gesendet werden.",
     imageAdded: "Imagen añadida",
     imageUploadError: "Algo salió mal al subir esta imagen.",
     exportFailed: "Error al exportar",
@@ -551,6 +563,10 @@ const messages = {
     chooseAnotherFile: "Andere Datei wählen",
   },
   home: {
+    loadFailed: "Inhalte konnten nicht geladen werden",
+    loadFailedDescription:
+      "Ihre gespeicherten Inhalte sind weiterhin verfügbar. Prüfen Sie die Verbindung und versuchen Sie es erneut.",
+    retry: "Erneut versuchen",
     decksTitle: "Decks",
     newDeck: "Neues Deck",
     deckLengthQuestion: "Wie lang soll dieses Deck sein?",

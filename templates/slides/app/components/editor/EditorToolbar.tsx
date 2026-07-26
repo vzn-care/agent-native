@@ -1,16 +1,15 @@
+import { AgentToggleButton } from "@agent-native/core/client/agent-chat";
 import {
   agentNativePath,
   appBasePath,
   appPath,
-  useT,
-} from "@agent-native/core/client";
-import {
-  AgentToggleButton,
-  ShareButton,
-  PresenceBar,
-  type CollabUser,
-} from "@agent-native/core/client";
+} from "@agent-native/core/client/api-path";
+import { type CollabUser } from "@agent-native/core/client/collab";
+import { useT } from "@agent-native/core/client/i18n";
 import { RunsTray } from "@agent-native/core/client/progress";
+import { ShareButton } from "@agent-native/core/client/sharing";
+import { CreativeContextShareTab } from "@agent-native/creative-context/client";
+import { PresenceBar } from "@agent-native/toolkit/collab-ui";
 import {
   IconArrowLeft,
   IconPlayerPlay,
@@ -30,6 +29,7 @@ import {
   IconAdjustments,
   IconPencilPlus,
   IconPin,
+  IconLetterT,
   IconWand,
   IconUpload,
   IconSun,
@@ -42,6 +42,7 @@ import { useTheme } from "next-themes";
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router";
+import { toast } from "sonner";
 
 import {
   DropdownMenu,
@@ -58,7 +59,6 @@ import {
 import { SaveStatusIndicator } from "@/components/visual-editor";
 import type { Deck, Slide, SlideLayout } from "@/context/DeckContext";
 import { defaultSlideContent, useSaveState } from "@/context/DeckContext";
-import { toast } from "@/hooks/use-toast";
 import {
   ASPECT_RATIO_VALUES,
   type AspectRatio,
@@ -124,6 +124,10 @@ interface EditorToolbarProps {
   pinMode?: boolean;
   /** Toggle comment-pin drop mode */
   onTogglePinMode?: () => void;
+  /** Whether the add-text-box tool is active */
+  textBoxMode?: boolean;
+  /** Toggle the add-text-box tool */
+  onToggleTextBoxMode?: () => void;
   /** Duplicate the current deck */
   onDuplicateDeck?: () => void;
   /** Export the deck as PDF */
@@ -203,7 +207,7 @@ function ToolbarPopover({
   return createPortal(
     <div
       ref={menuRef}
-      className="fixed rounded-lg border border-border bg-popover shadow-xl z-[200] max-h-[80vh] overflow-y-auto"
+      className="fixed rounded-lg border border-border bg-popover shadow-xl z-[200] max-h-[80vh] overflow-y-auto animate-in fade-in-0 zoom-in-95 duration-150 origin-top-left"
       style={{ top: rect.bottom + 4, left, width: Math.min(width, vw - 16) }}
     >
       {children}
@@ -248,6 +252,8 @@ export default function EditorToolbar({
   onToggleDrawMode,
   pinMode,
   onTogglePinMode,
+  textBoxMode,
+  onToggleTextBoxMode,
   onDuplicateDeck,
   onExportPdf,
   onExportPptx,
@@ -306,10 +312,10 @@ export default function EditorToolbar({
   const [themeMounted, setThemeMounted] = useState(false);
   useEffect(() => setThemeMounted(true), []);
   const isDark = themeMounted ? resolvedTheme === "dark" : false;
-  // The four secondary tools share an "active when something is on" indicator
-  // so the dot on the consolidated button reflects any of them.
+  // The secondary tools share an "active when something is on" indicator so
+  // the dot on the consolidated button reflects any of them.
   const anyToolActive = Boolean(
-    animationsOpen || tweaksOpen || drawMode || pinMode,
+    animationsOpen || tweaksOpen || drawMode || pinMode || textBoxMode,
   );
 
   const closeAll = () => {
@@ -321,8 +327,7 @@ export default function EditorToolbar({
     const file = e.target.files?.[0];
     if (!file) return;
     setImporting(true);
-    toast({
-      title: t("editorToolbar.importingFile"),
+    toast(t("editorToolbar.importingFile"), {
       description: t("editorToolbar.readingFile", { fileName: file.name }),
     });
     const formData = new FormData();
@@ -369,8 +374,7 @@ export default function EditorToolbar({
       if (!importRes.ok || importData?.error) {
         throw new Error(importData?.error || t("editorToolbar.importFailed"));
       }
-      toast({
-        title: t("editorToolbar.importComplete"),
+      toast.success(t("editorToolbar.importComplete"), {
         description:
           typeof importData.slideCount === "number"
             ? t("editorToolbar.importCompleteSlides", {
@@ -383,13 +387,11 @@ export default function EditorToolbar({
       });
     } catch (err) {
       console.error("Import failed:", err);
-      toast({
-        title: t("editorToolbar.importFailed"),
+      toast.error(t("editorToolbar.importFailed"), {
         description:
           err instanceof Error
             ? err.message
             : t("editorToolbar.importFailedDescription"),
-        variant: "destructive",
       });
     } finally {
       setImporting(false);
@@ -736,7 +738,8 @@ graph TD
         (onToggleAnimations ||
           onToggleTweaks ||
           onToggleDrawMode ||
-          onTogglePinMode) && (
+          onTogglePinMode ||
+          onToggleTextBoxMode) && (
           <>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -837,6 +840,23 @@ graph TD
                         {t("editorToolbar.pinCommentsDescription")}
                       </span>
                     </span>
+                  </button>
+                )}
+                {onToggleTextBoxMode && (
+                  <button
+                    onClick={() => {
+                      onToggleTextBoxMode();
+                      setToolsOpen(false);
+                    }}
+                    data-toolbar-textbox-button
+                    className={`flex items-center gap-2 w-full px-3 py-1.5 text-xs transition-colors ${
+                      textBoxMode
+                        ? "text-foreground bg-accent/50"
+                        : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
+                    }`}
+                  >
+                    <IconLetterT className="w-3.5 h-3.5" />
+                    {t("editorToolbar.addTextBox")}
                   </button>
                 )}
               </div>
@@ -959,6 +979,26 @@ graph TD
           secondaryShareUrlDescription={t(
             "editorToolbar.presentationLinkDescription",
           )}
+          shareTabs={{
+            tabs: [
+              {
+                value: "context",
+                label: "Context",
+                content: (
+                  <CreativeContextShareTab
+                    resource={{
+                      appId: "slides",
+                      resourceType: "deck",
+                      resourceId: deckId,
+                      title: deckTitle,
+                      updatedAt: deck.updatedAt,
+                      preview: { kind: "document", label: "Deck" },
+                    }}
+                  />
+                ),
+              },
+            ],
+          }}
         />
       </div>
       {/* Present button — matches Share trigger height (h-9) */}
@@ -1027,7 +1067,7 @@ graph TD
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <RunsTray />
+      <RunsTray pollMs={0} />
       <AgentToggleButton />
     </div>
   );

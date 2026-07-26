@@ -15,8 +15,19 @@ import type { EventHandler, H3Event } from "h3";
 import { setResponseHeader, setResponseStatus } from "h3";
 
 import { getMissingDefaultPlugins } from "../deploy/route-discovery.js";
+import { MCP_PUBLIC_ROUTE_PREFIX } from "../mcp/route-paths.js";
 import { getConfiguredAppBasePath } from "./app-base-path.js";
 import { captureError } from "./capture-error.js";
+import { createCsrfMiddleware } from "./csrf.js";
+import {
+  installHttpResponseTelemetryHooks,
+  recordFrameworkReadyWait,
+} from "./http-response-telemetry.js";
+import {
+  hasRequestContext,
+  markRequestBoundaryInstalled,
+  runWithRequestContext,
+} from "./request-context.js";
 
 const BOOTSTRAPPED = new WeakSet<object>();
 const IN_BOOTSTRAP = new WeakSet<object>();
@@ -30,6 +41,7 @@ const PLUGIN_FAILED_KEY = "_agentNativePluginInitFailures";
 const PROVIDED_PLUGIN_STEMS_KEY = "_agentNativeProvidedPluginStems";
 const MIDDLEWARE_DISPATCHER_PATCHED_KEY =
   "_agentNativeMiddlewareDispatcherPatched";
+const REQUEST_CONTEXT_BOUNDARY_KEY = "_agentNativeRequestContextBoundary";
 
 interface PluginReadyEntry {
   promise: Promise<void>;
@@ -47,7 +59,8 @@ function pathMatchesPrefix(reqPath: string, prefix: string): boolean {
 function supportsAppBasePathMount(path: string): boolean {
   return (
     pathMatchesPrefix(path, FRAMEWORK_PREFIX) ||
-    pathMatchesPrefix(path, WELL_KNOWN_PREFIX)
+    pathMatchesPrefix(path, WELL_KNOWN_PREFIX) ||
+    pathMatchesPrefix(path, MCP_PUBLIC_ROUTE_PREFIX)
   );
 }
 
@@ -111,6 +124,7 @@ export function markDefaultPluginProvided(nitroApp: any, stem: string): void {
 export function getH3App(nitroApp: any): H3AppShim {
   if (!nitroApp) throw new Error("getH3App: nitroApp is required");
   ensureGlobalMiddlewareDispatch(nitroApp);
+  installHttpResponseTelemetryHooks(nitroApp);
 
   // Reuse the cached shim if we've wrapped this nitroApp before
   const cached = nitroApp[APP_SHIM_KEY] as H3AppShim | undefined;
@@ -163,6 +177,34 @@ export function getH3App(nitroApp: any): H3AppShim {
     registerMiddleware(nitroApp, WELL_KNOWN_PREFIX, readinessGate, {
       prepend: true,
     });
+    registerMiddleware(nitroApp, MCP_PUBLIC_ROUTE_PREFIX, readinessGate, {
+      prepend: true,
+    });
+
+    // CSRF (see csrf.ts): registered here — synchronously, on the very
+    // first `getH3App()` call for this nitroApp — rather than inside
+    // createCoreRoutesPlugin's own async init chain. Real deployments mount
+    // core-routes and agent-chat as SEPARATE, independently-async-initialized
+    // Nitro plugin files with no explicit ordering between them; both
+    // eventually call `getH3App(nitroApp).use(...)` to register their own
+    // routes (CSRF, action routes) after their own async setup (DB reads,
+    // dynamic imports) resolves in unpredictable relative order. The
+    // readiness gate above only guarantees every tracked plugin has FINISHED
+    // registering by the time a gated request is released — it does NOT
+    // guarantee CSRF's registration call happens to `.push()` onto
+    // `~middleware` before an action route's does. If agent-chat's action
+    // route push happened to land first, that route would match and run
+    // before CSRF ever saw the request. Registering CSRF here instead makes
+    // it the first non-prepended middleware pushed onto the array for this
+    // nitroApp, full stop — every plugin's own route registrations reach
+    // `getH3App()` (and therefore run after this point) before they can
+    // register anything, regardless of which plugin's async chain resolves
+    // first.
+    registerMiddleware(nitroApp, "", createCsrfMiddleware());
+
+    // Registered last so it lands at index 0 — ahead of the readiness gates
+    // and CSRF, both of which were unshifted/pushed above.
+    registerRequestContextBoundary(nitroApp);
 
     // Primary gate: Nitro bridges this `request` hook to h3's `config.onRequest`,
     // which h3 awaits BEFORE `handler()` snapshots middleware and resolves the
@@ -174,14 +216,53 @@ export function getH3App(nitroApp: any): H3AppShim {
       const reqPath = event.url?.pathname ?? "";
       if (
         resolveMountMatch(reqPath, FRAMEWORK_PREFIX) ||
-        resolveMountMatch(reqPath, WELL_KNOWN_PREFIX)
+        resolveMountMatch(reqPath, WELL_KNOWN_PREFIX) ||
+        resolveMountMatch(reqPath, MCP_PUBLIC_ROUTE_PREFIX)
       ) {
-        await awaitFrameworkRoutesReadyForRequest(nitroApp, reqPath);
+        const startedAt = Date.now();
+        try {
+          await awaitFrameworkRoutesReadyForRequest(nitroApp, reqPath);
+        } finally {
+          recordFrameworkReadyWait(event, Date.now() - startedAt);
+        }
       }
     });
   }
 
   return shim;
+}
+
+/**
+ * Establish a `RequestContext` for every inbound request, so no HTTP handler
+ * ever asks a request-scoped question with no request in scope.
+ *
+ * Hand-written `/api/*` routes have no ALS store of their own, and
+ * `getRequestUserEmail()` used to answer those with `AGENT_USER_EMAIL` — a
+ * process-wide ambient identity standing in for the caller, which fails open
+ * toward more privilege (an admin gate reading it admits whoever the deploy env
+ * names). This store is deliberately identity-free: resolving the session here
+ * would mean reading cookies on the SSR path, which must stay one impersonal
+ * cached shell. Handlers that do know the caller still nest their own
+ * `runWithRequestContext`, which shadows this one.
+ *
+ * h3 v2 hands middleware a `next()` that returns the result of the rest of the
+ * chain (route handler included), so wrapping `next()` puts the whole request
+ * inside the ALS scope. It must be `~middleware[0]`; going through
+ * `registerMiddleware` is not an option because that adapter hides `next`.
+ */
+function registerRequestContextBoundary(nitroApp: any): void {
+  const h3 = nitroApp?.h3;
+  if (!h3 || !Array.isArray(h3["~middleware"])) return;
+  if (h3[REQUEST_CONTEXT_BOUNDARY_KEY]) return;
+
+  const middleware = (_event: H3Event, next: () => unknown) => {
+    if (hasRequestContext()) return next();
+    return runWithRequestContext({}, () => next());
+  };
+
+  h3[REQUEST_CONTEXT_BOUNDARY_KEY] = middleware;
+  h3["~middleware"].unshift(middleware);
+  markRequestBoundaryInstalled();
 }
 
 /**
@@ -466,7 +547,18 @@ function registerMiddleware(
     let originalPathname: string | undefined;
     let originalEventPath: string | undefined;
     let hadEventPath = false;
+    // Only true once this specific middleware invocation has actually
+    // stripped a mount prefix (i.e. `path` was non-empty and matched).
+    // Global (`path === ""`) middleware never mutates event.path/pathname,
+    // so `restoreOriginalPath` must be a no-op for it — otherwise it would
+    // unconditionally `delete event.path` on every pass-through (hadEventPath
+    // defaults to false), corrupting the event for any middleware that runs
+    // later in the chain (a real bug: two or more global middlewares in
+    // sequence, e.g. security-headers + CORS + CSRF, would wipe event.path
+    // for everything downstream, including the final route handler).
+    let didStripPath = false;
     const restoreOriginalPath = () => {
+      if (!didStripPath) return;
       if (originalPathname !== undefined) {
         try {
           event.url.pathname = originalPathname;
@@ -502,6 +594,7 @@ function registerMiddleware(
       const eventAny = event as any;
       hadEventPath = "path" in eventAny;
       originalEventPath = eventAny.path;
+      didStripPath = true;
       try {
         originalPathname = event.url.pathname;
         // Save the full path in context so handlers that need the original URL
@@ -552,33 +645,24 @@ function registerMiddleware(
         status,
         error: err,
       });
-      // Forward 5xx to server-side Sentry — Nitro's own `error` hook may not
-      // fire here because we convert the throw into a normal JSON response,
-      // and a console.error alone is invisible in deployed environments.
-      // 4xx are user-input errors (validation, auth) and aren't worth
-      // alerting on. Lazy-loaded so the framework-request-handler module
-      // doesn't pull @sentry/node into bundles that don't need it.
+      // Forward 5xx to the configured server error providers — Nitro's own
+      // `error` hook may not fire here because we convert the throw into a
+      // normal JSON response, and a console.error alone is invisible in
+      // deployed environments. 4xx are user-input errors (validation, auth)
+      // and aren't worth alerting on.
       if (status >= 500) {
-        // Static `import` would create a cycle (sentry.ts imports auth.ts
-        // which imports… eventually, framework-request-handler.ts).
-        import("./sentry.js")
-          .then(({ captureRouteError, isServerSentryEnabled }) => {
-            if (!isServerSentryEnabled()) return;
-            captureRouteError(err, {
-              route: reqPath,
-              method: event.method,
-              userAgent: (() => {
-                try {
-                  return event.headers?.get("user-agent") ?? undefined;
-                } catch {
-                  return undefined;
-                }
-              })(),
-            });
-          })
-          .catch(() => {
-            // Sentry is observability — never let it break a response path.
-          });
+        captureError(err, {
+          route: reqPath,
+          method: event.method,
+          tags: { status_code: String(status) },
+          userAgent: (() => {
+            try {
+              return event.headers?.get("user-agent") ?? undefined;
+            } catch {
+              return undefined;
+            }
+          })(),
+        });
       }
       try {
         setResponseStatus(event, status);

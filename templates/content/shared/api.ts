@@ -8,11 +8,19 @@ import type {
 
 export type DocumentAccessRole = "owner" | "viewer" | "editor" | "admin";
 
+export interface ContentContextPathEntry {
+  id: string;
+  kind: "page" | "database";
+  title: string;
+  description: string;
+}
+
 export interface Document {
   id: string;
   parentId: string | null;
   title: string;
   content: string;
+  description?: string;
   icon: string | null;
   position: number;
   isFavorite: boolean;
@@ -27,6 +35,7 @@ export interface Document {
   properties?: DocumentProperty[];
   database?: ContentDatabase;
   databaseMembership?: ContentDatabaseMembership;
+  contextPath?: ContentContextPathEntry[];
   createdAt: string;
   updatedAt: string;
 }
@@ -87,15 +96,18 @@ export interface ResolveDocumentSyncConflictRequest {
 
 export interface DocumentCreateRequest {
   id?: string;
+  spaceId?: string;
   title?: string;
   parentId?: string | null;
   content?: string;
+  description?: string;
   icon?: string;
 }
 
 export interface DocumentUpdateRequest {
   title?: string;
   content?: string;
+  description?: string;
   icon?: string | null;
   isFavorite?: boolean;
   loadedUpdatedAt?: string;
@@ -156,14 +168,21 @@ export type {
 export interface DocumentPropertyDefinition {
   id: string;
   databaseId: string | null;
+  systemRole?: DocumentPropertySystemRole | null;
   name: string;
   type: DocumentPropertyType;
+  description?: string;
   visibility: DocumentPropertyVisibility;
   options: DocumentPropertyOptions;
   position: number;
   createdAt: string;
   updatedAt: string;
 }
+
+export type DocumentPropertySystemRole =
+  | "files_kind"
+  | "files_parent"
+  | "files_source";
 
 export interface DocumentProperty {
   definition: DocumentPropertyDefinition;
@@ -182,6 +201,7 @@ export interface ConfigureDocumentPropertyRequest {
   documentId: string;
   name: string;
   type: DocumentPropertyType;
+  description?: string;
   visibility?: DocumentPropertyVisibility;
   options?: DocumentPropertyOptions;
 }
@@ -213,6 +233,8 @@ export interface ContentDatabase {
   id: string;
   documentId: string;
   title: string;
+  systemRole?: string | null;
+  description?: string;
   viewConfig: ContentDatabaseViewConfig;
   createdAt: string;
   updatedAt: string;
@@ -234,6 +256,7 @@ export type ContentDatabaseFilterOperator =
   | "less_than"
   | "before"
   | "after"
+  | "between"
   | "is_checked"
   | "is_unchecked"
   | "is_empty"
@@ -244,6 +267,8 @@ export interface ContentDatabaseFilter {
   label: string;
   operator: ContentDatabaseFilterOperator;
   value: string;
+  filterGroupId?: string;
+  parentFilterGroupId?: string;
 }
 
 export type ContentDatabaseColumnCalculation =
@@ -271,11 +296,20 @@ export type ContentDatabaseViewType =
   | "list"
   | "gallery"
   | "calendar"
-  | "timeline";
+  | "timeline"
+  | "form"
+  | "sidebar";
 
 export type ContentDatabaseRowDensity = "compact" | "default" | "comfortable";
 export type ContentDatabaseFilterMode = "and" | "or";
 export type ContentDatabaseOpenPagesIn = "preview" | "full_page";
+
+export interface ContentDatabaseFormQuestion {
+  /** "name" is the row page title; every other key is a property definition id. */
+  key: string;
+  enabled: boolean;
+  required: boolean;
+}
 
 export interface ContentDatabaseView {
   id: string;
@@ -296,6 +330,7 @@ export interface ContentDatabaseView {
   wrapCells?: boolean;
   rowDensity?: ContentDatabaseRowDensity;
   openPagesIn?: ContentDatabaseOpenPagesIn;
+  formQuestions?: ContentDatabaseFormQuestion[];
 }
 
 export interface ContentDatabaseViewConfig {
@@ -304,6 +339,29 @@ export interface ContentDatabaseViewConfig {
   sorts: ContentDatabaseSort[];
   filters: ContentDatabaseFilter[];
   columnWidths: Record<string, number>;
+}
+
+export const CONTENT_DATABASE_PERSONAL_VIEW_OVERRIDES_VERSION = 2;
+
+export interface ContentDatabasePersonalViewOverrides {
+  version: number;
+  activeViewId?: string;
+  views: Array<{
+    id: string;
+    sorts: ContentDatabaseSort[];
+    filters: ContentDatabaseFilter[];
+    filterMode: ContentDatabaseFilterMode;
+  }>;
+}
+
+export interface ContentDatabasePersonalViewResponse {
+  databaseId: string;
+  overrides: ContentDatabasePersonalViewOverrides | null;
+}
+
+export interface UpdateContentDatabasePersonalViewRequest {
+  databaseId: string;
+  overrides: ContentDatabasePersonalViewOverrides | null;
 }
 
 export interface ContentDatabaseMembership {
@@ -319,6 +377,7 @@ export type ContentDatabaseBodyHydrationState =
   | "pending"
   | "hydrating"
   | "hydrated"
+  | "unavailable"
   | "error";
 
 export interface ContentDatabaseBodyHydration {
@@ -332,6 +391,7 @@ export interface ContentDatabaseBodyHydrationSummary {
   pending: number;
   hydrating: number;
   hydrated: number;
+  unavailable?: number;
   error: number;
   total: number;
 }
@@ -364,7 +424,13 @@ export interface ContentDatabaseSourceOverlay {
 export type ContentDatabaseSourceType =
   | "mock-local"
   | "builder-cms"
-  | "local-table";
+  | "local-table"
+  | "notion-database"
+  | "local-folder";
+export type ContentDatabaseSourceTruthPolicy =
+  | "database_primary"
+  | "source_primary"
+  | "reviewed_bidirectional";
 export type ContentDatabaseSourceSyncState =
   | "idle"
   | "linked"
@@ -383,7 +449,7 @@ export type ContentDatabaseSourceWriteMode =
   | "publish_updates";
 export type BuilderCmsPublicationTransitionIntent = "publish" | "unpublish";
 export const BUILDER_CMS_SAFE_WRITE_MODEL = "agent-native-blog-article-test";
-export type ContentDatabaseSourceChangeDirection = "outbound";
+export type ContentDatabaseSourceChangeDirection = "incoming" | "outbound";
 export type ContentDatabaseSourceChangeState =
   | "proposed"
   | "pending_push"
@@ -404,6 +470,8 @@ export type ContentDatabaseSourceExecutionState =
   | "write_disabled"
   | "blocked"
   | "running"
+  | "response_received"
+  | "reconciliation_required"
   | "succeeded"
   | "failed";
 
@@ -419,6 +487,9 @@ export interface ContentDatabaseSourceCapabilities {
   canStageLocalRevision: boolean;
   liveWritesEnabled: boolean;
   readOnlyRefresh: boolean;
+  canRename?: boolean;
+  canReveal?: boolean;
+  canUseLocalComponents?: boolean;
 }
 
 export interface ContentDatabaseSourceFieldMapping {
@@ -459,6 +530,8 @@ export interface ContentDatabaseSourceFieldChange {
   sourceFieldKey: string;
   currentValue: DocumentPropertyValue;
   proposedValue: DocumentPropertyValue;
+  /** Exact provider-native JSON value; review continues to show proposedValue. */
+  builderValueJson?: string;
 }
 
 export interface ContentDatabaseSourceBodyChange {
@@ -586,6 +659,9 @@ export interface ContentDatabaseSource {
     allowPublicationTransitions?: boolean;
     notes?: string | null;
     readMode?: "fixture" | "builder-api" | string | null;
+    connectionId?: string | null;
+    connectionLabel?: string | null;
+    truthPolicy?: ContentDatabaseSourceTruthPolicy;
     liveReadConfigured?: boolean;
     lastReadEntryCount?: number;
     lastReadMatchedRowCount?: number;
@@ -594,10 +670,12 @@ export interface ContentDatabaseSource {
     lastReadPartial?: boolean;
     lastReadHasMore?: boolean;
     lastReadNextOffset?: number;
+    lastReadSuspiciousEmpty?: boolean;
     sourceFetchState?: "idle" | "fetching" | "error";
     allowDraftWrites?: boolean;
     allowPublishWrites?: boolean;
     allowedWriteModes?: ContentDatabaseSourcePushMode[];
+    builderModelFields?: BuilderCmsModelFieldSummary[];
     federation?: ContentDatabaseSourceFederation;
   };
   fields: ContentDatabaseSourceFieldMapping[];
@@ -617,6 +695,10 @@ export interface BuilderCmsModelFieldSummary {
   name: string;
   label?: string;
   type: string;
+  inputType?: string;
+  model?: string;
+  enum?: string[];
+  options?: string[];
   required: boolean;
 }
 
@@ -635,11 +717,26 @@ export interface BuilderCmsModelsResponse {
   message: string | null;
 }
 
+export interface NotionDatabaseSourceSummary {
+  id: string;
+  name: string;
+  url: string | null;
+}
+
+export interface NotionDatabaseSourcesResponse {
+  connected: boolean;
+  workspaceName: string | null;
+  sources: NotionDatabaseSourceSummary[];
+  hasMore: boolean;
+  nextCursor: string | null;
+}
+
 export interface ContentDatabaseResponse {
   database: ContentDatabase;
   properties: DocumentProperty[];
   items: ContentDatabaseItem[];
   source: ContentDatabaseSource | null;
+  contextPath?: ContentContextPathEntry[];
   // All attached sources (NEXT). `source` stays as `sources[0] ?? null` for
   // back-compat; multi-source consumers read `sources`.
   sources?: ContentDatabaseSource[];
@@ -652,12 +749,19 @@ export interface ContentDatabaseResponse {
   };
   createdItemId?: string;
   createdDocumentId?: string;
+  createdDocumentUpdatedAt?: string;
   duplicatedItemId?: string;
   duplicatedDocumentId?: string;
   duplicatedItemIds?: string[];
   duplicatedDocumentIds?: string[];
   deletedItemIds?: string[];
   deletedDocumentIds?: string[];
+  timings?: BuilderActionTiming[];
+}
+
+export interface BuilderActionTiming {
+  name: string;
+  durationMs: number;
 }
 
 export interface ContentDatabaseUnavailableResponse {
@@ -683,13 +787,16 @@ export interface ContentDatabaseSourceFieldPropertyResponse {
 
 export interface CreateDatabaseRequest {
   documentId?: string;
+  spaceId?: string;
   parentId?: string | null;
   title?: string;
+  description?: string;
 }
 
 export interface CreateInlineDatabaseRequest {
   hostDocumentId: string;
   title?: string;
+  description?: string;
 }
 
 export interface CreateInlineDatabaseResponse {
@@ -705,6 +812,23 @@ export interface AddDatabaseItemRequest {
   databaseId: string;
   title?: string;
   propertyValues?: Record<string, DocumentPropertyValue>;
+}
+
+export interface SubmitContentDatabaseFormRequest {
+  databaseId: string;
+  viewId?: string;
+  title?: string;
+  propertyValues?: Record<string, unknown>;
+}
+
+export interface SubmitContentDatabaseFormResponse {
+  databaseId: string;
+  viewId: string;
+  createdItemId: string;
+  createdDocumentId: string;
+  urlPath: string;
+  deepLink: string;
+  verified: true;
 }
 
 export interface DuplicateDatabaseItemRequest {
@@ -786,6 +910,16 @@ export interface TrashedContentDatabaseSummary {
 
 export interface ListTrashedContentDatabasesResponse {
   databases: TrashedContentDatabaseSummary[];
+}
+
+export interface TrashedDocumentSummary {
+  documentId: string;
+  title: string;
+  trashedAt: string;
+}
+
+export interface ListTrashedDocumentsResponse {
+  documents: TrashedDocumentSummary[];
 }
 
 export interface SuggestSourceJoinKeyRequest {
@@ -872,6 +1006,25 @@ export interface PrepareBuilderSourceExecutionRequest {
   confirmUnpublish?: boolean;
 }
 
+export interface CancelPreparedBuilderSourceUpdateRequest {
+  databaseId?: string;
+  documentId?: string;
+  sourceId: string;
+  changeSetId: string;
+  note?: string;
+}
+
+export interface CancelPreparedBuilderSourceUpdateResponse extends ContentDatabaseResponse {
+  cancellation: {
+    sourceId: string;
+    changeSetId: string;
+    executionIds: string[];
+    status: "cancelled" | "already_cancelled";
+    cancelledAt: string;
+    cancelledBy: string;
+  };
+}
+
 export interface ValidateBuilderSourceExecutionRequest {
   databaseId?: string;
   documentId?: string;
@@ -899,9 +1052,11 @@ export interface PrepareBuilderSourceReviewRequest {
   documentId?: string;
   sourceId?: string;
   changeSetIds?: string[];
+  documentIds?: string[];
   pushModeConfirmation?: ContentDatabaseSourcePushMode;
   publicationTransition?: BuilderCmsPublicationTransitionIntent;
   confirmUnpublish?: boolean;
+  transitions?: Record<string, ExecuteBuilderSourceBatchTransition>;
 }
 
 export interface ExecuteBuilderSourceBatchTransition {
@@ -918,12 +1073,17 @@ export interface ExecuteBuilderSourceBatchRequest {
   transitions?: Record<string, ExecuteBuilderSourceBatchTransition>;
 }
 
-export type BuilderSourceBatchItemStatus = "succeeded" | "blocked" | "failed";
+export type BuilderSourceBatchItemStatus =
+  | "succeeded"
+  | "blocked"
+  | "reconciliation_required"
+  | "failed";
 
 export interface BuilderSourceBatchItemResult {
   changeSetId: string;
   status: BuilderSourceBatchItemStatus;
   message?: string;
+  timings?: BuilderActionTiming[];
 }
 
 export interface ExecuteBuilderSourceBatchResponse {
@@ -931,9 +1091,11 @@ export interface ExecuteBuilderSourceBatchResponse {
     total: number;
     succeeded: number;
     blocked: number;
+    reconciliationRequired: number;
     failed: number;
   };
   results: BuilderSourceBatchItemResult[];
+  timings?: BuilderActionTiming[];
 }
 
 export interface SetContentDatabaseSourceWriteModeRequest {
@@ -1014,6 +1176,8 @@ export interface ContentDatabaseSourceReviewRowSummary {
   databaseItemId: string | null;
   documentId: string | null;
   title: string;
+  /** Existing Builder entry targeted by this write; null for new drafts. */
+  targetEntryId?: string | null;
   fieldChanges: ContentDatabaseSourceFieldChange[];
   bodyChange: ContentDatabaseSourceBodyChange | null;
   riskLevel: ContentDatabaseSourceRiskLevel;
@@ -1043,10 +1207,26 @@ export interface ContentDatabaseSourceReviewPayload {
       | "stale"
       | "write_disabled"
       | "running"
+      | "reconciliation_required"
       | "succeeded"
       | "failed";
     message: string;
   };
+}
+
+export interface PreviewBuilderSourceReviewRequest {
+  databaseId?: string;
+  documentId?: string;
+  sourceId?: string;
+  scope?: "selected" | "all";
+  documentIds?: string[];
+}
+
+export interface PreviewBuilderSourceReviewResponse {
+  sourceId: string;
+  sourceTable: string;
+  changeSetIds: string[];
+  review: ContentDatabaseSourceReviewPayload | null;
 }
 
 export interface PrepareBuilderSourceReviewResponse {
@@ -1055,6 +1235,16 @@ export interface PrepareBuilderSourceReviewResponse {
   items: ContentDatabaseItem[];
   source: ContentDatabaseSource | null;
   review: ContentDatabaseSourceReviewPayload;
+  /**
+   * Maps the operator-selected diff identities to the immutable change-set
+   * identities prepared for execution. These differ when a cancelled or
+   * otherwise closed synthetic diff is reviewed again as a new revision.
+   */
+  preparedChangeSetMappings: Array<{
+    requestedChangeSetId: string;
+    preparedChangeSetId: string;
+  }>;
+  timings?: BuilderActionTiming[];
 }
 
 export interface ProcessBuilderBodyHydrationRequest {

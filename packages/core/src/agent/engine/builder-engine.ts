@@ -20,6 +20,7 @@ import {
   getBuilderGatewayBaseUrl,
   recordBuilderCredentialAuthFailure,
 } from "../../server/credential-provider.js";
+import { applyBuilderUtmTrackingParams } from "../../shared/builder-link-tracking.js";
 import {
   normalizeReasoningEffortForModel,
   type ReasoningEffort,
@@ -31,10 +32,19 @@ import {
   LLM_MISSING_CREDENTIALS_ERROR_CODE,
   LLM_MISSING_CREDENTIALS_MESSAGE,
 } from "./credential-errors.js";
+import { describeErrorWithCauses } from "./error-detail.js";
+import { FIRST_STREAM_EVENT_TIMEOUT_MS } from "./first-event-timeout.js";
 import { resolveMaxOutputTokensForEngine } from "./output-tokens.js";
 import {
+  splitSystemPromptForCache,
+  stablePrefixCacheControl,
+} from "./prompt-cache.js";
+import {
+  createStreamedToolInputState,
   engineMessagesToBuilderGatewayAnthropic,
   engineToolsToAnthropic,
+  finalizeStreamedToolInputs,
+  observeStreamedToolInput,
 } from "./translate-anthropic.js";
 import type {
   AgentEngine,
@@ -69,6 +79,8 @@ const MAX_BACKGROUND_BUILDER_GATEWAY_TIMEOUT_MS = 14 * 60_000;
 const MAX_LOCAL_BUILDER_GATEWAY_TIMEOUT_MS =
   MAX_BACKGROUND_BUILDER_GATEWAY_TIMEOUT_MS;
 const BUILDER_GATEWAY_NETWORK_ERROR_CODE = "builder_gateway_network_error";
+export const BUILDER_MODEL_UNAUTHORIZED_ERROR_CODE =
+  "builder_model_unauthorized";
 
 export const BUILDER_DEFAULT_MODEL = BUILDER_MODEL_CONFIG.defaultModel;
 
@@ -111,6 +123,9 @@ async function buildUpgradeUrl(): Promise<string> {
   url.searchParams.set("agentNativeConnectSource", "gateway_quota_upgrade");
   url.searchParams.set("agentNativeFlow", "connect_llm");
   url.searchParams.set("framework", "agent-native");
+  applyBuilderUtmTrackingParams(url.searchParams, {
+    content: "gateway_quota_upgrade",
+  });
   return url.toString();
 }
 
@@ -150,15 +165,13 @@ class BuilderEngine implements AgentEngine {
     const tools = engineToolsToAnthropic(opts.tools);
     const thinkingBudget =
       opts.providerOptions?.anthropic?.thinking?.budgetTokens;
-    const explicitReasoningEffort = normalizeReasoningEffortForModel(
+    const reasoningEffort = normalizeReasoningEffortForModel(
       opts.model,
-      opts.reasoningEffort,
+      opts.reasoningEffort ??
+        (typeof thinkingBudget === "number"
+          ? mapReasoningEffort(thinkingBudget)
+          : undefined),
     );
-    const reasoningEffort =
-      explicitReasoningEffort ??
-      (typeof thinkingBudget === "number"
-        ? mapReasoningEffort(thinkingBudget)
-        : undefined);
 
     // Apply prompt caching to system + tools (stable prefix) and to the last
     // user message (moving cache breakpoint so growing history gets cached
@@ -167,17 +180,23 @@ class BuilderEngine implements AgentEngine {
     const cacheEnabled =
       opts.providerOptions?.anthropic?.cacheControl !== false;
 
-    // System: wrap in array with cache_control when caching is on.
+    // System: split into a stable block carrying the breakpoint and a volatile
+    // tail (resources, app extras, model overlay, runtime context) without one,
+    // so mid-turn resource churn no longer invalidates system + tools.
+    const { stable, volatile } = splitSystemPromptForCache(
+      opts.systemPrompt ?? "",
+    );
     const systemValue: unknown = opts.systemPrompt
       ? cacheEnabled
         ? [
             {
               type: "text",
-              text: opts.systemPrompt,
-              cache_control: { type: "ephemeral" },
+              text: stable,
+              cache_control: stablePrefixCacheControl(),
             },
+            ...(volatile ? [{ type: "text", text: volatile }] : []),
           ]
-        : opts.systemPrompt
+        : stable + volatile
       : undefined;
 
     // Tools: add cache_control to the last tool definition.
@@ -185,12 +204,14 @@ class BuilderEngine implements AgentEngine {
     if (cacheEnabled && tools.length > 0) {
       cachedTools = [...tools];
       const last = { ...cachedTools[cachedTools.length - 1] } as any;
-      last.cache_control = { type: "ephemeral" };
+      last.cache_control = stablePrefixCacheControl();
       cachedTools[cachedTools.length - 1] = last;
     }
 
     // Messages: add a moving cache breakpoint on the last user message's last
-    // content block so the entire conversation prefix is cached.
+    // content block so the entire conversation prefix is cached. Stays on the
+    // default 5m TTL — it moves every iteration, so a longer-lived entry would
+    // only pay the higher write premium.
     let cachedMessages = messages;
     if (cacheEnabled && messages.length > 0) {
       let lastUserIdx = -1;
@@ -224,6 +245,9 @@ class BuilderEngine implements AgentEngine {
         opts.maxOutputTokens,
         opts.model,
       ),
+      ...(typeof opts.temperature === "number"
+        ? { temperature: opts.temperature }
+        : {}),
       ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
     };
 
@@ -271,12 +295,16 @@ class BuilderEngine implements AgentEngine {
             phase: "request",
             model: opts.model,
             gatewayUrl,
-            timeoutMs: gatewayTimeoutMs,
+            timeoutMs: gatewayAbort.effectiveTimeoutMs(),
             timedOut,
             elapsedMs: Date.now() - tStart,
           });
         }
-        yield createBuilderGatewayTimeoutStop(err, timedOut, gatewayTimeoutMs);
+        yield createBuilderGatewayTimeoutStop(
+          err,
+          timedOut,
+          gatewayAbort.effectiveTimeoutMs(),
+        );
         return;
       }
 
@@ -330,7 +358,8 @@ class BuilderEngine implements AgentEngine {
       yield* parseJsonlStream(reader, opts.model, {
         abortSignal: gatewayAbort.signal,
         didGatewayTimeout: gatewayAbort.didTimeout,
-        gatewayTimeoutMs,
+        getGatewayTimeoutMs: gatewayAbort.effectiveTimeoutMs,
+        onFirstEvent: gatewayAbort.markFirstEvent,
         gatewayUrl,
         requestStartedAt: tStart,
       });
@@ -474,22 +503,24 @@ async function* parseJsonlStream(
   captureContext: {
     abortSignal?: AbortSignal;
     didGatewayTimeout?: () => boolean;
-    gatewayTimeoutMs?: number;
+    getGatewayTimeoutMs?: () => number;
+    onFirstEvent?: () => void;
     gatewayUrl?: URL;
     requestStartedAt?: number;
   } = {},
 ): AsyncIterable<EngineEvent> {
-  const gatewayTimeoutMs =
-    captureContext.gatewayTimeoutMs ?? DEFAULT_BUILDER_GATEWAY_TIMEOUT_MS;
   const parts: EngineContentPart[] = [];
   let pendingText = "";
   let pendingThinking: { text: string; signature?: string } | null = null;
 
-  const flushPending = () => {
+  const flushPendingText = () => {
     if (pendingText) {
       parts.push({ type: "text", text: pendingText });
       pendingText = "";
     }
+  };
+
+  const flushPendingThinking = () => {
     if (pendingThinking) {
       parts.push({
         type: "thinking",
@@ -500,6 +531,32 @@ async function* parseJsonlStream(
       });
       pendingThinking = null;
     }
+  };
+
+  const flushPending = () => {
+    flushPendingText();
+    flushPendingThinking();
+  };
+
+  const toolInputs = createStreamedToolInputState();
+
+  // The gateway can announce a tool call through `tool-call-delta` frames and
+  // then die before the terminal `tool-call` frame. Assemble what streamed, or
+  // hand the model an in-band error — never end the turn advertising a call
+  // that was silently dropped.
+  const recoverUndeliveredToolCalls = (): EngineEvent[] => {
+    const events = finalizeStreamedToolInputs(toolInputs);
+    for (const event of events) {
+      if (event.type === "tool-call") {
+        parts.push({
+          type: "tool-call",
+          id: event.id,
+          name: event.name,
+          input: event.input,
+        });
+      }
+    }
+    return events;
   };
 
   try {
@@ -524,16 +581,25 @@ async function* parseJsonlStream(
         return;
       }
 
+      // Heartbeats are transport-level keepalives, not proof the model is
+      // producing output — every other parsed event counts as first progress.
+      if (event?.type !== "heartbeat") {
+        captureContext.onFirstEvent?.();
+      }
+
       switch (event.type) {
         case "text-delta": {
           const text = event.text ?? "";
+          flushPendingThinking();
           pendingText += text;
           yield { type: "text-delta", text };
           break;
         }
 
-        case "thinking-delta": {
+        case "thinking-delta":
+        case "reasoning-delta": {
           const text = event.text ?? "";
+          flushPendingText();
           if (!pendingThinking) pendingThinking = { text: "" };
           pendingThinking.text += text;
           if (event.signature) pendingThinking.signature = event.signature;
@@ -545,8 +611,8 @@ async function* parseJsonlStream(
           break;
         }
 
-        case "tool-call-delta":
-          yield {
+        case "tool-call-delta": {
+          const delta: EngineEvent = {
             type: "tool-input-delta",
             id: event.id,
             name: event.name,
@@ -557,7 +623,10 @@ async function* parseJsonlStream(
                   ? event.delta
                   : "",
           };
+          observeStreamedToolInput(toolInputs, delta);
+          yield delta;
           break;
+        }
 
         case "heartbeat":
           yield { type: "gateway-heartbeat" };
@@ -565,18 +634,15 @@ async function* parseJsonlStream(
 
         case "tool-call": {
           flushPending();
-          parts.push({
-            type: "tool-call",
-            id: event.id,
-            name: event.name,
-            input: event.input,
-          });
-          yield {
-            type: "tool-call",
+          const call = {
+            type: "tool-call" as const,
             id: event.id,
             name: event.name,
             input: event.input,
           };
+          parts.push(call);
+          observeStreamedToolInput(toolInputs, call);
+          yield { ...call };
           break;
         }
 
@@ -597,6 +663,7 @@ async function* parseJsonlStream(
 
         case "stop": {
           flushPending();
+          yield* recoverUndeliveredToolCalls();
           yield { type: "assistant-content", parts };
 
           const reason = event.reason ?? "end_turn";
@@ -642,13 +709,31 @@ async function* parseJsonlStream(
               explicitErrMsg ??
               `Gateway error (no detail; raw event: ${JSON.stringify(event)})`;
             const gatewayErrCode = event.errorCode ?? event.code;
+            // The gateway already authenticated this request before streaming,
+            // so a bare "Unauthorized" here means the account cannot use this
+            // model — not that the connection is broken. Only a message that
+            // names the credential may tear down the Builder connection.
             const isCredentialAuthError =
               Boolean(explicitErrMsg) &&
+              isBuilderCredentialAuthErrorInStream(String(errMsg));
+            const isModelAuthError =
+              Boolean(explicitErrMsg) &&
+              !isCredentialAuthError &&
               isBuilderCredentialAuthError(String(errMsg));
+            // Anthropic's bare "Connection error." often arrives here with no
+            // gateway code. Tag it as a network error so in-run retries and
+            // run-level resume treat it as transient instead of terminal.
+            const isProviderConnectionError =
+              typeof explicitErrMsg === "string" &&
+              isProviderConnectionErrorMessage(String(explicitErrMsg));
             const errCode = isCredentialAuthError
               ? "builder_auth_error"
-              : (gatewayErrCode ??
-                (!explicitErrMsg ? "builder_gateway_error" : undefined));
+              : isModelAuthError
+                ? BUILDER_MODEL_UNAUTHORIZED_ERROR_CODE
+                : isProviderConnectionError
+                  ? BUILDER_GATEWAY_NETWORK_ERROR_CODE
+                  : (gatewayErrCode ??
+                    (!explicitErrMsg ? "builder_gateway_error" : undefined));
             console.error(
               `[builder-engine] stop reason=error model=${model} code=${errCode ?? "(none)"} error=${errMsg}`,
             );
@@ -707,6 +792,7 @@ async function* parseJsonlStream(
 
     // Stream ended without a stop event — synthesize one so callers don't hang.
     flushPending();
+    yield* recoverUndeliveredToolCalls();
     yield { type: "assistant-content", parts };
     yield {
       type: "stop",
@@ -715,6 +801,9 @@ async function* parseJsonlStream(
     };
   } catch (err) {
     const timedOut = captureContext.didGatewayTimeout?.() ?? false;
+    const gatewayTimeoutMs =
+      captureContext.getGatewayTimeoutMs?.() ??
+      DEFAULT_BUILDER_GATEWAY_TIMEOUT_MS;
     if (timedOut || isBuilderGatewayNetworkError(err)) {
       captureBuilderGatewayTransportError(err, {
         phase: "stream",
@@ -860,16 +949,28 @@ function getBuilderGatewayTimeoutMs(): number {
   return Math.min(parsed, maxMs);
 }
 
+/**
+ * Two-stage abort deadline: until the first real stream event arrives, the
+ * effective deadline is min(totalTimeoutMs, FIRST_STREAM_EVENT_TIMEOUT_MS) —
+ * a wedged gateway that never streams anything gets cut off in ~2 minutes
+ * instead of riding the full flat timeout. Once `markFirstEvent()` fires, the
+ * timer reschedules for whatever remains of the original total deadline, so
+ * a request that starts streaming still gets the full budget it always did.
+ */
 function createGatewayAbortSignal(
   parentSignal: AbortSignal,
-  timeoutMs: number,
+  totalTimeoutMs: number,
 ): {
   signal: AbortSignal;
   didTimeout: () => boolean;
+  effectiveTimeoutMs: () => number;
+  markFirstEvent: () => void;
   cleanup: () => void;
 } {
   const controller = new AbortController();
   let timedOut = false;
+  let firstEventSeen = false;
+  const startedAt = Date.now();
 
   const abortFromParent = () => {
     if (!controller.signal.aborted) {
@@ -877,12 +978,18 @@ function createGatewayAbortSignal(
     }
   };
 
-  const timeout = setTimeout(() => {
+  const fireTimeout = () => {
     timedOut = true;
     if (!controller.signal.aborted) {
       controller.abort(new Error("Builder gateway request timed out"));
     }
-  }, timeoutMs);
+  };
+
+  const firstEventDeadlineMs = Math.min(
+    totalTimeoutMs,
+    FIRST_STREAM_EVENT_TIMEOUT_MS,
+  );
+  let timeout = setTimeout(fireTimeout, firstEventDeadlineMs);
 
   if (parentSignal.aborted) abortFromParent();
   parentSignal.addEventListener("abort", abortFromParent, { once: true });
@@ -890,6 +997,21 @@ function createGatewayAbortSignal(
   return {
     signal: controller.signal,
     didTimeout: () => timedOut,
+    effectiveTimeoutMs: () =>
+      firstEventSeen ? totalTimeoutMs : firstEventDeadlineMs,
+    markFirstEvent: () => {
+      if (firstEventSeen || timedOut) return;
+      firstEventSeen = true;
+      // The first-event window was already the binding constraint (total
+      // timeout <= it) — nothing to reschedule.
+      if (firstEventDeadlineMs >= totalTimeoutMs) return;
+      clearTimeout(timeout);
+      const remainingMs = Math.max(
+        0,
+        totalTimeoutMs - (Date.now() - startedAt),
+      );
+      timeout = setTimeout(fireTimeout, remainingMs);
+    },
     cleanup: () => {
       clearTimeout(timeout);
       parentSignal.removeEventListener("abort", abortFromParent);
@@ -914,6 +1036,25 @@ function isBuilderCredentialAuthError(message: string): boolean {
     lowerMessage.includes("invalid_token") ||
     lowerMessage.includes("token invalid") ||
     (referencesAccessToken && rejectedToken)
+  );
+}
+
+/**
+ * Stricter than {@link isBuilderCredentialAuthError} for errors that arrive
+ * inside an already-authenticated stream, where a bare "unauthorized" is far
+ * more likely to be a per-model entitlement rejection than a bad credential.
+ * Misreading one there disconnects Builder for every model, including the ones
+ * that still work.
+ */
+function isBuilderCredentialAuthErrorInStream(message: string): boolean {
+  if (!isBuilderCredentialAuthError(message)) return false;
+  const lowerMessage = message.toLowerCase();
+  return (
+    lowerMessage.includes("private key") ||
+    lowerMessage.includes("access token") ||
+    lowerMessage.includes("invalid token") ||
+    lowerMessage.includes("invalid_token") ||
+    lowerMessage.includes("token invalid")
   );
 }
 
@@ -958,8 +1099,7 @@ function formatTimeoutMs(timeoutMs: number): string {
 }
 
 function errorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
+  return describeErrorWithCauses(err);
 }
 
 function errorSearchText(err: unknown): string {
@@ -987,11 +1127,18 @@ function isBuilderGatewayNetworkError(err: unknown): boolean {
     text.includes("econnaborted") ||
     text.includes("fetch failed") ||
     text.includes("network error") ||
+    // Anthropic SDK's APIConnectionError default ("Connection error.") is
+    // often forwarded by the Builder gateway as a stop event with no code.
+    text.includes("connection error") ||
     text.includes("connection reset") ||
     text.includes("connection closed") ||
     text.includes("stream closed") ||
     text.includes("terminated")
   );
+}
+
+function isProviderConnectionErrorMessage(message: string): boolean {
+  return message.trim().toLowerCase() === "connection error.";
 }
 
 function captureBuilderGatewayTransportError(

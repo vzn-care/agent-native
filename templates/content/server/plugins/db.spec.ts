@@ -129,6 +129,24 @@ describe("content db.ts migration entries follow the naming convention", () => {
       .map((e) => e.version);
     expect(missingNames).toEqual([]);
   });
+
+  it("keeps Builder source refresh hot-path indexes in migrations", () => {
+    expect(dbTsSource).toContain(
+      "content_database_source_rows_source_item_idx",
+    );
+    expect(dbTsSource).toContain(
+      "content_database_body_hydration_queue_source_document_idx",
+    );
+    expect(dbTsSource).toContain(
+      "content_database_body_hydration_queue_item_idx",
+    );
+    expect(dbTsSource).toContain(
+      "content_database_items_database_position_idx",
+    );
+    expect(dbTsSource).toContain(
+      "content_database_source_fields_source_key_idx",
+    );
+  });
 });
 
 /**
@@ -172,6 +190,16 @@ describe("content db.ts wires ensureAdditiveColumns after runMigrations", () => 
   it("does not remove the body-hydration queue index migration (v60)", () => {
     expect(dbTsSource).toMatch(
       /CREATE INDEX IF NOT EXISTS content_database_items_body_hydration_idx ON content_database_items \(database_id, body_hydration_status\)/,
+    );
+  });
+
+  it("backfills legacy deleted database trees into explicit document Trash roots", () => {
+    expect(dbTsSource).toContain('name: "backfill-database-trash-roots"');
+    expect(dbTsSource).toMatch(
+      /WITH RECURSIVE legacy_database_trash[\s\S]*?child\.parent_id = legacy_database_trash\.document_id[\s\S]*?trash_root_id = \([\s\S]*?legacy_database_trash\.root_id/,
+    );
+    expect(dbTsSource).toMatch(
+      /child_database\.document_id = child\.id[\s\S]*?child_database\.deleted_at IS NOT NULL/,
     );
   });
 });

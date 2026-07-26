@@ -99,6 +99,10 @@ function normalizePrincipalId(
     : principalId;
 }
 
+function isEmailPrincipalId(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+$/.test(value.trim());
+}
+
 function principalIdMatches(
   sharesTable: any,
   principalType: "user" | "org",
@@ -187,6 +191,11 @@ export default defineAction({
       args.principalType,
       args.principalId,
     );
+    if (args.principalType === "user" && !isEmailPrincipalId(principalId)) {
+      throw new Error(
+        "User shares must use an email address, not an internal user id.",
+      );
+    }
     const beforeExtensionTargets = await getExtensionShareChangeTargets(
       args.resourceType,
       args.resourceId,
@@ -290,6 +299,7 @@ export default defineAction({
           process.env.APP_NAME || process.env.VITE_APP_NAME || "Agent Native";
         const subject = `${actor} shared "${resourceTitle}" with you on ${appName}`;
         const { html, text } = renderEmail({
+          brandName: appName,
           preheader: subject,
           heading: "You've been given access",
           paragraphs: [

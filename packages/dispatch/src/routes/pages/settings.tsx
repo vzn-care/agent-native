@@ -1,25 +1,23 @@
+import { ChangelogSettingsCard } from "@agent-native/core/client/changelog";
+import { LanguagePicker, useT } from "@agent-native/core/client/i18n";
+import { TeamPage } from "@agent-native/core/client/org";
 import {
-  ChangelogSettingsCard,
-  LanguagePicker,
   SettingsTabsPage,
   useAgentSettingsTabs,
-  useT,
-} from "@agent-native/core/client";
-import { TeamPage } from "@agent-native/core/client/org";
+} from "@agent-native/core/client/settings";
 import { Link } from "react-router";
 
-import { DispatchShell } from "@/components/dispatch-shell";
-import { Button } from "@/components/ui/button";
+import changelog from "../../../CHANGELOG.md?raw";
+import { DispatchShell } from "../../components/dispatch-shell";
+import { Button } from "../../components/ui/button";
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-
-import changelog from "../../../CHANGELOG.md?raw";
+} from "../../components/ui/card";
+import { Label } from "../../components/ui/label";
 
 export function meta() {
   return [{ title: "Settings - Dispatch" }];
@@ -67,6 +65,38 @@ export default function SettingsRoute() {
                   <Link to="/workspace">
                     {t("settings.openResourceSettings")}
                   </Link>
+                </Button>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">
+                  {t("settings.automationsTitle")}
+                </CardTitle>
+                <CardDescription>
+                  {t("settings.automationsDescription")}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Button variant="outline" asChild>
+                  <Link to="/automations">{t("settings.openAutomations")}</Link>
+                </Button>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">
+                  {t("settings.deliveryTitle")}
+                </CardTitle>
+                <CardDescription>
+                  {t("settings.deliveryDescription")}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Button variant="outline" asChild>
+                  <Link to="/destinations">{t("settings.openDelivery")}</Link>
                 </Button>
               </CardContent>
             </Card>

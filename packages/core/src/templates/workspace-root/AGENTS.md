@@ -22,15 +22,27 @@ first-party template patterns ships in `node_modules/@agent-native/core/corpus`.
   examples.
 - For advanced workspace features, start with `workspace`, `multi-app-workspace`,
   `a2a-protocol`, `pure-agent-apps`, `automations`, `recurring-jobs`,
-  `external-agents`, `mcp-protocol`, `sharing`, and `security`.
+  `external-agents`, `mcp-protocol`, `feature-flags`, `sharing`, and `security`.
 
 Use package docs for framework APIs, the package corpus for reusable
 framework/template patterns, and `packages/shared/AGENTS.md` plus
 `packages/shared/.agents/skills/` for workspace-specific conventions.
-After updating `@agent-native/core`, run `pnpm skills:update` or
-`npx @agent-native/core@latest skills update scaffold --project` from the
-workspace root to refresh framework-provided shared skills and repair
-`CLAUDE.md` / `.claude/skills` compatibility links.
+Before building common workspace or agent UI, read `agent-native-toolkit` to
+inventory existing public kits and installed package seams. Read
+`customizing-agent-native` before adapting shared UI. Use the supported
+ladder: configure → compose → eject the smallest unit → propose a shared seam.
+Preview before `--apply`, commit `agent-native.ejections.json`, and never edit
+`node_modules` or eject protected runtime contracts.
+To bring an older workspace current, run `pnpm upgrade:agent-native` or
+`npx @agent-native/core@latest upgrade` from the workspace root. That bumps
+`@agent-native/*` deps, installs, refreshes scaffold skills, and typechecks.
+Do **not** add `pnpm.overrides` / patches against `@agent-native/*` or edit
+`node_modules/@agent-native/*` when an upgrade fails — fix app code or ask.
+See the `upgrade-agent-native` and `self-modifying-code` skills.
+After a manual core bump only, `pnpm skills:update` (or
+`npx @agent-native/core@latest skills update scaffold --project`) still
+refreshes framework-provided shared skills and repairs `CLAUDE.md` /
+`.claude/skills` compatibility links.
 
 ## Core Agent Rule
 
@@ -64,11 +76,18 @@ workspace root to refresh framework-provided shared skills and repair
 
 ## Workspace Scope
 
+- Scale effort to the task. A small, well-specified change is a short read, the
+  edit, and the existing checks — not a codebase survey, unrequested tests, or
+  browser automation.
 - Keep root changes focused on workspace orchestration, shared configuration,
   deploy settings, and monorepo tooling.
 - Keep application routes, actions, server plugins, and app state inside the
   relevant `apps/<app>` directory unless multiple apps need the same behavior.
 - Put reusable code in `packages/shared` only after at least two apps need it.
+- SQL is for structured records, metadata, references, and searchable text. Store
+  large files/blob payloads (base64, `data:` URLs, images, video/audio, PDFs,
+  ZIPs, screenshots, thumbnails, session replay chunks) in configured file/blob
+  storage and persist only URLs, ids, or handles.
 - Never copy live credentials, API keys, tokens, webhook URLs, signing secrets,
   personal email addresses, customer data, private Builder/internal data, or
   company-specific placeholder values into source files, docs, prompts,
@@ -140,14 +159,18 @@ workspace root to refresh framework-provided shared skills and repair
   for the same data unless the route is for uploads, streaming, webhooks,
   OAuth, or another route-only concern. Do not add routes whose main job is to
   wrap, proxy, or re-export an action; the action endpoint already exists at
-  `/_agent-native/actions/:name`. Action-backed UI is what makes agent-created
+  `/_agent-native/actions/:name`. If you are about to create a file under
+  `server/routes/api/`, or middleware to guard one, stop and write a
+  `defineAction` instead. Action-backed UI is what makes agent-created
   or agent-edited records appear without a manual refresh.
 - App database code must be provider-agnostic. Define schemas with
   `@agent-native/core/db/schema` helpers and write app reads/writes with
   Drizzle's query builder and portable `drizzle-orm` operators. Do not import
   from `drizzle-orm/sqlite-core` or `drizzle-orm/pg-core` in app templates.
   Keep raw SQL for additive migrations, health checks, or carefully scoped
-  maintenance, and never write SQLite-only or Postgres-only product code.
+  maintenance, and never write SQLite-only or Postgres-only product code. Do
+  not use SQL as object storage; file bytes belong in upload/private-blob
+  providers with only references saved to app tables.
 - In local development, scaffold the app from the workspace root with
   `pnpm exec agent-native create <app-id> --template=<template>`. In production
   Dispatch posts the request to Builder branch creation; the Builder branch

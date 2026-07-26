@@ -1,7 +1,14 @@
-import { useActionQuery, useT } from "@agent-native/core/client";
-import { IconArrowUpRight, IconPhoto } from "@tabler/icons-react";
+import { useActionQuery } from "@agent-native/core/client/hooks";
+import { useT } from "@agent-native/core/client/i18n";
+import {
+  IconAlertTriangle,
+  IconArrowUpRight,
+  IconPhoto,
+} from "@tabler/icons-react";
+import { useState } from "react";
 import { Link } from "react-router";
 
+import { AssetPreviewDialog } from "@/components/asset/AssetPreviewDialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -20,10 +27,33 @@ const RECENT_DRAFTS_LIMIT = 5;
 
 export function RecentDraftsSection() {
   const t = useT();
-  const { data, isLoading } = useActionQuery("list-draft-assets", {
-    limit: RECENT_DRAFTS_LIMIT,
-  });
+  const { data, isLoading, isError, isFetching, refetch } = useActionQuery(
+    "list-draft-assets",
+    {
+      limit: RECENT_DRAFTS_LIMIT,
+    },
+  );
   const drafts = ((data as any)?.assets ?? []) as DraftAsset[];
+  const [previewAsset, setPreviewAsset] = useState<DraftAsset | null>(null);
+
+  if (isError) {
+    return (
+      <section className="flex items-center justify-between gap-3 rounded-lg border border-destructive/30 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
+          <IconAlertTriangle className="size-4 shrink-0 text-destructive" />
+          <span className="truncate">{t("audit.unknownError")}</span>
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => void refetch()}
+          disabled={isFetching}
+        >
+          {t("brandKitDetail.refresh")}
+        </Button>
+      </section>
+    );
+  }
 
   if (!isLoading && drafts.length === 0) return null;
 
@@ -47,18 +77,25 @@ export function RecentDraftsSection() {
               <Skeleton key={index} className="aspect-square rounded-lg" />
             ))
           : drafts.map((draft) => (
-              <Link
+              <button
                 key={draft.id}
-                to={`/asset/${encodeURIComponent(draft.id)}`}
+                type="button"
+                onClick={() => setPreviewAsset(draft)}
                 title={draft.title || draft.prompt || t("library.draftAsset")}
-                className="group block overflow-hidden rounded-lg border border-border bg-card shadow-sm transition hover:border-primary/60 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="group block overflow-hidden rounded-lg border border-border bg-card text-left shadow-sm transition hover:border-primary/60 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <div className="aspect-square bg-muted">
                   <DraftThumbnail draft={draft} />
                 </div>
-              </Link>
+              </button>
             ))}
       </div>
+
+      <AssetPreviewDialog
+        asset={previewAsset}
+        assets={drafts}
+        onAssetChange={(next) => setPreviewAsset(next as DraftAsset | null)}
+      />
     </section>
   );
 }

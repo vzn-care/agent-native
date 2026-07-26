@@ -1,7 +1,17 @@
 import { getDbExec } from "@agent-native/core/db";
 import { and, eq, isNull, or } from "drizzle-orm";
 
+import { FIRST_PARTY_ANALYTICS_QUERY_TIMEOUT_MS } from "../../shared/dashboard-report-timeouts.js";
 import { getDb, schema } from "../db/index.js";
+import {
+  EXCEPTION_EVENT_NAME,
+  ingestAnalyticsExceptionEvents,
+  type DerivedExceptionFields,
+} from "./error-capture.js";
+import {
+  firstPartyCacheKey,
+  withFirstPartyCache,
+} from "./first-party-analytics-cache.js";
 
 export interface AnalyticsScope {
   userEmail: string;
@@ -21,6 +31,13 @@ export interface IncomingAnalyticsEvent {
 export interface AnalyticsQueryResult {
   rows: Record<string, unknown>[];
   schema: { name: string; type: string }[];
+}
+
+export interface AnalyticsQueryOptions {
+  /** Cache only callers with a stable dashboard-panel lifecycle. */
+  cache?: boolean;
+  /** Bound the database work for callers with a smaller delivery deadline. */
+  timeoutMs?: number;
 }
 
 const MAX_EVENTS_PER_REQUEST = 100;
@@ -351,6 +368,10 @@ export async function recordAnalyticsEvents(
   }
 
   const receivedAt = nowIso();
+  const exceptionSources: Array<{
+    properties: Record<string, unknown>;
+    derived: DerivedExceptionFields;
+  }> = [];
   const rows = events.map((event) => {
     const properties = event.properties ?? {};
     const context = event.context ?? {};
@@ -380,6 +401,24 @@ export async function recordAnalyticsEvents(
       asString((properties as any).distinctId);
     const userKey = userId || anonymousId;
     const timestamp = normalizeAnalyticsTimestamp(event.timestamp, receivedAt);
+    const sessionId =
+      event.sessionId ?? asString((properties as any).sessionId);
+
+    if (event.event === EXCEPTION_EVENT_NAME) {
+      exceptionSources.push({
+        properties,
+        derived: {
+          app,
+          template,
+          url: parts.url,
+          userId,
+          anonymousId,
+          userKey,
+          sessionId,
+          timestamp,
+        },
+      });
+    }
 
     return {
       id: id("evt"),
@@ -388,7 +427,7 @@ export async function recordAnalyticsEvents(
       userId,
       anonymousId,
       userKey,
-      sessionId: event.sessionId ?? asString((properties as any).sessionId),
+      sessionId,
       timestamp,
       eventDate: eventDateFromTimestamp(timestamp),
       receivedAt,
@@ -413,6 +452,25 @@ export async function recordAnalyticsEvents(
       .update(schema.analyticsPublicKeys)
       .set({ lastUsedAt: receivedAt })
       .where(eq(schema.analyticsPublicKeys.id, key.id));
+  }
+
+  // Fork captured exceptions into the dedicated error-capture tables. This is
+  // best-effort: a malformed `$exception` payload must never reject the whole
+  // analytics ingest (the event is still recorded in analytics_events above,
+  // which keeps alerting working).
+  if (exceptionSources.length) {
+    try {
+      await ingestAnalyticsExceptionEvents(
+        {
+          ownerEmail: key.ownerEmail,
+          orgId: key.orgId ?? null,
+          publicKeyId: key.id,
+        },
+        exceptionSources,
+      );
+    } catch (error) {
+      console.warn("[first-party-analytics] Exception ingest failed:", error);
+    }
   }
 
   return { accepted: rows.length, keyId: key.id };
@@ -589,14 +647,30 @@ function inferSchema(rows: Record<string, unknown>[]): {
 export async function queryFirstPartyAnalytics(
   sql: string,
   scope: AnalyticsScope,
+  options: AnalyticsQueryOptions = {},
 ): Promise<AnalyticsQueryResult> {
   validateFirstPartyAnalyticsSql(sql);
   const scoped = scopedAnalyticsSql(sql, scope);
-  const exec = getDbExec();
-  const result = await exec.execute({
-    sql: `SELECT * FROM (${scoped.sql}) AS first_party_analytics_query LIMIT ${MAX_QUERY_ROWS}`,
-    args: scoped.args,
-  });
-  const rows = result.rows as Record<string, unknown>[];
-  return { rows, schema: inferSchema(rows) };
+  const wrappedSql = `SELECT * FROM (${scoped.sql}) AS first_party_analytics_query LIMIT ${MAX_QUERY_ROWS}`;
+  const timeoutMs = Math.max(
+    1,
+    options.timeoutMs ?? FIRST_PARTY_ANALYTICS_QUERY_TIMEOUT_MS,
+  );
+  // The cache key is the fully scoped SQL + args, which already embeds
+  // org_id/owner_email (see scopeClause) — a cache hit can only ever return
+  // rows the same tenant was already entitled to query.
+  const cacheKey = firstPartyCacheKey(wrappedSql, scoped.args);
+  const compute = async (): Promise<AnalyticsQueryResult> => {
+    const exec = getDbExec();
+    const result = await exec.execute({
+      sql: wrappedSql,
+      args: scoped.args,
+      timeoutMs,
+      maxAttempts: 1,
+    });
+    const rows = result.rows as Record<string, unknown>[];
+    return { rows, schema: inferSchema(rows) };
+  };
+  if (!options.cache) return compute();
+  return withFirstPartyCache(cacheKey, wrappedSql, compute, { timeoutMs });
 }

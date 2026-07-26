@@ -1,13 +1,12 @@
+import { useGuidedQuestionFlow } from "@agent-native/core/client/agent-chat";
+import { appBasePath } from "@agent-native/core/client/api-path";
 import {
   useCollaborativeDoc,
-  useSession,
   emailToColor,
   emailToName,
-  appBasePath,
-  callAction,
-  useGuidedQuestionFlow,
-  useT,
-} from "@agent-native/core/client";
+} from "@agent-native/core/client/collab";
+import { useSession, callAction } from "@agent-native/core/client/hooks";
+import { useT } from "@agent-native/core/client/i18n";
 import { useOrg } from "@agent-native/core/client/org";
 import type { PinpointProps } from "@agent-native/pinpoint/react";
 import {
@@ -35,6 +34,7 @@ import {
 } from "react";
 import type { ComponentType } from "react";
 import { useParams, useSearchParams, useNavigate } from "react-router";
+import { toast } from "sonner";
 
 import { SlideCommentsPanel } from "@/components/comments/SlideCommentsPanel";
 import { AnimationsPanel } from "@/components/editor/AnimationsPanel";
@@ -51,7 +51,6 @@ import { QuestionFlow } from "@/components/editor/QuestionFlow";
 import SlideEditor from "@/components/editor/SlideEditor";
 import { TweaksPanel } from "@/components/editor/TweaksPanel";
 import { Button } from "@/components/ui/button";
-import { ToastAction } from "@/components/ui/toast";
 import { useDecks } from "@/context/DeckContext";
 import { useAgentGenerating } from "@/hooks/use-agent-generating";
 import { useDeckDesignSystem } from "@/hooks/use-deck-design-system";
@@ -61,7 +60,6 @@ import {
   useSlideComments,
   type CommentThread,
 } from "@/hooks/use-slide-comments";
-import { toast } from "@/hooks/use-toast";
 import type { AspectRatio } from "@/lib/aspect-ratios";
 import { getPreset } from "@/lib/design-systems";
 import { exportDeckAsPdf } from "@/lib/export-pdf-client";
@@ -70,6 +68,7 @@ import {
   shouldClearNewDeckGeneratingState,
   shouldShowNewDeckGeneratingOverlay,
 } from "@/lib/generation-state";
+import { isMissingUploadProviderError } from "@/lib/image-drop-to-agent";
 import { imageFileLooksSupported } from "@/lib/slide-image-replacement";
 import { replaceImageTargetInSlideHtml } from "@/lib/slide-image-replacement";
 import { TAB_ID } from "@/lib/tab-id";
@@ -197,6 +196,7 @@ export default function DeckEditor() {
   const [tweaksOpen, setTweaksOpen] = useState(false);
   const [drawMode, setDrawMode] = useState(false);
   const [pinMode, setPinMode] = useState(false);
+  const [textBoxMode, setTextBoxMode] = useState(false);
   const [pendingComment, setPendingComment] = useState<{
     quotedText: string;
   } | null>(null);
@@ -323,19 +323,27 @@ export default function DeckEditor() {
     [deck, id, reorderSlides],
   );
 
-  const uploadImageAsset = useCallback(async (file: File): Promise<string> => {
-    const form = new FormData();
-    form.append("file", file);
-    const res = await fetch(`${appBasePath()}/api/assets/upload`, {
-      method: "POST",
-      body: form,
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok || !data?.url) {
-      throw new Error(data?.error || t("deckEditor.imageUploadFailed"));
-    }
-    return data.url as string;
-  }, []);
+  const uploadImageAsset = useCallback(
+    async (file: File): Promise<string> => {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`${appBasePath()}/api/assets/upload`, {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.url) {
+        const serverError =
+          typeof data?.error === "string" ? data.error : undefined;
+        if (isMissingUploadProviderError(res.status, serverError)) {
+          throw new Error(t("deckEditor.imageUploadNeedsBuilder"));
+        }
+        throw new Error(serverError || t("deckEditor.imageUploadFailed"));
+      }
+      return data.url as string;
+    },
+    [t],
+  );
 
   // Replace an image or placeholder in the current slide's HTML content.
   const replaceImageInSlide = useCallback(
@@ -387,18 +395,15 @@ export default function DeckEditor() {
         if (updatedContent !== targetSlide.content) {
           updateSlide(id, targetSlide.id, { content: updatedContent });
         }
-        toast({
-          title: t("deckEditor.imageAdded"),
+        toast.success(t("deckEditor.imageAdded"), {
           description: file.name,
         });
       } catch (error) {
-        toast({
-          title: t("deckEditor.imageUploadFailed"),
+        toast.error(t("deckEditor.imageUploadFailed"), {
           description:
             error instanceof Error
               ? error.message
               : t("deckEditor.imageUploadError"),
-          variant: "destructive",
         });
       }
     },
@@ -473,25 +478,14 @@ export default function DeckEditor() {
         );
       })();
       deleteSlide(deckId, slideId);
-      const t = toast({
-        title: `${slideTitle} deleted`,
+      toast(`${slideTitle} deleted`, {
         description: `Press ${shortcutLabel("cmd+z")} or click Undo to restore.`,
-        action: (
-          <ToastAction
-            altText="Undo delete"
-            data-undo-button
-            onClick={() => {
-              undo();
-              t.dismiss();
-            }}
-          >
-            Undo
-          </ToastAction>
-        ),
+        duration: 6000,
+        action: {
+          label: "Undo",
+          onClick: () => undo(),
+        },
       });
-      // Auto-dismiss after 6 seconds (shadcn toast's TOAST_REMOVE_DELAY is
-      // intentionally enormous, so we trigger it manually).
-      setTimeout(() => t.dismiss(), 6000);
     },
     [deck, deleteSlide, undo],
   );
@@ -823,6 +817,8 @@ export default function DeckEditor() {
         onToggleDrawMode={() => setDrawMode((v) => !v)}
         pinMode={pinMode}
         onTogglePinMode={() => setPinMode((v) => !v)}
+        textBoxMode={textBoxMode}
+        onToggleTextBoxMode={() => setTextBoxMode((v) => !v)}
         onDuplicateDeck={() => {
           const newId = `deck-${nanoid()}`;
           const optimistic = duplicateDeck(id, newId);
@@ -832,23 +828,19 @@ export default function DeckEditor() {
           try {
             const slideIds = deck.slides.map((s) => s.id);
             if (slideIds.length === 0) {
-              toast({
-                title: t("deckEditor.exportFailed"),
+              toast.error(t("deckEditor.exportFailed"), {
                 description: t("deckEditor.deckHasNoSlides"),
-                variant: "destructive",
               });
               return;
             }
             await exportDeckAsPdf(deck.title, slideIds, deck.aspectRatio);
           } catch (err) {
             console.error("[pdf-export] failed:", err);
-            toast({
-              title: t("deckEditor.exportFailed"),
+            toast.error(t("deckEditor.exportFailed"), {
               description:
                 err instanceof Error
                   ? err.message
                   : t("deckEditor.pdfRenderFailed"),
-              variant: "destructive",
             });
           }
         }}
@@ -885,7 +877,7 @@ export default function DeckEditor() {
               className="md:hidden fixed inset-0 bg-black/50 z-30"
               onClick={() => setSidebarOpen(false)}
             />
-            <div className="absolute z-40 h-full min-h-0 md:relative">
+            <div className="absolute z-[70] h-full min-h-0 md:relative">
               <DndContext
                 sensors={sensors}
                 collisionDetection={closestCenter}
@@ -1003,6 +995,8 @@ export default function DeckEditor() {
               onExitDrawMode={() => setDrawMode(false)}
               pinMode={pinMode}
               onExitPinMode={() => setPinMode(false)}
+              textBoxMode={textBoxMode}
+              onExitTextBoxMode={() => setTextBoxMode(false)}
               slideId={currentSlide.id}
               slideTitle={(() => {
                 const m = currentSlide.content?.match(

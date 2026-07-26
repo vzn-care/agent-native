@@ -106,6 +106,29 @@ function singleToolEngine(
   };
 }
 
+function finalTextEngine(text: string): AgentEngine {
+  return {
+    name: "test",
+    label: "Test",
+    defaultModel: "test-model",
+    supportedModels: ["test-model"],
+    capabilities: {
+      thinking: false,
+      promptCaching: false,
+      vision: false,
+      computerUse: false,
+      parallelToolCalls: false,
+    },
+    async *stream(): AsyncIterable<EngineEvent> {
+      yield {
+        type: "assistant-content",
+        parts: [{ type: "text" as const, text }],
+      };
+      yield { type: "stop", reason: "end_turn" };
+    },
+  };
+}
+
 /** A prior-chunk ledger where `send-email {to: x}` started AND completed. */
 function completedLedger(
   tool: string,
@@ -124,6 +147,50 @@ beforeEach(() => {
 });
 
 describe("tool-call journal hard-block", () => {
+  it("includes prior continuation tool results in final-response guards", async () => {
+    currentTurnEventsMock.mockResolvedValue(
+      completedLedger(
+        "bigquery",
+        { sql: "select count(*)" },
+        '{"rows":[{"count":3}]}',
+      ),
+    );
+    const guard = vi.fn(() => null);
+
+    await runAgentLoop({
+      engine: finalTextEngine("The count is 3."),
+      model: "test-model",
+      systemPrompt: "system",
+      tools: [],
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Continue the analysis." }],
+        },
+      ],
+      actions: {},
+      send: () => {},
+      signal: new AbortController().signal,
+      threadId: "thread-continuation-guard",
+      finalResponseGuard: guard,
+    });
+
+    expect(guard).toHaveBeenCalledOnce();
+    expect(guard.mock.calls[0]?.[0].toolCalls).toEqual([
+      {
+        name: "bigquery",
+        input: { sql: "select count(*)" },
+      },
+    ]);
+    expect(guard.mock.calls[0]?.[0].toolResults).toEqual([
+      {
+        name: "bigquery",
+        content: '{"rows":[{"count":3}]}',
+        isError: false,
+      },
+    ]);
+  });
+
   it("does NOT re-execute a journaled-complete write call on resume", async () => {
     const PRIOR_RESULT = "email-sent-id-42";
     currentTurnEventsMock.mockResolvedValue(
@@ -156,6 +223,7 @@ describe("tool-call journal hard-block", () => {
     const toolDone = events.find((e: any) => e.type === "tool_done");
     expect(toolDone?.result).toContain(PRIOR_RESULT);
     expect(toolDone?.result).toContain("Already completed");
+    expect(toolDone?.completedSideEffect).toBe(true);
   });
 
   it("executes a fresh call normally when the journal is empty", async () => {
@@ -237,10 +305,76 @@ describe("tool-call journal hard-block", () => {
     expect(action.run).toHaveBeenCalledOnce();
   });
 
-  it("never short-circuits a read-only tool via the journal", async () => {
+  it("serves a read-only tool's journaled result from the prior chunk instead of re-executing it", async () => {
+    const fullResult = "x".repeat(50_000);
     currentTurnEventsMock.mockResolvedValue(
-      completedLedger("get-data", { id: "1" }, "old-read"),
+      completedLedger("get-data", { id: "1" }, fullResult),
     );
+
+    const readAction: ActionEntry = {
+      tool: {
+        description: "A read action",
+        parameters: { type: "object", properties: {} },
+      },
+      readOnly: true,
+      run: vi.fn(async () => "fresh-read"),
+    };
+
+    const events: any[] = [];
+    await runAgentLoop({
+      engine: singleToolEngine("get-data", { id: "1" }),
+      model: "test-model",
+      systemPrompt: "system",
+      tools: [],
+      messages: [{ role: "user", content: [{ type: "text", text: "read" }] }],
+      actions: { "get-data": readAction },
+      send: (event) => events.push(event),
+      signal: new AbortController().signal,
+      threadId: "thread-read",
+    });
+
+    expect(readAction.run).not.toHaveBeenCalled();
+    // The FULL journaled body is served, not the 400-char prompt summary that
+    // used to leave the model no choice but to re-run the read.
+    const done = events.find((event) => event.type === "tool_done");
+    expect(done.result).toContain(fullResult);
+  });
+
+  it("still re-executes a read-only tool that opted out with dedupe: false", async () => {
+    currentTurnEventsMock.mockResolvedValue(
+      completedLedger("poll-status", { id: "1" }, "stale-status"),
+    );
+
+    const pollAction: ActionEntry = {
+      tool: {
+        description: "A volatile read",
+        parameters: { type: "object", properties: {} },
+      },
+      readOnly: true,
+      dedupe: false,
+      run: vi.fn(async () => "fresh-status"),
+    };
+
+    await runAgentLoop({
+      engine: singleToolEngine("poll-status", { id: "1" }),
+      model: "test-model",
+      systemPrompt: "system",
+      tools: [],
+      messages: [{ role: "user", content: [{ type: "text", text: "poll" }] }],
+      actions: { "poll-status": pollAction },
+      send: () => {},
+      signal: new AbortController().signal,
+      threadId: "thread-poll",
+    });
+
+    expect(pollAction.run).toHaveBeenCalledOnce();
+  });
+
+  it("does not replay a journaled read that a later write in the same turn invalidated", async () => {
+    currentTurnEventsMock.mockResolvedValue([
+      ...completedLedger("get-data", { id: "1" }, "stale-read"),
+      ...completedLedger("save-thing", { id: "9" }, "saved"),
+    ]);
 
     const readAction: ActionEntry = {
       tool: {
@@ -257,13 +391,12 @@ describe("tool-call journal hard-block", () => {
       systemPrompt: "system",
       tools: [],
       messages: [{ role: "user", content: [{ type: "text", text: "read" }] }],
-      actions: { "get-data": readAction },
+      actions: { "get-data": readAction, "save-thing": makeWriteAction() },
       send: () => {},
       signal: new AbortController().signal,
-      threadId: "thread-read",
+      threadId: "thread-read-after-write",
     });
 
-    // Read-only tools are never hard-blocked by the journal; they run.
     expect(readAction.run).toHaveBeenCalledOnce();
   });
 });

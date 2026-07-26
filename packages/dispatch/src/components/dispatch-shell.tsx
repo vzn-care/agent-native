@@ -1,13 +1,9 @@
-import { useT } from "@agent-native/core/client";
+import { useT } from "@agent-native/core/client/i18n";
 import { IconInfoCircle } from "@tabler/icons-react";
 import { type ReactNode } from "react";
 
-import { useSetPageTitle } from "@/components/layout/HeaderActions";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+import { useSetPageTitle } from "./layout/HeaderActions";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
 /**
  * DispatchShell renders the per-page title (with an optional click-to-open

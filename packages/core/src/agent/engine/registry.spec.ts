@@ -11,6 +11,20 @@ function providerFailureFingerprint(key: string, value: string): string {
     .slice(0, 24);
 }
 
+function readAppSecretsFromSingles(
+  readAppSecret: (input: any) => Promise<any>,
+) {
+  return async ({ keys, scope, scopeId }: any) => {
+    const entries = await Promise.all(
+      keys.map(async (key: string) => {
+        const secret = await readAppSecret({ key, scope, scopeId });
+        return secret ? ([key, secret] as const) : null;
+      }),
+    );
+    return new Map(entries.filter((entry) => entry !== null));
+  };
+}
+
 // Registry uses a module-level Map — reset between tests by re-importing
 // with a fresh module via vi.resetModules().
 describe("AgentEngine registry", () => {
@@ -359,15 +373,39 @@ describe("AgentEngine registry", () => {
   });
 
   describe("normalizeModelForEngine", () => {
-    it("falls back unsupported Builder models to gateway auto", async () => {
+    it("upgrades unsupported Builder models to the latest supported version match", async () => {
       const { normalizeModelForEngine } = await import("./registry.js");
       const engine = {
         name: "builder",
         defaultModel: "claude-sonnet-5",
-        supportedModels: ["auto", "claude-sonnet-5"],
+        supportedModels: [
+          "auto",
+          "claude-opus-4-8",
+          "claude-sonnet-5",
+          "gpt-5-5",
+        ],
       } as any;
 
-      expect(normalizeModelForEngine(engine, "claude-opus-4-8")).toBe("auto");
+      expect(normalizeModelForEngine(engine, "claude-opus-4-7")).toBe(
+        "claude-opus-4-8",
+      );
+      expect(normalizeModelForEngine(engine, "gpt-5-4")).toBe("gpt-5-5");
+    });
+
+    it("falls back unsupported models to the engine default when no version match exists", async () => {
+      const { normalizeModelForEngine } = await import("./registry.js");
+      const engine = {
+        name: "builder",
+        defaultModel: "claude-sonnet-5",
+        supportedModels: ["auto", "claude-opus-4-8", "claude-sonnet-5"],
+      } as any;
+
+      expect(normalizeModelForEngine(engine, "totally-removed-model")).toBe(
+        "claude-sonnet-5",
+      );
+      expect(normalizeModelForEngine(engine, "gemini-3-1-flash-lite")).toBe(
+        "claude-sonnet-5",
+      );
     });
 
     it("keeps supported Builder models and missing values deterministic", async () => {
@@ -385,17 +423,106 @@ describe("AgentEngine registry", () => {
       expect(normalizeModelForEngine(engine, " ")).toBe("claude-sonnet-5");
     });
 
-    it("keeps custom model strings for non-Builder engines", async () => {
+    it("normalizes removed non-Builder models when the engine declares supported models", async () => {
       const { normalizeModelForEngine } = await import("./registry.js");
       const engine = {
         name: "ai-sdk:openrouter",
         defaultModel: "openai/gpt-5.5",
-        supportedModels: ["openai/gpt-5.5"],
+        supportedModels: [
+          "anthropic/claude-opus-4.8",
+          "openai/gpt-5.5",
+          "z-ai/glm-5.2",
+        ],
+      } as any;
+
+      expect(normalizeModelForEngine(engine, "anthropic/claude-opus-4.7")).toBe(
+        "anthropic/claude-opus-4.8",
+      );
+      expect(normalizeModelForEngine(engine, "custom/provider-model")).toBe(
+        "openai/gpt-5.5",
+      );
+    });
+
+    it("keeps custom model strings for engines without a supported model list", async () => {
+      const { normalizeModelForEngine } = await import("./registry.js");
+      const engine = {
+        name: "custom",
+        defaultModel: "default-model",
+        supportedModels: [],
       } as any;
 
       expect(normalizeModelForEngine(engine, "custom/provider-model")).toBe(
         "custom/provider-model",
       );
+    });
+
+    it("keeps provider model ids for endpoint-backed OpenAI engines", async () => {
+      const { normalizeModelForEngine } = await import("./registry.js");
+      const engine = {
+        name: "ai-sdk:openai",
+        defaultModel: "gpt-5.5",
+        supportedModels: ["gpt-5.5"],
+        preserveCustomModels: true,
+      } as any;
+
+      expect(normalizeModelForEngine(engine, "deepseek-chat")).toBe(
+        "deepseek-chat",
+      );
+      expect(normalizeModelForEngine(engine, "moonshot-v1-8k")).toBe(
+        "moonshot-v1-8k",
+      );
+    });
+
+    it("falls back an unrecognized first-party OpenAI model to the default without a gateway", async () => {
+      const { normalizeModelForEngine } = await import("./registry.js");
+      const engine = {
+        name: "ai-sdk:openai",
+        defaultModel: "gpt-5.6-sol",
+        supportedModels: ["gpt-5.5", "gpt-5.6-sol"],
+      } as any;
+
+      // No `preserveCustomModels` flag and no gateway option: an unknown id is
+      // not a valid first-party OpenAI model, so it must normalize to a
+      // supported model rather than being persisted/sent to OpenAI verbatim.
+      expect(normalizeModelForEngine(engine, "gemma4")).toBe("gpt-5.6-sol");
+    });
+
+    it("preserves an unrecognized OpenAI model when the gateway capability is passed", async () => {
+      const { normalizeModelForEngine } = await import("./registry.js");
+      const engine = {
+        name: "ai-sdk:openai",
+        defaultModel: "gpt-5.6-sol",
+        supportedModels: ["gpt-5.5", "gpt-5.6-sol"],
+      } as any;
+
+      // An OpenAI-compatible gateway (Ollama/LiteLLM) serves ids outside the
+      // built-in catalog; the settings actions resolve that capability and pass
+      // it here so the id survives save/read.
+      expect(
+        normalizeModelForEngine(engine, "gemma4", {
+          preserveCustomModels: true,
+        }),
+      ).toBe("gemma4");
+    });
+
+    it("does not version-rewrite a gateway model that shares a catalog family", async () => {
+      const { normalizeModelForEngine } = await import("./registry.js");
+      const engine = {
+        name: "ai-sdk:openai",
+        defaultModel: "gpt-5.6-sol",
+        supportedModels: ["gpt-5.5", "gpt-5.6-sol"],
+      } as any;
+
+      // Without the capability a version-shaped id is upgraded to the newest
+      // same-family match (correct for first-party OpenAI)...
+      expect(normalizeModelForEngine(engine, "gpt-5.4")).toBe("gpt-5.5");
+      // ...but with the gateway capability the exact id is preserved, proving
+      // the version match never fires before preservation.
+      expect(
+        normalizeModelForEngine(engine, "gpt-5.4", {
+          preserveCustomModels: true,
+        }),
+      ).toBe("gpt-5.4");
     });
   });
 
@@ -546,8 +673,11 @@ describe("AgentEngine registry", () => {
       }),
     }));
 
-    const { registerAgentEngine, resolveEngine } =
-      await import("./registry.js");
+    const {
+      getConfiguredEngineNameForRequest,
+      registerAgentEngine,
+      resolveEngine,
+    } = await import("./registry.js");
 
     const appEngine = { name: "app-engine", stream: vi.fn() } as any;
     const globalEngine = { name: "global-engine", stream: vi.fn() } as any;
@@ -587,6 +717,9 @@ describe("AgentEngine registry", () => {
 
     const resolved = await resolveEngine({ appId: "analytics" });
 
+    await expect(
+      getConfiguredEngineNameForRequest({ appId: "analytics" }),
+    ).resolves.toBe("app-engine");
     expect(appCreate).toHaveBeenCalled();
     expect(globalCreate).not.toHaveBeenCalled();
     expect(resolved).toBe(appEngine);
@@ -703,21 +836,54 @@ describe("AgentEngine registry", () => {
       expect(await detectEngineFromUserSecrets()).toBeNull();
     });
 
+    it("surfaces an unreadable credential store instead of reporting no engine", async () => {
+      vi.doMock("../../server/request-context.js", () => ({
+        getRequestUserEmail: () => "tim@example.com",
+        getRequestOrgId: () => "builder_org",
+      }));
+      const readAppSecret = vi.fn(async () => {
+        throw new Error("db query timed out after 12000ms");
+      });
+      vi.doMock("../../secrets/storage.js", () => ({
+        readAppSecret,
+        readAppSecrets: readAppSecret,
+      }));
+
+      const { registerAgentEngine, detectEngineFromUserSecrets } =
+        await import("./registry.js");
+      registerAgentEngine({
+        name: "anthropic",
+        label: "Anthropic",
+        description: "",
+        capabilities: {} as any,
+        defaultModel: "m",
+        supportedModels: [],
+        requiredEnvVars: ["ANTHROPIC_API_KEY"],
+        create: vi.fn() as any,
+      });
+
+      await expect(detectEngineFromUserSecrets()).rejects.toThrow(
+        /could not read/i,
+      );
+    });
+
     it("picks the Builder engine when the user has Builder keys in app_secrets", async () => {
       vi.doMock("../../server/request-context.js", () => ({
         getRequestUserEmail: () => "brent@example.com",
         getRequestOrgId: () => undefined,
       }));
+      const readAppSecret = vi.fn(async ({ key }: { key: string }) => {
+        if (key === "BUILDER_PRIVATE_KEY") {
+          return { key, value: "p-key-from-app-secrets" };
+        }
+        if (key === "BUILDER_PUBLIC_KEY") {
+          return { key, value: "space-from-app-secrets" };
+        }
+        return null;
+      });
       vi.doMock("../../secrets/storage.js", () => ({
-        readAppSecret: vi.fn(async ({ key }: { key: string }) => {
-          if (key === "BUILDER_PRIVATE_KEY") {
-            return { key, value: "p-key-from-app-secrets" };
-          }
-          if (key === "BUILDER_PUBLIC_KEY") {
-            return { key, value: "space-from-app-secrets" };
-          }
-          return null;
-        }),
+        readAppSecret,
+        readAppSecrets: readAppSecretsFromSingles(readAppSecret),
       }));
 
       const { registerAgentEngine, detectEngineFromUserSecrets } =
@@ -765,7 +931,10 @@ describe("AgentEngine registry", () => {
               }
             : null,
       );
-      vi.doMock("../../secrets/storage.js", () => ({ readAppSecret }));
+      vi.doMock("../../secrets/storage.js", () => ({
+        readAppSecret,
+        readAppSecrets: readAppSecretsFromSingles(readAppSecret),
+      }));
 
       const { registerAgentEngine, detectEngineFromUserSecrets } =
         await import("./registry.js");
@@ -840,7 +1009,10 @@ describe("AgentEngine registry", () => {
           return null;
         },
       );
-      vi.doMock("../../secrets/storage.js", () => ({ readAppSecret }));
+      vi.doMock("../../secrets/storage.js", () => ({
+        readAppSecret,
+        readAppSecrets: readAppSecretsFromSingles(readAppSecret),
+      }));
 
       const { registerAgentEngine, detectEngineFromUserSecrets } =
         await import("./registry.js");
@@ -875,16 +1047,18 @@ describe("AgentEngine registry", () => {
         getRequestUserEmail: () => "brent@example.com",
         getRequestOrgId: () => undefined,
       }));
+      const readAppSecret = vi.fn(async ({ key }: { key: string }) => {
+        if (key === "BUILDER_PRIVATE_KEY") {
+          return { key, value: "p-key-from-app-secrets" };
+        }
+        if (key === "BUILDER_PUBLIC_KEY") {
+          return { key, value: "space-from-app-secrets" };
+        }
+        return null;
+      });
       vi.doMock("../../secrets/storage.js", () => ({
-        readAppSecret: vi.fn(async ({ key }: { key: string }) => {
-          if (key === "BUILDER_PRIVATE_KEY") {
-            return { key, value: "p-key-from-app-secrets" };
-          }
-          if (key === "BUILDER_PUBLIC_KEY") {
-            return { key, value: "space-from-app-secrets" };
-          }
-          return null;
-        }),
+        readAppSecret,
+        readAppSecrets: readAppSecretsFromSingles(readAppSecret),
       }));
 
       const { registerAgentEngine, resolveEngine } =
@@ -933,8 +1107,8 @@ describe("AgentEngine registry", () => {
         getRequestUserEmail: () => "member@example.com",
         getRequestOrgId: () => "builder_org",
       }));
-      vi.doMock("../../secrets/storage.js", () => ({
-        readAppSecret: vi.fn(
+      vi.doMock("../../secrets/storage.js", () => {
+        const readAppSecret = vi.fn(
           async ({
             key,
             scope,
@@ -950,8 +1124,12 @@ describe("AgentEngine registry", () => {
             }
             return null;
           },
-        ),
-      }));
+        );
+        return {
+          readAppSecret,
+          readAppSecrets: readAppSecretsFromSingles(readAppSecret),
+        };
+      });
 
       const { registerAgentEngine, resolveEngine } =
         await import("./registry.js");
@@ -1002,8 +1180,8 @@ describe("AgentEngine registry", () => {
         getRequestUserEmail: () => "steve@example.com",
         getRequestOrgId: () => undefined,
       }));
-      vi.doMock("../../secrets/storage.js", () => ({
-        readAppSecret: vi.fn(async ({ key }: { key: string }) => {
+      vi.doMock("../../secrets/storage.js", () => {
+        const readAppSecret = vi.fn(async ({ key }: { key: string }) => {
           if (key === "BUILDER_PRIVATE_KEY") {
             return { key, value: "p-key-from-app-secrets" };
           }
@@ -1011,8 +1189,12 @@ describe("AgentEngine registry", () => {
             return { key, value: "space-from-app-secrets" };
           }
           return null;
-        }),
-      }));
+        });
+        return {
+          readAppSecret,
+          readAppSecrets: readAppSecretsFromSingles(readAppSecret),
+        };
+      });
 
       const { registerAgentEngine, resolveEngine } =
         await import("./registry.js");
@@ -1089,19 +1271,21 @@ describe("AgentEngine registry", () => {
         getRequestUserEmail: () => "steve@example.com",
         getRequestOrgId: () => undefined,
       }));
+      const readAppSecret = vi.fn(async ({ key }: { key: string }) => {
+        if (key === "OPENAI_API_KEY") {
+          return { key, value: badOpenAiKey };
+        }
+        if (key === "BUILDER_PRIVATE_KEY") {
+          return { key, value: "p-key-from-app-secrets" };
+        }
+        if (key === "BUILDER_PUBLIC_KEY") {
+          return { key, value: "space-from-app-secrets" };
+        }
+        return null;
+      });
       vi.doMock("../../secrets/storage.js", () => ({
-        readAppSecret: vi.fn(async ({ key }: { key: string }) => {
-          if (key === "OPENAI_API_KEY") {
-            return { key, value: badOpenAiKey };
-          }
-          if (key === "BUILDER_PRIVATE_KEY") {
-            return { key, value: "p-key-from-app-secrets" };
-          }
-          if (key === "BUILDER_PUBLIC_KEY") {
-            return { key, value: "space-from-app-secrets" };
-          }
-          return null;
-        }),
+        readAppSecret,
+        readAppSecrets: readAppSecretsFromSingles(readAppSecret),
       }));
 
       const { registerAgentEngine, resolveEngine } =
@@ -1163,19 +1347,21 @@ describe("AgentEngine registry", () => {
         getRequestUserEmail: () => "steve@example.com",
         getRequestOrgId: () => undefined,
       }));
+      const readAppSecret = vi.fn(async ({ key }: { key: string }) => {
+        if (key === "OPENAI_API_KEY") {
+          return { key, value: badOpenAiKey };
+        }
+        if (key === "BUILDER_PRIVATE_KEY") {
+          return { key, value: "p-key-from-app-secrets" };
+        }
+        if (key === "BUILDER_PUBLIC_KEY") {
+          return { key, value: "space-from-app-secrets" };
+        }
+        return null;
+      });
       vi.doMock("../../secrets/storage.js", () => ({
-        readAppSecret: vi.fn(async ({ key }: { key: string }) => {
-          if (key === "OPENAI_API_KEY") {
-            return { key, value: badOpenAiKey };
-          }
-          if (key === "BUILDER_PRIVATE_KEY") {
-            return { key, value: "p-key-from-app-secrets" };
-          }
-          if (key === "BUILDER_PUBLIC_KEY") {
-            return { key, value: "space-from-app-secrets" };
-          }
-          return null;
-        }),
+        readAppSecret,
+        readAppSecrets: readAppSecretsFromSingles(readAppSecret),
       }));
 
       const { registerAgentEngine, detectEngineFromUserSecrets } =
@@ -1217,13 +1403,17 @@ describe("AgentEngine registry", () => {
         getRequestUserEmail: () => "steve@example.com",
         getRequestOrgId: () => undefined,
       }));
-      vi.doMock("../../secrets/storage.js", () => ({
-        readAppSecret: vi.fn(async ({ key }: { key: string }) =>
+      vi.doMock("../../secrets/storage.js", () => {
+        const readAppSecret = vi.fn(async ({ key }: { key: string }) =>
           key === "GOOGLE_GENERATIVE_AI_API_KEY"
             ? { key, value: "google-user-key" }
             : null,
-        ),
-      }));
+        );
+        return {
+          readAppSecret,
+          readAppSecrets: readAppSecretsFromSingles(readAppSecret),
+        };
+      });
 
       const { registerAgentEngine, resolveEngine } =
         await import("./registry.js");
@@ -1290,14 +1480,18 @@ describe("AgentEngine registry", () => {
         getRequestUserEmail: () => "steve@example.com",
         getRequestOrgId: () => undefined,
       }));
-      vi.doMock("../../secrets/storage.js", () => ({
-        readAppSecret: vi.fn(async ({ key }: { key: string }) => {
+      vi.doMock("../../secrets/storage.js", () => {
+        const readAppSecret = vi.fn(async ({ key }: { key: string }) => {
           if (key === "OPENAI_BASE_URL") {
             return { key, value: "https://gateway.example/v1///" };
           }
           return null;
-        }),
-      }));
+        });
+        return {
+          readAppSecret,
+          readAppSecrets: readAppSecretsFromSingles(readAppSecret),
+        };
+      });
 
       const { registerAgentEngine, resolveEngine } =
         await import("./registry.js");
@@ -1331,14 +1525,18 @@ describe("AgentEngine registry", () => {
         getRequestUserEmail: () => "steve@example.com",
         getRequestOrgId: () => undefined,
       }));
-      vi.doMock("../../secrets/storage.js", () => ({
-        readAppSecret: vi.fn(async ({ key }: { key: string }) => {
+      vi.doMock("../../secrets/storage.js", () => {
+        const readAppSecret = vi.fn(async ({ key }: { key: string }) => {
           if (key === "OPENAI_BASE_URL") {
             return { key, value: "https://gateway.example/v1" };
           }
           return null;
-        }),
-      }));
+        });
+        return {
+          readAppSecret,
+          readAppSecrets: readAppSecretsFromSingles(readAppSecret),
+        };
+      });
 
       const { registerAgentEngine, resolveEngine } =
         await import("./registry.js");
@@ -1376,9 +1574,13 @@ describe("AgentEngine registry", () => {
         getRequestUserEmail: () => "new@example.com",
         getRequestOrgId: () => "org-1",
       }));
-      vi.doMock("../../secrets/storage.js", () => ({
-        readAppSecret: vi.fn().mockResolvedValue(null),
-      }));
+      vi.doMock("../../secrets/storage.js", () => {
+        const readAppSecret = vi.fn().mockResolvedValue(null);
+        return {
+          readAppSecret,
+          readAppSecrets: readAppSecretsFromSingles(readAppSecret),
+        };
+      });
       vi.doMock("../../db/client.js", () => ({
         isLocalDatabase: () => false,
       }));
@@ -1487,16 +1689,18 @@ describe("AgentEngine registry", () => {
         getRequestUserEmail: () => "new@example.com",
         getRequestOrgId: () => "org-1",
       }));
+      const readAppSecret = vi.fn(async ({ key }: { key: string }) => {
+        if (key === "BUILDER_PRIVATE_KEY") {
+          return { key, value: "p-key-from-app-secrets" };
+        }
+        if (key === "BUILDER_PUBLIC_KEY") {
+          return { key, value: "space-from-app-secrets" };
+        }
+        return null;
+      });
       vi.doMock("../../secrets/storage.js", () => ({
-        readAppSecret: vi.fn(async ({ key }: { key: string }) => {
-          if (key === "BUILDER_PRIVATE_KEY") {
-            return { key, value: "p-key-from-app-secrets" };
-          }
-          if (key === "BUILDER_PUBLIC_KEY") {
-            return { key, value: "space-from-app-secrets" };
-          }
-          return null;
-        }),
+        readAppSecret,
+        readAppSecrets: readAppSecretsFromSingles(readAppSecret),
       }));
       vi.doMock("../../db/client.js", () => ({
         isLocalDatabase: () => false,

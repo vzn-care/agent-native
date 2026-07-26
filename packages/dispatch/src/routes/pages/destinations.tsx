@@ -1,12 +1,15 @@
 import {
   useActionMutation,
   useActionQuery,
-  useT,
-} from "@agent-native/core/client";
+} from "@agent-native/core/client/hooks";
+import { useT } from "@agent-native/core/client/i18n";
+import { IconChevronRight } from "@tabler/icons-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
-import { DispatchShell } from "@/components/dispatch-shell";
+import { ActionQueryError } from "../../components/action-query-error";
+import { DispatchShell } from "../../components/dispatch-shell";
+import { TaskQueueHealth } from "../../components/task-queue-health";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,17 +20,22 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+} from "../../components/ui/alert-dialog";
+import { Button } from "../../components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "../../components/ui/collapsible";
+import { Input } from "../../components/ui/input";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
+} from "../../components/ui/select";
+import { Textarea } from "../../components/ui/textarea";
 
 export function meta() {
   return [{ title: "Destinations — Dispatch" }];
@@ -77,7 +85,8 @@ function QuickSendRow({
 
 export default function DestinationsRoute() {
   const t = useT();
-  const { data } = useActionQuery("list-destinations", {});
+  const destinationsQuery = useActionQuery("list-destinations", {});
+  const { data } = destinationsQuery;
   const [form, setForm] = useState({
     name: "",
     platform: "slack",
@@ -85,6 +94,7 @@ export default function DestinationsRoute() {
     threadRef: "",
     notes: "",
   });
+  const [addOpen, setAddOpen] = useState(false);
 
   const upsert = useActionMutation("upsert-destination", {
     onSuccess: () => {
@@ -107,158 +117,192 @@ export default function DestinationsRoute() {
       title={t("dispatch.nav.destinations")}
       description={t("dispatch.pages.destinationsDescription")}
     >
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-        <section className="rounded-2xl border bg-card p-5">
+      <div className="flex flex-col gap-4">
+        <TaskQueueHealth />
+        <section className="rounded-2xl bg-card p-5">
           <h2 className="text-lg font-semibold text-foreground">
             {t("dispatch.pages.savedDestinations")}
           </h2>
-          <div className="mt-4 space-y-3">
-            {(data || []).map((destination: any) => (
-              <div
-                key={destination.id}
-                className="rounded-xl border bg-muted/30 p-4"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium text-foreground">
-                      {destination.name}
+          {destinationsQuery.isError ? (
+            <ActionQueryError
+              className="mt-4"
+              error={destinationsQuery.error}
+              onRetry={() => void destinationsQuery.refetch()}
+            />
+          ) : (
+            <div className="mt-4 divide-y">
+              {(data || []).map((destination: any) => (
+                <div key={destination.id} className="py-4 first:pt-0">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium text-foreground">
+                        {destination.name}
+                      </div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {destination.platform} · {destination.destination}
+                        {destination.threadRef
+                          ? ` · thread ${destination.threadRef}`
+                          : ""}
+                      </div>
+                      {destination.notes && (
+                        <p className="mt-2 text-sm text-muted-foreground">
+                          {destination.notes}
+                        </p>
+                      )}
                     </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {destination.platform} · {destination.destination}
-                      {destination.threadRef
-                        ? ` · thread ${destination.threadRef}`
-                        : ""}
-                    </div>
-                    {destination.notes && (
-                      <p className="mt-2 text-sm text-muted-foreground">
-                        {destination.notes}
-                      </p>
-                    )}
-                  </div>
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button variant="outline" size="sm">
-                        {t("dispatch.pages.delete")}
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>
-                          {t("dispatch.pages.deleteDestinationTitle")}
-                        </AlertDialogTitle>
-                        <AlertDialogDescription>
-                          {t("dispatch.pages.deleteDestinationDescription", {
-                            name: destination.name,
-                          })}
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>
-                          {t("dispatch.pages.cancel")}
-                        </AlertDialogCancel>
-                        <AlertDialogAction
-                          onClick={() => remove.mutate({ id: destination.id })}
-                        >
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button variant="outline" size="sm">
                           {t("dispatch.pages.delete")}
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>
+                            {t("dispatch.pages.deleteDestinationTitle")}
+                          </AlertDialogTitle>
+                          <AlertDialogDescription>
+                            {t("dispatch.pages.deleteDestinationDescription", {
+                              name: destination.name,
+                            })}
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>
+                            {t("dispatch.pages.cancel")}
+                          </AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() =>
+                              remove.mutate({ id: destination.id })
+                            }
+                          >
+                            {t("dispatch.pages.delete")}
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </div>
+                  <Collapsible className="mt-3">
+                    <CollapsibleTrigger className="group flex w-full cursor-pointer items-center gap-1.5 text-left text-xs font-medium text-muted-foreground hover:text-foreground">
+                      <IconChevronRight className="h-3.5 w-3.5 transition-transform group-data-[state=open]:rotate-90" />
+                      <span>Send a test message</span>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <QuickSendRow destination={destination} />
+                    </CollapsibleContent>
+                  </Collapsible>
                 </div>
-                <QuickSendRow destination={destination} />
-              </div>
-            ))}
-            {(data?.length || 0) === 0 && (
-              <div className="rounded-xl border border-dashed px-4 py-8 text-sm text-muted-foreground">
-                {t("dispatch.pages.noDestinations")}
-              </div>
-            )}
-          </div>
+              ))}
+              {(data?.length || 0) === 0 && (
+                <div className="rounded-xl border border-dashed px-4 py-8 text-sm text-muted-foreground">
+                  {t("dispatch.pages.noDestinations")}
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
-        <section className="rounded-2xl border bg-card p-5">
-          <h2 className="text-lg font-semibold text-foreground">
-            {t("dispatch.pages.addDestination")}
-          </h2>
-          <div className="mt-4 space-y-3">
-            <Input
-              value={form.name}
-              onChange={(event) =>
-                setForm((current) => ({ ...current, name: event.target.value }))
-              }
-              placeholder={t("dispatch.pages.dailyDigestChannel")}
-            />
-            <Select
-              value={form.platform}
-              onValueChange={(value) =>
-                setForm((current) => ({
-                  ...current,
-                  platform: value,
-                }))
-              }
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="slack">Slack</SelectItem>
-                <SelectItem value="telegram">Telegram</SelectItem>
-                <SelectItem value="email">Email</SelectItem>
-              </SelectContent>
-            </Select>
-            <Input
-              value={form.destination}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  destination: event.target.value,
-                }))
-              }
-              placeholder={
-                form.platform === "slack"
-                  ? "C0123456789"
-                  : form.platform === "email"
-                    ? "teammate+qa@agent-native.test"
-                    : "123456789"
-              }
-            />
-            <Input
-              value={form.threadRef}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  threadRef: event.target.value,
-                }))
-              }
-              placeholder={t("dispatch.pages.optionalThreadOrTopicId")}
-            />
-            <Textarea
-              value={form.notes}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  notes: event.target.value,
-                }))
-              }
-              placeholder={t("dispatch.pages.destinationNotes")}
-            />
-            <Button
-              className="w-full"
-              onClick={() =>
-                upsert.mutate({
-                  name: form.name,
-                  platform: form.platform as "slack" | "telegram" | "email",
-                  destination: form.destination,
-                  threadRef: form.threadRef || undefined,
-                  notes: form.notes || undefined,
-                })
-              }
-              disabled={!form.name || !form.destination}
-            >
-              {t("dispatch.pages.saveDestination")}
-            </Button>
-          </div>
-        </section>
+        <Collapsible
+          open={addOpen}
+          onOpenChange={setAddOpen}
+          className="rounded-2xl bg-card"
+        >
+          <CollapsibleTrigger className="group flex w-full cursor-pointer items-center justify-between gap-3 p-5 text-left hover:bg-muted/20">
+            <span>
+              <span className="block text-lg font-semibold text-foreground">
+                {t("dispatch.pages.addDestination")}
+              </span>
+              <span className="mt-1 block text-sm text-muted-foreground">
+                Save a reusable delivery target for scheduled or agent-sent
+                messages.
+              </span>
+            </span>
+            <IconChevronRight className="h-5 w-5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
+          </CollapsibleTrigger>
+          <CollapsibleContent className="border-t px-5 pb-5 pt-4">
+            <div className="space-y-3">
+              <Input
+                value={form.name}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    name: event.target.value,
+                  }))
+                }
+                placeholder={t("dispatch.pages.dailyDigestChannel")}
+              />
+              <Select
+                value={form.platform}
+                onValueChange={(value) =>
+                  setForm((current) => ({
+                    ...current,
+                    platform: value,
+                  }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="slack">Slack</SelectItem>
+                  <SelectItem value="telegram">Telegram</SelectItem>
+                  <SelectItem value="email">Email</SelectItem>
+                </SelectContent>
+              </Select>
+              <Input
+                value={form.destination}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    destination: event.target.value,
+                  }))
+                }
+                placeholder={
+                  form.platform === "slack"
+                    ? "C0123456789"
+                    : form.platform === "email"
+                      ? "teammate+qa@agent-native.test"
+                      : "123456789"
+                }
+              />
+              <Input
+                value={form.threadRef}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    threadRef: event.target.value,
+                  }))
+                }
+                placeholder={t("dispatch.pages.optionalThreadOrTopicId")}
+              />
+              <Textarea
+                value={form.notes}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    notes: event.target.value,
+                  }))
+                }
+                placeholder={t("dispatch.pages.destinationNotes")}
+              />
+              <Button
+                className="w-full"
+                onClick={() =>
+                  upsert.mutate({
+                    name: form.name,
+                    platform: form.platform as "slack" | "telegram" | "email",
+                    destination: form.destination,
+                    threadRef: form.threadRef || undefined,
+                    notes: form.notes || undefined,
+                  })
+                }
+                disabled={!form.name || !form.destination}
+              >
+                {t("dispatch.pages.saveDestination")}
+              </Button>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
       </div>
     </DispatchShell>
   );

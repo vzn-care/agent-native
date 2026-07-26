@@ -1,4 +1,7 @@
+import { creativeContextMessagesByLocale } from "@agent-native/creative-context/messages";
+
 const messages = {
+  creativeContext: creativeContextMessagesByLocale["zh-CN"],
   root: {
     commandPresentations: "演示文稿",
     searchDecks: "搜索幻灯片",
@@ -32,10 +35,9 @@ const messages = {
     workspaceDescription: "管理团队成员、组织访问权限和共享工作区偏好。",
     openTeamSettings: "打开团队设置",
     openResourceSettings: "打开资源设置",
-    agentTitle: "代理设置",
-    agentDescription:
-      "打开代理侧边栏设置，管理模型、API 密钥、自动化、语音和其他代理控制项。",
-    openAgentSettings: "打开代理设置",
+    agentTitle: "管理代理",
+    agentDescription: "管理代理的模型、API 密钥、自动化、语音和其他控制项。",
+    openAgentSettings: "管理代理",
   },
   agent: {
     emptyState: "可以询问我任何关于演示文稿的问题",
@@ -90,6 +92,8 @@ const messages = {
     googlePickerNeedsKeys:
       "Google PickerにはGOOGLE_PICKER_API_KEYとGOOGLE_PICKER_APP_IDが必要です。",
     imageUploadFailed: "画像のアップロードに失敗しました",
+    imageUploadNeedsBuilder:
+      "请从代理编写器的模型菜单连接 Builder.io，以便将图片上传到幻灯片。即使没有提供方，把图片拖到空白画布上仍可发送给代理。",
     sentToAgent: "エージェントに送信しました",
     imageUploadGenericError: "この画像のアップロード中に問題が発生しました。",
     uploading: "アップロード中…",
@@ -100,6 +104,7 @@ const messages = {
     searchImagesPlaceholder: "画像を検索...",
     searchForLogosImagesIcons: "ロゴ、画像、アイコンを検索...",
     search: "搜索",
+    searchFailed: "搜索失败",
     logoSearchTitle: "徽标搜索",
     searchCompanyLogo: "会社を検索してロゴを見つける",
     searchCompanyPlaceholder: "会社名を検索（例: Intuit）",
@@ -113,6 +118,7 @@ const messages = {
     uploadAttachedFailed: "添付ファイルをアップロードできませんでした。",
     uploadFailed: "アップロード失敗",
     doubleClickEdit: "テキストをダブルクリックして編集",
+    dragToMove: "拖动以移动",
     aiEditing: "AIが編集中",
     startTypingCommands: "入力を開始…または / でコマンド",
     pinDropHint: "任意の場所をクリックしてコメントピンを追加",
@@ -201,6 +207,7 @@ const messages = {
     elementAnimations: "元素动画",
     tweaks: "微调",
     drawOnSlide: "在幻灯片上绘制",
+    addTextBox: "添加文本框",
     pinComments: "固定评论",
     pinCommentsDescription:
       "点击幻灯片上的位置来排队多个编辑，然后一次性发送。",
@@ -323,6 +330,8 @@ const messages = {
     hideResolved: "隐藏已解决",
     showResolved: "显示 {{count}} 条已解决",
     noCommentsYet: "还没有评论",
+    loadFailed: "无法加载评论",
+    retry: "重试",
     clickToAddComment: "点击添加评论",
     selectSlideToAdd: "选择幻灯片以添加评论",
   },
@@ -465,6 +474,8 @@ const messages = {
     backToDecks: "返回幻灯片",
     tryAgain: "重试",
     imageUploadFailed: "图片上传失败",
+    imageUploadNeedsBuilder:
+      "请从代理编写器的模型菜单连接 Builder.io，以便将图片上传到幻灯片。即使没有提供方，把图片拖到空白画布上仍可发送给代理。",
     imageAdded: "图片已添加",
     imageUploadError: "上传此图片时出了点问题。",
     exportFailed: "导出失败",
@@ -527,6 +538,9 @@ const messages = {
     chooseAnotherFile: "选择其他文件",
   },
   home: {
+    loadFailed: "无法加载内容",
+    loadFailedDescription: "您保存的内容仍然可用。请检查连接并重试。",
+    retry: "重试",
     decksTitle: "幻灯片",
     newDeck: "新建幻灯片",
     deckLengthQuestion: "这份幻灯片需要多长？",

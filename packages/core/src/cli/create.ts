@@ -1,5 +1,6 @@
-import { execFileSync } from "child_process";
+import { execFile, execFileSync } from "child_process";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 
@@ -33,11 +34,18 @@ const REACT_ROUTER_BUILD_DEPENDENCIES = [
   "react-router",
   "vite",
 ] as const;
-const SENTRY_MINIMUM_RELEASE_AGE_EXCLUDES = ['"@sentry/*"'];
+const MINIMUM_RELEASE_AGE_EXCLUDES = [
+  '"@typescript/*"',
+  '"@sentry/*"',
+  "fast-xml-parser",
+  "typescript",
+  "typescript-7",
+];
 const FIRST_PARTY_TARBALL_SYMLINK_EXCLUDES = [
   "*/CLAUDE.md",
   "*/.claude/skills",
 ];
+const localPackageTarballs = new Map<string, string>();
 
 /**
  * Tagged error for input that fails CLI-level validation (repo names, app
@@ -194,18 +202,28 @@ export async function createApp(
 async function promptStartShape(
   clack: typeof import("@clack/prompts"),
 ): Promise<"template" | "chat" | "headless"> {
-  const choice = await clack.select({
+  const choice = await clack.select(startShapePromptOptions());
+  if (clack.isCancel(choice)) {
+    clack.cancel("Cancelled.");
+    process.exit(0);
+  }
+  return choice as "template" | "chat" | "headless";
+}
+
+function startShapePromptOptions() {
+  return {
     message: "How do you want to start?",
+    initialValue: "chat",
     options: [
-      {
-        value: "template",
-        label: "Full template(s)",
-        hint: "Clone complete apps (Mail, Calendar, Slides, ...) into a workspace",
-      },
       {
         value: "chat",
         label: "Chat",
         hint: "A single app with a minimal chat UI and the browser shell wired up",
+      },
+      {
+        value: "template",
+        label: "Full template(s)",
+        hint: "Clone complete apps (Mail, Calendar, Slides, ...) into a workspace",
       },
       {
         value: "headless",
@@ -213,12 +231,7 @@ async function promptStartShape(
         hint: "A single action-first app with one primitive and no UI shell",
       },
     ],
-  });
-  if (clack.isCancel(choice)) {
-    clack.cancel("Cancelled.");
-    process.exit(0);
-  }
-  return choice as "template" | "chat" | "headless";
+  };
 }
 
 /**
@@ -475,21 +488,7 @@ async function scaffoldWorkspaceRoot(
     }
   }
 
-  const localToolkit = localToolkitOverride();
-  if (localToolkit) {
-    const wsPath = path.join(targetDir, "pnpm-workspace.yaml");
-    const existing = fs.existsSync(wsPath)
-      ? fs.readFileSync(wsPath, "utf-8")
-      : "";
-    const updated = mergeWorkspaceYamlSections(existing, {
-      overrides: {
-        '"@agent-native/toolkit"': JSON.stringify(localToolkit),
-      },
-    });
-    if (updated !== existing) {
-      fs.writeFileSync(wsPath, updated);
-    }
-  }
+  applyLocalWorkspaceOverrides(targetDir);
 
   const corePackageDir = path.join(targetDir, "packages", "shared");
   fs.mkdirSync(path.join(targetDir, "packages"), { recursive: true });
@@ -574,6 +573,8 @@ export async function addAppToWorkspace(
     process.exit(1);
   }
 
+  applyLocalWorkspaceOverrides(workspace.workspaceRoot);
+
   clack.intro("Add an app to your workspace");
 
   const installed = listInstalledApps(workspace.workspaceRoot);
@@ -636,7 +637,7 @@ async function scaffoldOneAppIntoWorkspace(
   );
 
   try {
-    await scaffoldAppTemplate(appDir, templateName);
+    const resolution = await scaffoldAppTemplate(appDir, templateName);
     replacePlaceholders(
       appDir,
       appName,
@@ -654,7 +655,10 @@ async function scaffoldOneAppIntoWorkspace(
       dispatchDependencyVersion: getDispatchDependencyVersion(),
       toolkitDependencyVersion: getToolkitDependencyVersion(),
     });
-    fixPackageJsonName(appDir, appName, templateName);
+    fixPackageJsonName(appDir, appName, templateName, {
+      ...resolution,
+      shape: "workspace",
+    });
     fixWebManifestName(appDir, appName, templateName);
     rewriteNetlifyToml(appDir, appName, "workspace");
     renameGitignore(appDir);
@@ -735,9 +739,9 @@ async function createStandaloneApp(
       : `Downloading the ${template} template from GitHub...`,
   );
   try {
-    await scaffoldAppTemplate(targetDir, template);
+    const resolution = await scaffoldAppTemplate(targetDir, template);
     s.message(`Setting up ${name}…`);
-    postProcessStandalone(name, targetDir, template);
+    postProcessStandalone(name, targetDir, template, resolution);
     s.stop("App created!");
   } catch (err: any) {
     s.stop("Failed to create app.");
@@ -788,16 +792,28 @@ function cleanupOnFailure(targetDir: string): void {
  * Shared scaffolding helpers
  * ───────────────────────────────────────────────────────────────────────── */
 
+/** Where a scaffolded template's bytes came from, recorded so
+ *  `agent-native template sync` can reproduce them later. */
+export interface ScaffoldTemplateResolution {
+  templateRef?: string;
+  templateSource?: "github" | "bundled" | "local-checkout";
+}
+
+export interface ScaffoldProvenance extends ScaffoldTemplateResolution {
+  shape?: "workspace" | "standalone";
+}
+
 /**
  * Scaffold a single app template into `targetDir`. Resolves:
  *   - "headless" / legacy "blank" → bundled action-first template
  *   - "github:user/repo" → download the whole repo
- *   - first-party template name → download that subdir from BuilderIO/agent-native
+ *   - first-party template name → use a bundled copy or download its subdir
+ *     from BuilderIO/agent-native
  */
 async function scaffoldAppTemplate(
   targetDir: string,
   template: string,
-): Promise<void> {
+): Promise<ScaffoldTemplateResolution> {
   fs.mkdirSync(path.dirname(targetDir), { recursive: true });
 
   // Normalize legacy / renamed aliases.
@@ -812,13 +828,16 @@ async function scaffoldAppTemplate(
       );
     }
     copyDir(headlessDir, targetDir);
-    return;
+    return {
+      templateSource: "bundled",
+      templateRef: getGitHubTemplateRefCandidates()[0],
+    };
   }
 
   if (resolved.startsWith("github:")) {
     const repo = resolved.slice("github:".length);
     await downloadGitHubRepo(repo, targetDir);
-    return;
+    return {};
   }
 
   if (!getTemplate(resolved)) {
@@ -834,13 +853,29 @@ async function scaffoldAppTemplate(
   const localTemplate = findLocalTemplate(sourceTemplate);
   if (localTemplate) {
     copyDir(localTemplate, targetDir);
-  } else {
-    await downloadGitHubSubdir(
-      REPO,
-      `${TEMPLATES_DIR}/${sourceTemplate}`,
-      targetDir,
-    );
+    return {
+      templateSource: localTemplateSourceKind(localTemplate),
+      templateRef: getGitHubTemplateRefCandidates()[0],
+    };
   }
+  const templateRef = await downloadGitHubSubdir(
+    REPO,
+    `${TEMPLATES_DIR}/${sourceTemplate}`,
+    targetDir,
+  );
+  return { templateSource: "github", templateRef };
+}
+
+/** A template dir inside the installed core package ships with the CLI;
+ *  anything above it belongs to a framework checkout. */
+function localTemplateSourceKind(
+  localTemplate: string,
+): "bundled" | "local-checkout" {
+  const packageRoot = path.resolve(__dirname, "../..");
+  const rel = path.relative(packageRoot, path.resolve(localTemplate));
+  return rel && !rel.startsWith("..") && !path.isAbsolute(rel)
+    ? "bundled"
+    : "local-checkout";
 }
 
 function templateSourceName(name: string): string {
@@ -849,15 +884,26 @@ function templateSourceName(name: string): string {
 }
 
 /**
- * When developing the framework itself, prefer the sibling templates/<name>
- * directory. Returns undefined when running as a published package.
+ * Prefer a nearby templates/<name> or src/templates/<name> directory. This
+ * covers the framework checkout, the dist/templates copy bundled into
+ * published CLI packages, and source templates included in package files;
+ * packages that do not bundle a template fall back to GitHub.
  */
 function findLocalTemplate(name: string): string | undefined {
-  let dir = path.resolve(__dirname);
+  return findLocalTemplateFrom(path.resolve(__dirname), name);
+}
+
+function findLocalTemplateFrom(
+  startDir: string,
+  name: string,
+): string | undefined {
+  let dir = path.resolve(startDir);
   for (let i = 0; i < 10; i++) {
-    const candidate = path.join(dir, "templates", name);
-    if (fs.existsSync(path.join(candidate, "package.json"))) {
-      return candidate;
+    for (const templatesDir of ["templates", "src/templates"]) {
+      const candidate = path.join(dir, templatesDir, name);
+      if (fs.existsSync(path.join(candidate, "package.json"))) {
+        return candidate;
+      }
     }
     const parent = path.dirname(dir);
     if (parent === dir) break;
@@ -890,6 +936,40 @@ function findLocalPackage(name: string): string | undefined {
     dir = parent;
   }
   return undefined;
+}
+
+/**
+ * Pack a local framework package before linking it into a generated app.
+ * Raw file: dependencies retain workspace-only catalog references, while a
+ * packed artifact has the publish-ready manifest that consumers receive.
+ */
+function localPackageTarball(packageDir: string): string {
+  const cached = localPackageTarballs.get(packageDir);
+  if (cached) return cached;
+
+  const packDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "agent-native-local-package-"),
+  );
+  const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+  execFileSync(pnpm, ["pack", "--pack-destination", packDir], {
+    cwd: packageDir,
+    encoding: "utf-8",
+    env: { ...process.env, npm_config_ignore_scripts: "true" },
+    stdio: "pipe",
+  });
+
+  const tarballs = fs
+    .readdirSync(packDir)
+    .filter((entry) => entry.endsWith(".tgz"));
+  if (tarballs.length !== 1) {
+    throw new Error(
+      `Expected one packed local package artifact in ${packDir}, found ${tarballs.length}.`,
+    );
+  }
+
+  const tarball = pathToFileURL(path.join(packDir, tarballs[0]!)).href;
+  localPackageTarballs.set(packageDir, tarball);
+  return tarball;
 }
 
 /**
@@ -953,6 +1033,17 @@ async function scaffoldRequiredPackages(
             }
           }
         }
+        // These packages' `exports` maps point at `./dist/*`, and `dist/` is
+        // gitignored (never committed), so a scaffolded workspace must build
+        // it on install. pnpm always runs `prepare` for workspace packages,
+        // unlike `postinstall`, so this is the reliable hook.
+        if (
+          pkg.scripts &&
+          typeof pkg.scripts.build === "string" &&
+          !pkg.scripts.prepare
+        ) {
+          pkg.scripts.prepare = "npm run build";
+        }
         fs.writeFileSync(pkgJsonPath, JSON.stringify(pkg, null, 2) + "\n");
       } catch {}
     }
@@ -992,12 +1083,16 @@ function postProcessStandalone(
   name: string,
   targetDir: string,
   templateName?: string,
+  resolution?: ScaffoldTemplateResolution,
 ): void {
   const appTitle = appTitleForScaffold(name);
   replacePlaceholders(targetDir, name, appTitle);
   rewriteTrackingAppId(targetDir, name, templateName);
   rewriteAgentChatAppId(targetDir, name, templateName);
-  fixPackageJsonName(targetDir, name, templateName);
+  fixPackageJsonName(targetDir, name, templateName, {
+    ...resolution,
+    shape: "standalone",
+  });
   fixWebManifestName(targetDir, name, templateName);
   rewriteNetlifyToml(targetDir, name, "standalone");
 
@@ -1096,11 +1191,17 @@ function postProcessStandalone(
       sections.overrides['"@agent-native/toolkit"'] =
         JSON.stringify(localToolkit);
     }
+    const localRecapCli = localRecapCliOverride();
+    if (localRecapCli) {
+      sections.overrides ??= {};
+      sections.overrides['"@agent-native/recap-cli"'] =
+        JSON.stringify(localRecapCli);
+    }
     let updated = mergeWorkspaceYamlSections(existing, sections);
     updated = mergeWorkspaceYamlListItems(
       updated,
       "minimumReleaseAgeExclude",
-      SENTRY_MINIMUM_RELEASE_AGE_EXCLUDES,
+      MINIMUM_RELEASE_AGE_EXCLUDES,
     );
     if (updated !== existing) {
       fs.writeFileSync(wsPath, updated);
@@ -1159,7 +1260,7 @@ function fixStandaloneTsconfig(targetDir: string, templateName?: string): void {
       paths["@shared/*"] ??= ["./shared/*"];
     }
     // baseUrl is deprecated/errors in TS 6 (TS5101/TS5102) and removed in TS 7
-    // (tsgo, which CI runs). paths already resolve relative to this tsconfig,
+    // (tsc, which CI runs). paths already resolve relative to this tsconfig,
     // and the "*": ["./*"] entry replaces baseUrl's bare-specifier resolution,
     // so never emit baseUrl into scaffolds.
     delete tsconfig.compilerOptions.baseUrl;
@@ -1331,11 +1432,28 @@ export {
   getCoreDependencyVersion as _getCoreDependencyVersion,
   getDispatchDependencyVersion as _getDispatchDependencyVersion,
   getToolkitDependencyVersion as _getToolkitDependencyVersion,
+  getCorePackageVersion as _getCorePackageVersion,
   getGitHubTemplateRef as _getGitHubTemplateRef,
   getGitHubTemplateRefCandidates as _getGitHubTemplateRefCandidates,
+  githubTarballUrl as _githubTarballUrl,
+  findLocalTemplateFrom as _findLocalTemplateFrom,
   workspaceAppNameForTemplateSelection as _workspaceAppNameForTemplateSelection,
+  startShapePromptOptions as _startShapePromptOptions,
   shouldSkipScaffoldEntry as _shouldSkipScaffoldEntry,
   tarExtractArgs as _tarExtractArgs,
+  downloadGitHubSubdir as _downloadGitHubSubdir,
+  findLocalTemplate as _findLocalTemplate,
+  templateSourceName as _templateSourceName,
+  normalizeTemplateName as _normalizeTemplateName,
+  appTitleForScaffold as _appTitleForScaffold,
+  replacePlaceholders as _replacePlaceholders,
+  rewriteTrackingAppId as _rewriteTrackingAppId,
+  rewriteAgentChatAppId as _rewriteAgentChatAppId,
+  fixWebManifestName as _fixWebManifestName,
+  copyDir as _copyDir,
+  localTemplateSourceKind as _localTemplateSourceKind,
+  REPO as _REPO,
+  TEMPLATES_DIR as _TEMPLATES_DIR,
 };
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -1364,18 +1482,53 @@ function tarExtractArgs(
   return ["xzf", tarPath, "--strip-components=1", ...excludes, "-C", destDir];
 }
 
-function downloadAndExtract(
+function execFileBuffer(
+  command: string,
+  args: string[],
+  options: { maxBuffer: number },
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      command,
+      args,
+      { ...options, encoding: "buffer" },
+      (error, stdout, stderr) => {
+        if (error) {
+          const detail = stderr?.toString().trim();
+          if (detail) error.message = `${error.message}: ${detail}`;
+          reject(error);
+          return;
+        }
+        resolve(Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout));
+      },
+    );
+  });
+}
+
+async function downloadAndExtract(
   url: string,
   destDir: string,
   options: { skipAgentSymlinks?: boolean } = {},
-): void {
+): Promise<void> {
   fs.mkdirSync(destDir, { recursive: true });
   // --fail-with-body so curl exits non-zero on HTTP 4xx/5xx instead of writing
   // the error body (HTML/JSON) to disk where tar then fails with the opaque
   // "Unrecognized archive format" message.
-  const tarball = execFileSync("curl", ["--fail-with-body", "-sL", url], {
-    maxBuffer: 100 * 1024 * 1024,
-  });
+  // Keep this asynchronous: a synchronous curl blocks the event loop, which
+  // makes the create command's spinner look frozen during the GitHub fetch.
+  const tarball = await execFileBuffer(
+    "curl",
+    [
+      "--fail-with-body",
+      "--connect-timeout",
+      "10",
+      "--max-time",
+      "120",
+      "-sSL",
+      url,
+    ],
+    { maxBuffer: 100 * 1024 * 1024 },
+  );
   const tarPath = path.join(destDir, ".download.tar.gz");
   fs.writeFileSync(tarPath, tarball);
   try {
@@ -1387,23 +1540,34 @@ function downloadAndExtract(
   }
 }
 
+/** Resolves to the ref that actually succeeded so callers can record it. */
 async function downloadGitHubSubdir(
   repo: string,
   subdir: string,
   targetDir: string,
-): Promise<void> {
+  refOverride?: string[],
+): Promise<string> {
   validateRepoName(repo);
-  const refs = getGitHubTemplateRefCandidates();
+  const refs = refOverride?.length
+    ? refOverride
+    : getGitHubTemplateRefCandidates();
+  if (refs.length === 0) {
+    throw new Error(
+      "Cannot download first-party scaffold files without a versioned @agent-native/core package.",
+    );
+  }
   const errors: string[] = [];
   for (const ref of refs) {
-    const tarUrl = `https://api.github.com/repos/${repo}/tarball/${encodeURIComponent(ref)}`;
+    const tarUrl = githubTarballUrl(repo, ref, "tag");
     const tmpDir = path.join(
       targetDir,
       "..",
       `.agent-native-tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     );
     try {
-      downloadAndExtract(tarUrl, tmpDir, { skipAgentSymlinks: repo === REPO });
+      await downloadAndExtract(tarUrl, tmpDir, {
+        skipAgentSymlinks: repo === REPO,
+      });
       const srcDir = path.join(tmpDir, subdir);
       if (!fs.existsSync(srcDir)) {
         throw new Error(
@@ -1411,7 +1575,7 @@ async function downloadGitHubSubdir(
         );
       }
       copyDir(srcDir, targetDir);
-      return;
+      return ref;
     } catch (err) {
       errors.push(
         `  ${ref}: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`,
@@ -1430,8 +1594,16 @@ async function downloadGitHubRepo(
   targetDir: string,
 ): Promise<void> {
   validateRepoName(repo);
-  const tarUrl = `https://api.github.com/repos/${repo}/tarball/main`;
-  downloadAndExtract(tarUrl, targetDir);
+  const tarUrl = githubTarballUrl(repo, "main", "branch");
+  await downloadAndExtract(tarUrl, targetDir);
+}
+
+function githubTarballUrl(
+  repo: string,
+  ref: string,
+  kind: "branch" | "tag",
+): string {
+  return `https://codeload.github.com/${repo}/tar.gz/refs/${kind === "tag" ? "tags" : "heads"}/${encodeURIComponent(ref)}`;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -1571,6 +1743,7 @@ function fixPackageJsonName(
   appDir: string,
   name: string,
   templateName?: string,
+  provenance?: ScaffoldProvenance,
 ): void {
   const pkgPath = path.join(appDir, "package.json");
   if (!fs.existsSync(pkgPath)) return;
@@ -1591,8 +1764,40 @@ function fixPackageJsonName(
     ) {
       pkg.description = defaultPackageDescriptionForScaffold(name);
     }
+    const scaffoldGuidance = scaffoldGuidanceForTemplate(templateName);
+    if (scaffoldGuidance) {
+      const agentNative =
+        pkg["agent-native"] &&
+        typeof pkg["agent-native"] === "object" &&
+        !Array.isArray(pkg["agent-native"])
+          ? pkg["agent-native"]
+          : {};
+      const coreVersion = getCorePackageVersion();
+      agentNative.scaffold = {
+        template: trackingTemplateName(templateName),
+        frameworkSkills: scaffoldGuidance,
+        ...(provenance?.templateRef
+          ? { templateRef: provenance.templateRef }
+          : {}),
+        ...(provenance?.templateSource
+          ? { templateSource: provenance.templateSource }
+          : {}),
+        ...(coreVersion ? { coreVersion } : {}),
+        ...(provenance?.shape ? { shape: provenance.shape } : {}),
+      };
+      pkg["agent-native"] = agentNative;
+    }
     fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
   } catch {}
+}
+
+function scaffoldGuidanceForTemplate(
+  templateName: string | undefined,
+): "default" | "headless" | undefined {
+  if (!templateName || templateName.startsWith("github:")) return undefined;
+  const normalized = normalizeTemplateName(templateName);
+  if (normalized === "headless") return "headless";
+  return getTemplate(normalized) ? "default" : undefined;
 }
 
 function fixWebManifestName(
@@ -1621,14 +1826,25 @@ function fixWebManifestName(
 function getCoreDependencyVersion(): string {
   if (process.env.AGENT_NATIVE_CREATE_USE_LOCAL_CORE === "1") {
     const localCore = findLocalPackage("core");
-    if (localCore) return pathToFileURL(localCore).href;
+    if (localCore) return localPackageTarball(localCore);
   }
 
-  // Generated apps must install before the current package version is
-  // published. The dist-tag resolves to the newest released core today and to
-  // this package version once the release goes live. Local file deps are
-  // intentionally opt-in so scaffolded repos remain portable by default.
-  return "latest";
+  // Pin to the exact core version running this CLI rather than the npm
+  // `latest` dist-tag. `latest` can drift forward after `create` runs (a
+  // stale/cached CLI invocation, or simply time passing before `npm
+  // install`), installing a newer core release whose internal toolkit
+  // dependency no longer matches the toolkit range this CLI just wrote into
+  // the scaffold via getOwnPackageDependencyVersion() — reintroducing the
+  // exact duplicate/mismatched-toolkit class of bug this pinning exists to
+  // prevent. For the common case — `npx @agent-native/core@<version> create`
+  // against the public registry — this exact version is guaranteed
+  // installable, since npx just fetched it. Private/offline mirrors with a
+  // retention window narrower than "every historical version" are a known
+  // gap; `getCorePackageVersion()` returning undefined (e.g. malformed own
+  // package.json) falls back to `latest` rather than failing scaffolding
+  // outright. Local file deps stay opt-in so scaffolded repos remain
+  // portable by default.
+  return getCorePackageVersion() ?? "latest";
 }
 
 function getDispatchDependencyVersion(): string {
@@ -1637,14 +1853,41 @@ function getDispatchDependencyVersion(): string {
     if (localDispatch) return pathToFileURL(localDispatch).href;
   }
 
+  // Unlike toolkit, core's own package.json does not declare
+  // @agent-native/dispatch as a dependency, so there is no published
+  // compatible range to read here — "latest" is the best available signal.
   return "latest";
 }
 
 function getToolkitDependencyVersion(): string {
   if (process.env.AGENT_NATIVE_CREATE_USE_LOCAL_CORE === "1") {
     const localToolkit = findLocalPackage("toolkit");
-    if (localToolkit) return pathToFileURL(localToolkit).href;
+    if (localToolkit) return localPackageTarball(localToolkit);
   }
+
+  return getOwnPackageDependencyVersion("@agent-native/toolkit");
+}
+
+/**
+ * Toolkit is versioned and published independently of core, so its npm
+ * `latest` dist-tag can briefly point to an incompatible release relative to
+ * the core version currently running this CLI. The published core
+ * `package.json` already carries the exact compatible range changesets
+ * resolved at release time — read it from there instead of trusting
+ * `latest`, which is only safe for pinning `core` itself.
+ */
+function getOwnPackageDependencyVersion(depName: string): string {
+  try {
+    const ownPkgPath = path.join(__dirname, "../../package.json");
+    const ownPkg = JSON.parse(fs.readFileSync(ownPkgPath, "utf-8"));
+    const range = ownPkg.dependencies?.[depName];
+    const isPublishedRange =
+      typeof range === "string" &&
+      range.length > 0 &&
+      !range.startsWith("workspace:") &&
+      range !== "catalog:";
+    if (isPublishedRange) return range;
+  } catch {}
 
   return "latest";
 }
@@ -1652,7 +1895,35 @@ function getToolkitDependencyVersion(): string {
 function localToolkitOverride(): string | null {
   if (process.env.AGENT_NATIVE_CREATE_USE_LOCAL_CORE !== "1") return null;
   const localToolkit = findLocalPackage("toolkit");
-  return localToolkit ? pathToFileURL(localToolkit).href : null;
+  return localToolkit ? localPackageTarball(localToolkit) : null;
+}
+
+function localRecapCliOverride(): string | null {
+  if (process.env.AGENT_NATIVE_CREATE_USE_LOCAL_CORE !== "1") return null;
+  const localRecapCli = findLocalPackage("recap-cli");
+  return localRecapCli ? pathToFileURL(localRecapCli).href : null;
+}
+
+function applyLocalWorkspaceOverrides(targetDir: string): void {
+  const localToolkit = localToolkitOverride();
+  const localRecapCli = localRecapCliOverride();
+  if (!localToolkit && !localRecapCli) return;
+
+  const wsPath = path.join(targetDir, "pnpm-workspace.yaml");
+  const existing = fs.existsSync(wsPath)
+    ? fs.readFileSync(wsPath, "utf-8")
+    : "";
+  const updated = mergeWorkspaceYamlSections(existing, {
+    overrides: {
+      ...(localToolkit
+        ? { '"@agent-native/toolkit"': JSON.stringify(localToolkit) }
+        : {}),
+      ...(localRecapCli
+        ? { '"@agent-native/recap-cli"': JSON.stringify(localRecapCli) }
+        : {}),
+    },
+  });
+  if (updated !== existing) fs.writeFileSync(wsPath, updated);
 }
 
 function getCorePackageVersion(): string | undefined {
@@ -1675,9 +1946,11 @@ function getCorePackageVersion(): string | undefined {
  *   - ≥ 0.8.0:  changesets per-package tags
  *               `@agent-native/core@<version>` (current).
  *
- * `main` is the final fallback so dev builds and brand-new releases (where
- * the tag has not propagated yet) still work — at the cost of pulling
- * potentially newer template code than the running CLI was built against.
+ * Published CLIs intentionally use only immutable version tags. Falling back
+ * to mutable `main` can copy a template that imports exports not present in
+ * the installed core package, leaving a generated app broken at SSR startup.
+ * Local framework development uses the checkout's templates and packages
+ * before this downloader runs, so it does not need a mutable fallback.
  */
 function getGitHubTemplateRefCandidates(): string[] {
   const version = getCorePackageVersion();
@@ -1686,7 +1959,6 @@ function getGitHubTemplateRefCandidates(): string[] {
     candidates.push(`@agent-native/core@${version}`);
     candidates.push(`v${version}`);
   }
-  candidates.push("main");
   return candidates;
 }
 
@@ -2072,11 +2344,35 @@ function copyDir(src: string, dest: string, root?: string): void {
 }
 
 function shouldSkipScaffoldEntry(name: string, srcPath?: string): boolean {
+  const pathParts = srcPath?.split(path.sep);
+  if (
+    name === "plans" &&
+    pathParts?.at(-2) === "plan" &&
+    pathParts.at(-3) === "templates"
+  ) {
+    return true;
+  }
+  if (name === "preview.html" && srcPath?.split(path.sep).includes("plans")) {
+    return true;
+  }
   if (
     /^settings(?:\..*)?\.json$/.test(name) &&
     srcPath?.split(path.sep).includes(".claude")
   ) {
     return true;
+  }
+  // `.generated/bridge` is committed source, not a build artifact: the design
+  // app imports it at module load, so skipping it yields a workspace that 500s
+  // on every page. Everything else under `.generated` is regenerated at dev time.
+  if (pathParts?.at(-2) === ".generated") {
+    return name !== "bridge";
+  }
+  if (
+    name === ".generated" &&
+    srcPath &&
+    fs.existsSync(path.join(srcPath, "bridge"))
+  ) {
+    return false;
   }
   if (
     name === "node_modules" ||
@@ -2097,9 +2393,5 @@ function shouldSkipScaffoldEntry(name: string, srcPath?: string): boolean {
   ) {
     return true;
   }
-  return (
-    name.endsWith(".tmp.json") ||
-    /^qa-.*\.db(?:-shm|-wal)?$/.test(name) ||
-    /\.db-(?:shm|wal)$/.test(name)
-  );
+  return name.endsWith(".tmp.json") || /\.db(?:-shm|-wal)?$/.test(name);
 }

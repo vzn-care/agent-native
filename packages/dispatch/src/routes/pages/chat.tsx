@@ -1,9 +1,9 @@
 import {
   AgentChatSurface,
-  appBasePath,
-  appPath,
   markAgentChatHomeHandoff,
-} from "@agent-native/core/client";
+} from "@agent-native/core/client/agent-chat";
+import { appBasePath, appPath } from "@agent-native/core/client/api-path";
+import { useT } from "@agent-native/core/client/i18n";
 import {
   useCallback,
   useEffect,
@@ -13,7 +13,7 @@ import {
 } from "react";
 import { useLocation, useNavigate } from "react-router";
 
-import { submitOverviewPrompt } from "@/lib/overview-chat";
+import { submitOverviewPrompt } from "../../lib/overview-chat";
 
 function chatThreadPath(threadId: string | null): string {
   return threadId ? `/chat/${encodeURIComponent(threadId)}` : "/chat";
@@ -74,6 +74,8 @@ interface DispatchChatLocationState {
     id?: string | number;
     message?: string;
     selectedModel?: string | null;
+    selectedEngine?: string | null;
+    selectedEffort?: ComponentProps<typeof AgentChatSurface>["selectedEffort"];
   };
   dispatchThread?: {
     id?: string | number;
@@ -86,6 +88,7 @@ export function meta() {
 }
 
 export default function ChatRoute() {
+  const t = useT();
   const location = useLocation();
   const navigate = useNavigate();
   const routeThreadId = threadIdFromPath(location.pathname);
@@ -130,6 +133,8 @@ export default function ChatRoute() {
       if (message) {
         submitOverviewPrompt(message, prompt?.selectedModel, {
           openSidebar: false,
+          selectedEngine: prompt?.selectedEngine,
+          selectedEffort: prompt?.selectedEffort,
         });
       }
       navigate(`${location.pathname}${location.search}${location.hash}`, {
@@ -147,6 +152,8 @@ export default function ChatRoute() {
     prompt?.id,
     prompt?.message,
     prompt?.selectedModel,
+    prompt?.selectedEngine,
+    prompt?.selectedEffort,
     thread?.id,
     thread?.threadId,
   ]);
@@ -175,18 +182,36 @@ export default function ChatRoute() {
         showTabBar={false}
         dynamicSuggestions={false}
         suggestions={[]}
-        emptyStateText="Ask Dispatch to create apps, route work, or manage the workspace."
+        emptyStateText={t("dispatch.pages.chatAcrossAppsDescription", {
+          defaultValue:
+            "Route work, inspect status, or create something new from one place.",
+        })}
         emptyStateDisplay="hidden"
-        centerComposerWhenEmpty
-        composerLayoutVariant="hero"
-        composerPlaceholder="Ask Dispatch..."
+        {...(!prompt?.message
+          ? {
+              centerComposerWhenEmpty: true,
+              composerLayoutVariant: "hero" as const,
+            }
+          : {})}
+        composerPlaceholder={t("dispatch.pages.chatPromptPlaceholder", {
+          defaultValue: "Ask Dispatch...",
+        })}
         composerSlot={
-          <div className="dispatch-chat-intro">
-            <h1>What should Dispatch do next?</h1>
-            <p>
-              Create apps, manage shared keys, and route work across agents.
-            </p>
-          </div>
+          !prompt?.message ? (
+            <div className="dispatch-chat-intro">
+              <h1>
+                {t("dispatch.pages.chatAcrossApps", {
+                  defaultValue: "Chat across your apps",
+                })}
+              </h1>
+              <p>
+                {t("dispatch.pages.chatAcrossAppsDescription", {
+                  defaultValue:
+                    "Route work, inspect status, or create something new from one place.",
+                })}
+              </p>
+            </div>
+          ) : null
         }
       />
     </div>

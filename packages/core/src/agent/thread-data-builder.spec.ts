@@ -63,6 +63,50 @@ describe("buildAssistantMessage", () => {
     ]);
   });
 
+  it("ignores a trailing clear so a rebuild cannot wipe the transcript", () => {
+    const events: RunEvent[] = [
+      { seq: 0, event: { type: "text", text: "Here is the answer" } },
+      { seq: 1, event: { type: "clear" } },
+    ];
+
+    const message = buildAssistantMessage(events, "run-trailing-clear");
+
+    expect(message?.content).toEqual([
+      { type: "text", text: "Here is the answer" },
+    ]);
+  });
+
+  it("rebuilds streamed thinking as persisted reasoning parts", () => {
+    const events: RunEvent[] = [
+      { seq: 0, event: { type: "thinking", text: "First, " } },
+      { seq: 1, event: { type: "thinking", text: "inspect state." } },
+      { seq: 2, event: { type: "text", text: "Done." } },
+    ];
+
+    const message = buildAssistantMessage(events, "run-thinking");
+
+    expect(message?.content).toEqual([
+      { type: "reasoning", text: "First, inspect state." },
+      { type: "text", text: "Done." },
+    ]);
+  });
+
+  it("clears rejected draft reasoning on retry", () => {
+    const events: RunEvent[] = [
+      { seq: 0, event: { type: "thinking", text: "bad reasoning" } },
+      { seq: 1, event: { type: "clear" } },
+      { seq: 2, event: { type: "thinking", text: "correct reasoning" } },
+      { seq: 3, event: { type: "text", text: "Corrected answer" } },
+    ];
+
+    const message = buildAssistantMessage(events, "run-clear-thinking");
+
+    expect(message?.content).toEqual([
+      { type: "reasoning", text: "correct reasoning" },
+      { type: "text", text: "Corrected answer" },
+    ]);
+  });
+
   it("persists partial output from internal continuation boundaries", () => {
     const events: RunEvent[] = [
       { seq: 0, event: { type: "text", text: "partial answer" } },
@@ -132,6 +176,98 @@ describe("buildAssistantMessage", () => {
         toolCallId: "run-tools:tc_1",
         toolName: "search",
         result: "found",
+      }),
+    ]);
+  });
+
+  it("preserves stable tool call ids and pairs parallel same-name results by id", () => {
+    const message = buildAssistantMessage(
+      [
+        {
+          seq: 0,
+          event: {
+            type: "tool_start",
+            id: "search-call-1",
+            tool: "search",
+            input: { q: "first" },
+          },
+        },
+        {
+          seq: 1,
+          event: {
+            type: "tool_start",
+            id: "search-call-2",
+            tool: "search",
+            input: { q: "second" },
+          },
+        },
+        {
+          seq: 2,
+          event: {
+            type: "tool_done",
+            id: "search-call-1",
+            tool: "search",
+            result: "first result",
+          },
+        },
+        {
+          seq: 3,
+          event: {
+            type: "tool_done",
+            id: "search-call-2",
+            tool: "search",
+            result: "second result",
+          },
+        },
+      ],
+      "run-parallel-tools",
+    );
+
+    expect(message?.content).toEqual([
+      expect.objectContaining({
+        type: "tool-call",
+        toolCallId: "search-call-1",
+        args: { q: "first" },
+        result: "first result",
+      }),
+      expect.objectContaining({
+        type: "tool-call",
+        toolCallId: "search-call-2",
+        args: { q: "second" },
+        result: "second result",
+      }),
+    ]);
+  });
+
+  it("falls back to legacy name matching when a done id has no matching start", () => {
+    const message = buildAssistantMessage(
+      [
+        {
+          seq: 0,
+          event: {
+            type: "tool_start",
+            tool: "search",
+            input: { q: "legacy" },
+          },
+        },
+        {
+          seq: 1,
+          event: {
+            type: "tool_done",
+            id: "new-server-id",
+            tool: "search",
+            result: "legacy result",
+          },
+        },
+      ],
+      "run-legacy-tool",
+    );
+
+    expect(message?.content).toEqual([
+      expect.objectContaining({
+        type: "tool-call",
+        toolCallId: "run-legacy-tool:tc_1",
+        result: "legacy result",
       }),
     ]);
   });
@@ -464,7 +600,11 @@ describe("buildAssistantMessage", () => {
         { seq: 1, event: { type: "auto_continue", reason: "run_timeout" } },
       ],
       "run-fold-1",
-      { suppressInternalContinuation: true, turnId: "turn-fold" },
+      {
+        suppressInternalContinuation: true,
+        turnId: "turn-fold",
+        runDurationMs: 40_000,
+      },
     );
     const secondChunk = buildAssistantMessage(
       [
@@ -472,7 +612,11 @@ describe("buildAssistantMessage", () => {
         { seq: 1, event: { type: "done" } },
       ],
       "run-fold-2",
-      { suppressInternalContinuation: true, turnId: "turn-fold" },
+      {
+        suppressInternalContinuation: true,
+        turnId: "turn-fold",
+        runDurationMs: 15_000,
+      },
     );
     expect(firstChunk).not.toBeNull();
     expect(secondChunk).not.toBeNull();
@@ -507,9 +651,18 @@ describe("buildAssistantMessage", () => {
       custom: {
         turnId: "turn-fold",
         foldedRunIds: ["run-fold-1", "run-fold-2"],
+        agentNativeRunDurationMs: 55_000,
       },
     });
     expect(repo.messages[1].message.metadata.custom.continued).toBeUndefined();
+
+    repo = foldAssistantTurn(repo, secondChunk!, {
+      turnId: "turn-fold",
+      runId: "run-fold-2",
+    });
+    expect(
+      repo.messages[1].message.metadata.custom.agentNativeRunDurationMs,
+    ).toBe(55_000);
   });
 
   it("keeps tool call ids unique when folding continuation chunks", () => {
@@ -568,6 +721,46 @@ describe("buildAssistantMessage", () => {
 });
 
 describe("mergeThreadDataForClientSave", () => {
+  it("preserves a saved run duration when a later client copy omits it", () => {
+    const existing = {
+      messages: [
+        {
+          message: {
+            id: "assistant-1",
+            role: "assistant",
+            content: [{ type: "text", text: "Done." }],
+            status: { type: "complete", reason: "stop" },
+            metadata: {
+              runId: "run-1",
+              custom: { agentNativeRunDurationMs: 12_000 },
+            },
+          },
+          parentId: null,
+        },
+      ],
+    };
+    const incoming = {
+      messages: [
+        {
+          message: {
+            id: "assistant-1",
+            role: "assistant",
+            content: [{ type: "text", text: "Done." }],
+            status: { type: "complete", reason: "stop" },
+            metadata: { runId: "run-1" },
+          },
+          parentId: null,
+        },
+      ],
+    };
+
+    const merged = mergeThreadDataForClientSave(existing, incoming);
+
+    expect(
+      merged.messages[0].message.metadata.custom.agentNativeRunDurationMs,
+    ).toBe(12_000);
+  });
+
   it("preserves server-only assistant messages when a stale client save arrives", () => {
     const existing = {
       queuedMessages: [{ id: "queued", text: "next" }],
@@ -1099,6 +1292,14 @@ describe("buildRepositoryFromCodeAgentTranscript", () => {
         metadata: { role: "assistant" },
       },
       {
+        id: "evt-thinking",
+        runId: "run-code",
+        kind: "status",
+        message: "I should run the focused test.",
+        createdAt: "2026-05-17T12:00:01.500Z",
+        metadata: { type: "thinking" },
+      },
+      {
         id: "evt-tool-start",
         runId: "run-code",
         kind: "status",
@@ -1122,6 +1323,7 @@ describe("buildRepositoryFromCodeAgentTranscript", () => {
     expect(repo.messages[1]?.message.role).toBe("assistant");
     expect(repo.messages[1]?.message.content).toEqual([
       { type: "text", text: "I found the issue." },
+      { type: "reasoning", text: "I should run the focused test." },
       {
         type: "tool-call",
         toolCallId: "code-tool-evt-tool-start",
@@ -1134,6 +1336,96 @@ describe("buildRepositoryFromCodeAgentTranscript", () => {
     expect(repo.headId).toBe(repo.messages[1]?.message.id);
   });
 
+  it("attaches an approval key to a historical bash tool-call still awaiting approval", () => {
+    const repo = buildRepositoryFromCodeAgentTranscript([
+      {
+        id: "evt-tool-start",
+        runId: "run-code",
+        kind: "status",
+        message: "Running bash.",
+        createdAt: "2026-05-17T12:00:02.000Z",
+        metadata: {
+          type: "tool_start",
+          tool: "bash",
+          input: { command: "rm -rf tmp" },
+        },
+      },
+      {
+        id: "evt-tool-done",
+        runId: "run-code",
+        kind: "status",
+        message: "Finished bash.",
+        createdAt: "2026-05-17T12:00:03.000Z",
+        metadata: {
+          type: "tool_done",
+          tool: "bash",
+          result: [
+            "Approval required before running this command: destructive recursive delete.",
+            "Approval id: approval-20260710120000",
+            "Command: rm -rf tmp",
+          ].join("\n"),
+        },
+      },
+    ]);
+
+    expect(repo.messages[0]?.message.content).toEqual([
+      expect.objectContaining({
+        type: "tool-call",
+        toolName: "bash",
+        approval: { approvalKey: "approval-20260710120000" },
+      }),
+    ]);
+  });
+
+  it("does not attach an approval key to a historical tool-call once resolved", () => {
+    const repo = buildRepositoryFromCodeAgentTranscript([
+      {
+        id: "evt-tool-start",
+        runId: "run-code",
+        kind: "status",
+        message: "Running bash.",
+        createdAt: "2026-05-17T12:00:02.000Z",
+        metadata: {
+          type: "tool_start",
+          tool: "bash",
+          input: { command: "rm -rf tmp" },
+        },
+      },
+      {
+        id: "evt-tool-done",
+        runId: "run-code",
+        kind: "status",
+        message: "Finished bash.",
+        createdAt: "2026-05-17T12:00:03.000Z",
+        metadata: {
+          type: "tool_done",
+          tool: "bash",
+          result: [
+            "Approval required before running this command: destructive recursive delete.",
+            "Approval id: approval-20260710120000",
+            "Command: rm -rf tmp",
+          ].join("\n"),
+        },
+      },
+      {
+        id: "evt-approved",
+        runId: "run-code",
+        kind: "status",
+        message: "Approved command; running now.",
+        createdAt: "2026-05-17T12:00:04.000Z",
+        metadata: {
+          status: "running",
+          phase: "approval-running",
+          approvalId: "approval-20260710120000",
+        },
+      },
+    ]);
+
+    const toolPart = repo.messages[0]?.message.content?.[0];
+    expect(toolPart).toMatchObject({ type: "tool-call", toolName: "bash" });
+    expect(toolPart.approval).toBeUndefined();
+  });
+
   it("can hide credential status messages from imported Code history", () => {
     const repo = buildRepositoryFromCodeAgentTranscript(
       [
@@ -1144,6 +1436,25 @@ describe("buildRepositoryFromCodeAgentTranscript", () => {
           message: "Missing credentials for a provider.",
           createdAt: "2026-05-17T12:00:00.000Z",
           metadata: { type: "error" },
+        },
+      ],
+      { hideCredentialMessages: true },
+    );
+
+    expect(repo.messages).toEqual([]);
+  });
+
+  it("hides credential events via the structured signal even with neutral message text", () => {
+    const repo = buildRepositoryFromCodeAgentTranscript(
+      [
+        {
+          id: "evt-status",
+          runId: "run-code",
+          kind: "status",
+          message: "Provider unavailable.",
+          createdAt: "2026-05-17T12:00:00.000Z",
+          metadata: { type: "error" },
+          signal: "credential-gap",
         },
       ],
       { hideCredentialMessages: true },

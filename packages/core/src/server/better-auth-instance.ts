@@ -317,8 +317,12 @@ export function resolveSignupTrackingProperties(): Record<string, string> {
 export function shouldSkipEmailVerification(): boolean {
   const value = process.env.AUTH_SKIP_EMAIL_VERIFICATION;
   if (value == null) {
+    const deployContext =
+      process.env.AGENT_NATIVE_BUILD_DEPLOY_CONTEXT || process.env.CONTEXT;
     return (
-      process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test"
+      process.env.NODE_ENV === "development" ||
+      process.env.NODE_ENV === "test" ||
+      deployContext === "deploy-preview"
     );
   }
   const normalized = value.trim().toLowerCase();
@@ -736,8 +740,8 @@ export function getBetterAuthSync(): BetterAuthInstance | undefined {
  * The subset of Better Auth's internal adapter we use for federated-SSO
  * JIT account linking. Better Auth owns these writes (id + timestamp +
  * schema handling), so callers never hand-roll SQL against `user`/`account`.
- * Read-only lookups + strictly-additive `linkAccount`/`createUser` only — no
- * update/delete of existing identity rows.
+ * Read-only lookups plus account-linking and profile-update operations used by
+ * shared Core surfaces. Better Auth owns the actual identity writes.
  */
 export interface BetterAuthInternalAdapter {
   findUserByEmail: (
@@ -757,6 +761,11 @@ export interface BetterAuthInternalAdapter {
     name: string;
     emailVerified?: boolean;
   }) => Promise<{ id: string }>;
+  /** Optional because older/custom adapter shapes may not expose mutations. */
+  updateUser?: (
+    userId: string,
+    data: { name?: string; image?: string | null },
+  ) => Promise<unknown>;
 }
 
 /**
@@ -1100,12 +1109,28 @@ async function createBetterAuthInstance(
   return auth as unknown as BetterAuthInstance;
 }
 
+/**
+ * Configure the local auth connection with the same write contention settings
+ * as the shared app connection. Better Auth uses its own SQLite handle, so the
+ * app connection's busy timeout does not protect first-run account creation.
+ */
+export function configureLocalSqlite(sqlite: {
+  pragma(statement: string): unknown;
+}): void {
+  sqlite.pragma("busy_timeout = 10000");
+  sqlite.pragma("journal_mode = WAL");
+}
+
 async function buildDatabaseConfig(
   dialect: string,
 ): Promise<BetterAuthOptions["database"]> {
   if (dialect === "postgres") {
     const url = getDatabaseUrl();
-    const { isNeonUrl } = await import("../db/create-get-db.js");
+    const {
+      buildResilientNeonPool,
+      buildResilientPostgresJsClient,
+      isNeonUrl,
+    } = await import("../db/create-get-db.js");
 
     if (isPgliteUrl(url)) {
       const { drizzle } = await loadPgliteDrizzle();
@@ -1133,7 +1158,9 @@ async function buildDatabaseConfig(
       });
       attachNeonPoolErrorLogger(_neonAuthPool, "db/neon-auth");
       const { drizzle } = await import("drizzle-orm/neon-serverless");
-      const db = drizzle(_neonAuthPool, { schema: pgAuthSchema });
+      const db = drizzle(buildResilientNeonPool(_neonAuthPool), {
+        schema: pgAuthSchema,
+      });
       const { drizzleAdapter } = await import("better-auth/adapters/drizzle");
       return drizzleAdapter(db, {
         provider: "pg",
@@ -1149,7 +1176,9 @@ async function buildDatabaseConfig(
     const { default: postgres } = await import("postgres");
     const sql = postgres(url, pgPoolOptions(url));
     const { drizzle } = await import("drizzle-orm/postgres-js");
-    const db = drizzle(sql, { schema: pgAuthSchema });
+    const db = drizzle(buildResilientPostgresJsClient(sql), {
+      schema: pgAuthSchema,
+    });
     const { drizzleAdapter } = await import("better-auth/adapters/drizzle");
     return drizzleAdapter(db, {
       provider: "pg",
@@ -1165,7 +1194,7 @@ async function buildDatabaseConfig(
     const { default: Database } = await import("better-sqlite3");
     const filePath = url.replace(/^file:/, "");
     const sqlite = new Database(filePath);
-    sqlite.pragma("journal_mode = WAL");
+    configureLocalSqlite(sqlite);
     const { drizzle } = await import("drizzle-orm/better-sqlite3");
     const db = drizzle(sqlite, { schema: sqliteAuthSchema });
     const { drizzleAdapter } = await import("better-auth/adapters/drizzle");

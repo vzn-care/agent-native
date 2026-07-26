@@ -11,6 +11,7 @@ vi.mock("@agent-native/core/db", () => ({
 }));
 
 import {
+  deleteRecordingChunks,
   listRecordingChunkKeys,
   recordingChunkIndexFromKey,
   sumRecordingChunkBytes,
@@ -62,6 +63,19 @@ describe("recording upload state helpers", () => {
     const query = dbMock.execute.mock.calls[0]?.[0];
     expect(query.sql).toContain("SUM(json_extract(value, '$.bytes'))");
     expect(query.sql).not.toContain("SELECT key, value");
+  });
+
+  it("deletes all chunks for one recording by scoped prefix", async () => {
+    dbMock.execute.mockResolvedValue({ rows: [], rowsAffected: 3 });
+
+    await expect(
+      deleteRecordingChunks("owner@example.com", "rec_1"),
+    ).resolves.toBe(3);
+
+    expect(dbMock.execute).toHaveBeenCalledWith({
+      sql: expect.stringContaining("DELETE FROM application_state"),
+      args: ["owner@example.com", "recording-chunks-rec!_1-%"],
+    });
   });
 
   it("uses the Postgres JSON aggregate when deployed on Postgres", async () => {

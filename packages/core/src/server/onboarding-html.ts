@@ -15,7 +15,7 @@ import {
   SUPPORTED_LOCALES,
   type LocaleCode,
 } from "../localization/shared.js";
-import { AUTH_REDIRECT_QUERY_PARAM } from "../shared/auth-redirect-url.js";
+import { signInJourneyInlineScript } from "../shared/sign-in-journey.js";
 import {
   AGENT_NATIVE_SOCIAL_IMAGE_ALT,
   AGENT_NATIVE_SOCIAL_IMAGE_HEIGHT,
@@ -1510,7 +1510,7 @@ ${googleNoticeRunLocalPanelHtml}
     ? `
     function __anIdentitySsoUrl() {
       var params = new URLSearchParams();
-      params.set('return', __anGetReturnPath());
+      params.set('return', __anResumeHref());
       return __anPath('/_agent-native/identity/login') + '?' + params.toString();
     }
     function __anStartIdentitySso(event) {
@@ -2577,6 +2577,18 @@ ${signupLocalModeNoteHtml}
     function __anPath(path) {
       return __anBasePath() + path;
     }
+${signInJourneyInlineScript()}
+    var __anJourney = __anCreateSignInJourney(__anBasePath());
+    /**
+     * Where this document sends the visitor once a session exists. One
+     * function, one answer — the page used to have two ("__anGetReturnPath"
+     * and "__anGetSignedInReturnPath") that disagreed about whether the
+     * sign-in page itself was an acceptable destination, which is how
+     * verification emails ended up linking back to a login form.
+     */
+    function __anResumeHref() {
+      return __anJourney.journeyForLocation(window.location).resumeHref;
+    }
     var __AN_AUTH_DEFAULT_LOCALE = ${JSON.stringify(DEFAULT_LOCALE)};
     var __AN_AUTH_SUPPORTED_LOCALES = ${JSON.stringify(SUPPORTED_LOCALES)};
     var __AN_AUTH_LOCALE_STORAGE_KEY = ${JSON.stringify(LOCALE_STORAGE_KEY)};
@@ -2868,84 +2880,30 @@ ${signupLocalModeNoteHtml}
       __anSetOAuthDebug('OAuth exchange redeemed; returning to the app', flowId);
       __anRedirectToSignedInApp(ret);
     }
-    function __anHasControlCharacter(value) {
-      for (var i = 0; i < value.length; i++) {
-        if (value.charCodeAt(i) < 32) return true;
-      }
-      return false;
-    }
-    function __anNormalizeReturnPath(raw) {
-      var value = typeof raw === 'string' ? raw : '';
-      if (!value || __anHasControlCharacter(value)) return '';
-      if (value.charAt(0) === '\\\\') return '';
-      if (value.charAt(0) === '/' && (value.charAt(1) === '/' || value.charAt(1) === '\\\\')) return '';
-      try {
-        var url = new URL(value, window.location.origin);
-        if (url.origin !== window.location.origin) return '';
-        return url.pathname + url.search + url.hash;
-      } catch(e) {
-        return '';
-      }
-    }
-    function __anCurrentReturnPath() {
-      return window.location.pathname + window.location.search + window.location.hash;
-    }
-    function __anGetReturnPath() {
-      try {
-        var inner = new URLSearchParams(window.location.search).get('return');
-        var normalized = __anNormalizeReturnPath(inner);
-        if (normalized) return normalized;
-      } catch(e) {}
-      return __anCurrentReturnPath();
-    }
-    function __anMountedPathname(pathname) {
-      var base = __anBasePath();
-      if (base && pathname.indexOf(base + '/') === 0) return pathname.slice(base.length);
-      if (base && pathname === base) return '/';
-      return pathname || '/';
-    }
-    function __anIsAuthEntryPath(pathname) {
-      var p = __anMountedPathname(pathname);
-      return p === '/login' || p === '/signup' || p === '/_agent-native/sign-in';
-    }
-    function __anGetSignedInReturnPath() {
-      try {
-        var inner = new URLSearchParams(window.location.search).get('return');
-        var normalized = __anNormalizeReturnPath(inner);
-        if (normalized) return normalized;
-      } catch(e) {}
-      if (__anIsAuthEntryPath(window.location.pathname)) return __anPath('/');
-      return __anCurrentReturnPath();
-    }
-    function __anWithAuthCacheBypass(ret) {
-      try {
-        var url = new URL(ret || __anPath('/'), window.location.origin);
-        url.searchParams.set('${AUTH_REDIRECT_QUERY_PARAM}', Date.now().toString(36));
-        return url.pathname + url.search + url.hash;
-      } catch(e) {
-        var fallback = ret || __anPath('/');
-        var hashIndex = fallback.indexOf('#');
-        var beforeHash = hashIndex === -1 ? fallback : fallback.slice(0, hashIndex);
-        var hash = hashIndex === -1 ? '' : fallback.slice(hashIndex);
-        var sep = beforeHash.indexOf('?') === -1 ? '?' : '&';
-        return beforeHash + sep + '${AUTH_REDIRECT_QUERY_PARAM}=' + Date.now().toString(36) + hash;
-      }
-    }
     function __anRedirectToSignedInApp(ret) {
-      window.location.replace(__anWithAuthCacheBypass(ret || __anGetSignedInReturnPath()));
+      window.location.replace(ret || __anResumeHref());
     }
-${identitySsoScript}
-	    (function __anRedirectIfAlreadySignedIn() {
-	      fetch(__anPath('/_agent-native/auth/session'), {
-	        headers: { 'Accept': 'application/json' },
-	        credentials: 'include',
-	        cache: 'no-store',
+    function __anMaybeRedirectSignedIn(ret) {
+      return fetch(__anPath('/_agent-native/auth/session'), {
+        headers: { 'Accept': 'application/json' },
+        credentials: 'include',
+        cache: 'no-store',
       }).then(function(res) {
         if (!res.ok) return null;
         return res.json().catch(function() { return null; });
       }).then(function(data) {
-	        if (data && data.email && !data.error) __anRedirectToSignedInApp();
-	      }).catch(function() {});
+        if (data && data.email && !data.error) {
+          __anRedirectToSignedInApp(ret);
+          return true;
+        }
+        return false;
+      }).catch(function() {
+        return false;
+      });
+    }
+${identitySsoScript}
+	    (function __anRedirectIfAlreadySignedIn() {
+	      __anMaybeRedirectSignedIn();
 	    })();
 	    function __anSafeAttributionValue(value) {
 	      return typeof value === 'string' ? value.trim().slice(0, 120) : '';
@@ -2988,7 +2946,7 @@ ${identitySsoScript}
 	          var value = __anSafeAttributionValue(params.get(key));
 	          if (value) ft[key] = value;
 	        });
-	        var returnPath = __anNormalizeReturnPath(params.get('return'));
+	        var returnPath = __anJourney.normalizeAppPath(params.get('return'));
 	        var landingPath = __anSafeAttributionValue(returnPath || window.location.pathname || '');
 	        if (landingPath) ft.landing_path = landingPath;
 	        var referrer = __anExternalReferrerHost(document.referrer || '');
@@ -3130,14 +3088,17 @@ ${identitySsoScript}
       // in-flight exchange can still finish and navigate without a flicker.
       if (!__anGoogleSignInInFlight) return;
       setTimeout(function() {
-        if (!__anGoogleSignInInFlight) return;
-        var btn = document.getElementById('google-btn');
-        if (!btn || !btn.disabled) return;
-        // Keep the desktop-exchange poll alive. Agent Native Desktop opens
-        // Google in the system browser, so focus can return before the
-        // callback has stored the session token.
-        btn.disabled = false;
-        __anGoogleSignInInFlight = false;
+        __anMaybeRedirectSignedIn(__anResumeHref()).then(function(redirected) {
+          if (redirected) return;
+          if (!__anGoogleSignInInFlight) return;
+          var btn = document.getElementById('google-btn');
+          if (!btn || !btn.disabled) return;
+          // Keep the desktop-exchange poll alive. Agent Native Desktop opens
+          // Google in the system browser, so focus can return before the
+          // callback has stored the session token.
+          btn.disabled = false;
+          __anGoogleSignInInFlight = false;
+        });
       }, 1200);
     }
     function __anBindGoogleRecover() {
@@ -3501,7 +3462,7 @@ ${
         var res = await fetch(__anPath('/_agent-native/auth/ba/send-verification-email'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: email, callbackURL: __anGetReturnPath() }),
+          body: JSON.stringify({ email: email, callbackURL: __anResumeHref() }),
         });
         if (res.ok) {
 	          if (msg) {
@@ -3599,7 +3560,7 @@ ${
           body: JSON.stringify({
             email: email,
             password: pass,
-            callbackURL: __anGetReturnPath(),
+            callbackURL: __anResumeHref(),
           }),
         });
       var data = await res.json().catch(function() { return {}; });
@@ -3775,7 +3736,7 @@ ${
     async function __anStartGoogleSignIn() {
     var btn = document.getElementById('google-btn');
     var err = document.getElementById('google-err');
-    var ret = __anGetReturnPath();
+    var ret = __anResumeHref();
     btn.disabled = true;
     __anGoogleSignInInFlight = true;
     __anBindGoogleRecover();

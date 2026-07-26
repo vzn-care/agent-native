@@ -35,9 +35,12 @@ describe("agent model config catalog", () => {
     );
   });
 
-  it("keeps the builder default in sync with the anthropic default", () => {
+  it("uses Luna for Builder/OpenAI defaults and Sonnet for Anthropic", () => {
     expect(DEFAULT_MODEL).toBe(BUILDER_MODEL_CONFIG.defaultModel);
-    expect(DEFAULT_MODEL).toBe(DEFAULT_ANTHROPIC_MODEL);
+    expect(DEFAULT_MODEL).toBe("gpt-5-6-luna");
+    expect(DEFAULT_OPENAI_MODEL).toBe("gpt-5.6-luna");
+    expect(DEFAULT_MODEL).not.toBe(DEFAULT_ANTHROPIC_MODEL);
+    expect(DEFAULT_ANTHROPIC_MODEL).toBe("claude-sonnet-5");
     expect(ANTHROPIC_MODEL_CONFIG.defaultModel).toBe(DEFAULT_ANTHROPIC_MODEL);
   });
 
@@ -120,12 +123,49 @@ describe("agent model config catalog", () => {
     expect(BUILDER_MODEL_CONFIG.supportedModels).not.toContain(
       "claude-opus-4-7",
     );
+    expect(BUILDER_MODEL_CONFIG.supportedModels).not.toContain(
+      "gemini-3-1-flash-lite",
+    );
     expect(BUILDER_MODEL_CONFIG.supportedModels).not.toContain("z-ai-glm-4-5");
     expect(ANTHROPIC_MODEL_CONFIG.supportedModels).not.toContain(
       "claude-opus-4-7",
     );
     expect(AI_SDK_MODEL_CONFIG.anthropic.supportedModels).not.toContain(
       "claude-opus-4-7",
+    );
+  });
+
+  it("exposes only GPT-5.6 Sol, Terra, and Luna in OpenAI-backed catalogs", () => {
+    expect(
+      (BUILDER_MODEL_CONFIG.supportedModels as readonly string[]).filter(
+        (model) => model.startsWith("gpt-"),
+      ),
+    ).toEqual(["gpt-5-6-luna", "gpt-5-6-terra", "gpt-5-6-sol"]);
+    expect(AI_SDK_MODEL_CONFIG.openai.supportedModels).toEqual([
+      "gpt-5.6-luna",
+      "gpt-5.6-terra",
+      "gpt-5.6-sol",
+    ]);
+    expect(
+      (
+        AI_SDK_MODEL_CONFIG.openrouter.supportedModels as readonly string[]
+      ).filter((model) => model.startsWith("openai/gpt-")),
+    ).toEqual([
+      "openai/gpt-5.6-luna",
+      "openai/gpt-5.6-terra",
+      "openai/gpt-5.6-sol",
+    ]);
+  });
+
+  it("orders Anthropic catalogs from cheapest to most expensive", () => {
+    expect(ANTHROPIC_MODEL_CONFIG.supportedModels).toEqual([
+      "claude-haiku-4-5-20251001",
+      "claude-sonnet-5",
+      "claude-opus-4-8",
+      "claude-fable-5",
+    ]);
+    expect(AI_SDK_MODEL_CONFIG.anthropic.supportedModels).toEqual(
+      ANTHROPIC_MODEL_CONFIG.supportedModels,
     );
   });
 
@@ -180,14 +220,16 @@ describe("getContextWindowForModel", () => {
     expect(getContextWindowForModel("claude-opus-4-8")).toBe(1_000_000);
   });
 
-  it("returns 1.05M for GPT-5.x models", () => {
-    expect(getContextWindowForModel("gpt-5.5")).toBe(1_050_000);
-    expect(getContextWindowForModel("gpt-5.4")).toBe(1_050_000);
-    expect(getContextWindowForModel("gpt-5.4-mini")).toBe(400_000);
+  it("returns the documented context windows for GPT-5.6 models", () => {
+    expect(getContextWindowForModel("gpt-5.6-sol")).toBe(1_050_000);
+    expect(getContextWindowForModel("gpt-5.6-terra")).toBe(1_050_000);
+    expect(getContextWindowForModel("gpt-5.6-luna")).toBe(400_000);
     // Builder gateway dashed form
-    expect(getContextWindowForModel("gpt-5-5")).toBe(1_050_000);
-    expect(getContextWindowForModel("gpt-5-4")).toBe(1_050_000);
-    expect(getContextWindowForModel("gpt-5-4-mini")).toBe(400_000);
+    expect(getContextWindowForModel("gpt-5-6-sol")).toBe(1_050_000);
+    expect(getContextWindowForModel("gpt-5-6-terra")).toBe(1_050_000);
+    expect(getContextWindowForModel("gpt-5-6-luna")).toBe(400_000);
+    // OpenRouter advertises Luna with the same 1.05M context as Sol and Terra.
+    expect(getContextWindowForModel("openai/gpt-5.6-luna")).toBe(1_050_000);
   });
 
   it("returns 1M for Gemini 2.x / 3.x models", () => {
@@ -240,16 +282,17 @@ describe("getMaxOutputTokensForModel", () => {
     expect(getMaxOutputTokensForModel("claude-something-new")).toBe(64_000);
   });
 
-  it("returns 128K for GPT-5.x models in all id forms", () => {
-    expect(getMaxOutputTokensForModel("gpt-5.5")).toBe(128_000);
-    expect(getMaxOutputTokensForModel("gpt-5.4")).toBe(128_000);
-    expect(getMaxOutputTokensForModel("gpt-5.4-mini")).toBe(128_000);
+  it("returns 40K for GPT-5.6 models in all id forms", () => {
+    expect(getMaxOutputTokensForModel("gpt-5.6-sol")).toBe(40_000);
+    expect(getMaxOutputTokensForModel("gpt-5.6-terra")).toBe(40_000);
+    expect(getMaxOutputTokensForModel("gpt-5.6-luna")).toBe(40_000);
     // Builder gateway dashed form
-    expect(getMaxOutputTokensForModel("gpt-5-5")).toBe(128_000);
-    expect(getMaxOutputTokensForModel("gpt-5-4")).toBe(128_000);
-    expect(getMaxOutputTokensForModel("gpt-5-4-mini")).toBe(128_000);
+    expect(getMaxOutputTokensForModel("gpt-5-6-sol")).toBe(40_000);
+    expect(getMaxOutputTokensForModel("gpt-5-6-terra")).toBe(40_000);
+    expect(getMaxOutputTokensForModel("gpt-5-6-luna")).toBe(40_000);
     // OpenRouter form
-    expect(getMaxOutputTokensForModel("openai/gpt-5.5")).toBe(128_000);
+    expect(getMaxOutputTokensForModel("openai/gpt-5.6-sol")).toBe(40_000);
+    expect(getMaxOutputTokensForModel("openai/gpt-5.6-luna")).toBe(128_000);
   });
 
   it("uses heuristic fallback for unlisted flagship variants", () => {

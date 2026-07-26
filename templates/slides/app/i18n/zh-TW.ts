@@ -1,4 +1,7 @@
+import { creativeContextMessagesByLocale } from "@agent-native/creative-context/messages";
+
 const messages = {
+  creativeContext: creativeContextMessagesByLocale["zh-TW"],
   root: {
     commandPresentations: "簡報",
     searchDecks: "搜尋幻燈片",
@@ -32,10 +35,9 @@ const messages = {
     workspaceDescription: "管理團隊成員、組織存取權限和共用工作區偏好。",
     openTeamSettings: "開啟團隊設定",
     openResourceSettings: "開啟資源設定",
-    agentTitle: "代理設定",
-    agentDescription:
-      "開啟代理側邊欄設定，管理模型、API 金鑰、自動化、語音和其他代理控制項。",
-    openAgentSettings: "開啟代理設定",
+    agentTitle: "管理代理",
+    agentDescription: "管理代理的模型、API 金鑰、自動化、語音和其他控制項。",
+    openAgentSettings: "管理代理",
   },
   agent: {
     emptyState: "可以詢問我任何關於簡報的問題",
@@ -88,6 +90,8 @@ const messages = {
     googlePickerNeedsKeys:
       "Google Picker 需要 GOOGLE_PICKER_API_KEY 和 GOOGLE_PICKER_APP_ID。",
     imageUploadFailed: "圖片上傳失敗",
+    imageUploadNeedsBuilder:
+      "請從代理編寫器的模型選單連接 Builder.io，以便將圖片上傳到投影片。即使沒有提供者，將圖片拖到空白畫布上仍可傳送給代理。",
     sentToAgent: "已傳送給代理",
     imageUploadGenericError: "上傳這張圖片時發生問題。",
     uploading: "正在上傳…",
@@ -98,6 +102,7 @@ const messages = {
     searchImagesPlaceholder: "搜尋圖片...",
     searchForLogosImagesIcons: "搜尋徽標、圖片、圖示...",
     search: "搜尋",
+    searchFailed: "搜尋失敗",
     logoSearchTitle: "徽標搜尋",
     searchCompanyLogo: "搜尋公司以尋找徽標",
     searchCompanyPlaceholder: "搜尋公司名稱（例如：Intuit）",
@@ -111,6 +116,7 @@ const messages = {
     uploadAttachedFailed: "無法上傳附件。",
     uploadFailed: "上傳失敗",
     doubleClickEdit: "按兩下文字以編輯",
+    dragToMove: "拖曳以移動",
     aiEditing: "AI 正在編輯",
     startTypingCommands: "開始輸入…或輸入 / 使用命令",
     pinDropHint: "點選任意位置以新增評論圖釘",
@@ -196,6 +202,7 @@ const messages = {
     elementAnimations: "元素動畫",
     tweaks: "微調",
     drawOnSlide: "在幻燈片上繪製",
+    addTextBox: "新增文字方塊",
     pinComments: "固定評論",
     pinCommentsDescription:
       "點選幻燈片上的位置來排隊多個編輯，然後一次性傳送。",
@@ -318,6 +325,8 @@ const messages = {
     hideResolved: "隱藏已解決",
     showResolved: "顯示 {{count}} 條已解決",
     noCommentsYet: "還沒有評論",
+    loadFailed: "無法載入評論",
+    retry: "重試",
     clickToAddComment: "點選新增評論",
     selectSlideToAdd: "選取幻燈片以新增評論",
   },
@@ -460,6 +469,8 @@ const messages = {
     backToDecks: "返回幻燈片",
     tryAgain: "重試",
     imageUploadFailed: "圖片上傳失敗",
+    imageUploadNeedsBuilder:
+      "請從代理編寫器的模型選單連接 Builder.io，以便將圖片上傳到投影片。即使沒有提供者，將圖片拖到空白畫布上仍可傳送給代理。",
     imageAdded: "圖片已新增",
     imageUploadError: "上傳此圖片時出了點問題。",
     exportFailed: "匯出失敗",
@@ -522,6 +533,9 @@ const messages = {
     chooseAnotherFile: "選取其他檔案",
   },
   home: {
+    loadFailed: "無法載入內容",
+    loadFailedDescription: "您儲存的內容仍然可用。請檢查連線並重試。",
+    retry: "重試",
     decksTitle: "幻燈片",
     newDeck: "新建幻燈片",
     deckLengthQuestion: "這份幻燈片需要多長？",

@@ -1,4 +1,5 @@
-import { appBasePath, useT } from "@agent-native/core/client";
+import { appBasePath } from "@agent-native/core/client/api-path";
+import { useT } from "@agent-native/core/client/i18n";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router";
@@ -123,19 +124,20 @@ export default function EmbedRoute() {
   });
 
   const recording = dataQ.data?.data?.recording;
+  const comments = dataQ.data?.data?.comments ?? [];
   const transcriptSegments = dataQ.data?.data?.transcript?.segments ?? [];
   const chapters = dataQ.data?.data?.chapters ?? [];
   const ctas = dataQ.data?.data?.ctas ?? [];
   const firstCta = ctas[0] ?? null;
   const isLoomEmbedBacked = isLoomEmbedBackedRecording(recording);
 
+  const [trackedVideoEl, setTrackedVideoEl] = useState<HTMLVideoElement | null>(
+    null,
+  );
+
   const tracking = useViewTracking({
     recordingId: shareId ?? "",
-    videoRef: {
-      get current() {
-        return playerRef.current?.video ?? null;
-      },
-    } as any,
+    videoEl: trackedVideoEl,
     durationMs: recording?.durationMs ?? 0,
     trackOpenWithoutVideo: isLoomEmbedBacked,
   });
@@ -191,6 +193,7 @@ export default function EmbedRoute() {
     <div className="fixed inset-0 h-dvh w-dvw overflow-hidden bg-black">
       <VideoPlayer
         ref={playerRef}
+        onVideoElementChange={setTrackedVideoEl}
         recordingId={recording.id}
         videoUrl={recording.videoUrl}
         videoFormat={recording.videoFormat}
@@ -201,6 +204,7 @@ export default function EmbedRoute() {
         defaultSpeed={parsePlaybackSpeed(recording.defaultSpeed) ?? 1.2}
         autoPlay={autoplay}
         startMs={startMs}
+        comments={comments}
         chapters={chapters}
         transcriptSegments={transcriptSegments}
         cta={firstCta}

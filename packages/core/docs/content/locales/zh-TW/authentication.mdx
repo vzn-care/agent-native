@@ -15,7 +15,7 @@ Auth 是透過 auth 伺服器外掛中的 `autoMountAuth(app)` 自動設定的�
 - **遠端 MCP OAuth：** 適用於 MCP 主機的標準 OAuth 2.1，例如 Claude 程式碼和 ChatGPT 連線器。
 - **自訂：**透過 `getSession` 回調帶來您自己的驗證。
 
-<Diagram id="doc-block-4yfl8j" title={"三種方式，一次會議"} summary={"瀏覽器訪客、程式化 MCP 用戶端和自訂提供者都解析為下游作用域讀取的同一 AuthSession。"}>
+<Diagram id="doc-block-4yfl8j" title={"三種方式，一次會議"} summary={"瀏覽器訪客、MCP 主機和自訂提供者都解析為下游作用域讀取的同一 AuthSession。"}>
 
 ```html
 <div class="auth-modes">
@@ -219,7 +219,7 @@ ACCESS_TOKENS=token1,token2,token3
 每個應用程式的 MCP 端點都可以充當標準受保護的 MCP 資源。支援 OAuth 的用戶端只能設定遠端 MCP URL：
 
 ```text
-https://mail.agent-native.com/_agent-native/mcp
+https://mail.agent-native.com/mcp
 ```
 
 未經驗證的 MCP 請求返回指向 `/.well-known/oauth-protected-resource` 的 `WWW-Authenticate` 質詢。然後，用戶端發現應用程式的 OAuth 中繼資料，動態註冊公開用戶端，開啟應用程式的授權頁面，並與 PKCE 交換授權程式碼以取得存取和重新整理權杖。
@@ -363,8 +363,9 @@ interface AuthSession {
 在用戶端上，使用 `useSession()` 掛鉤：
 
 ```ts
-import { useSession } from "@agent-native/core/client";
-
+import {
+  useSession,
+} from "@agent-native/core/client/hooks"
 function MyComponent() {
   const { session, isLoading } = useSession();
   if (isLoading) return <p>Loading...</p>;
@@ -381,7 +382,7 @@ function MyComponent() {
 /_agent-native/sign-in?return=<same-origin-path>
 ```
 
-當匿名檢視者點選此 URL 時，將提供框架的登入頁面。成功登入（任何流程 - 權杖、電子郵件/密碼或 GoogleOAuth）後，檢視者將 302 轉至 `return`。
+當匿名檢視者點選此 URL 時，將提供框架的登入頁面。成功登入（任何流程 - 權杖、電子郵件/密碼或 GoogleOAuth）後，瀏覽器會返回 `return`。
 
 `return` 參數被驗證為**同來源路徑**。網路路徑引用 (`//evil.com/...`)、絕對 URL、`data:` / `javascript:` 方案和嵌入式控制字符都回退到 `/`。驗證的路徑是從 URL 解析器重建的，而不是從輸入中回顯。
 
@@ -402,7 +403,9 @@ function SignInCta() {
 
 ### 已新增書簽的私人路徑
 
-當匿名使用者直接導覽到 `/dashboard` 等私人路徑時，框架已經在該 URL 處提供登入頁面 - 成功登入後，頁面重新載入並且使用者登陸 `/dashboard`。無需特殊處理；這適用於權杖、電子郵件/密碼、**和** GoogleOAuth。
+一般應用程式頁面會為所有訪客使用同一個非個人化、可公開快取的 SSR 外殼。`AppProviders` 會在用戶端檢查工作階段；造訪 `/dashboard` 等私人路徑時，它會在掛載私人應用程式介面之前將匿名訪客重新導向至 `/_agent-native/sign-in?return=%2Fdashboard`。登入後，訪客會返回 `/dashboard`。公開或 SEO 路由請使用 `isPublicPath`；透過 MCP 內嵌權杖等其他受限機制驗證的介面請使用 `sessionBypass`。
+
+此外殼的快取時長是一個部署範圍的設定——關於 `AGENT_NATIVE_SSR_CACHE`，參見 [SSR Caching](/docs/deployment#ssr-caching)。縮短或停用快取只會改變時長；SSR 仍會在剝離 cookie 後渲染匿名分支。
 
 ### 幕後花絮：GoogleOAuth
 

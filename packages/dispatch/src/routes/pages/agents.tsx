@@ -1,18 +1,21 @@
 import {
-  agentNativePath,
   useActionMutation,
   useActionQuery,
-  useT,
-} from "@agent-native/core/client";
+} from "@agent-native/core/client/hooks";
+import { useT } from "@agent-native/core/client/i18n";
 import { IconCheck, IconCopy, IconPlugConnected } from "@tabler/icons-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import { AgentsPanel, type ConnectedAgent } from "@/components/agents-panel";
-import { DispatchShell } from "@/components/dispatch-shell";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
+import { ActionQueryError } from "../../components/action-query-error";
+import {
+  AgentsPanel,
+  type ConnectedAgent,
+} from "../../components/agents-panel";
+import { DispatchShell } from "../../components/dispatch-shell";
+import { Button } from "../../components/ui/button";
+import { Input } from "../../components/ui/input";
+import { Switch } from "../../components/ui/switch";
 
 export function meta() {
   return [{ title: "Agents — Dispatch" }];
@@ -35,14 +38,17 @@ interface McpAccessState {
 }
 
 function dispatchMcpUrl(): string {
-  const path = agentNativePath("/_agent-native/mcp");
+  const path = "/mcp";
   if (typeof window === "undefined") return path;
   return new URL(path, window.location.origin).href;
 }
 
 function DispatchMcpAccessPanel() {
   const t = useT();
-  const { data, isLoading } = useActionQuery("list-mcp-app-access", {});
+  const { data, isLoading, isError, error, refetch } = useActionQuery(
+    "list-mcp-app-access",
+    {},
+  );
   const [optimistic, setOptimistic] = useState<McpAccessState | null>(null);
   const saveAccess = useActionMutation("set-mcp-app-access", {
     onSuccess: () => {
@@ -75,10 +81,6 @@ function DispatchMcpAccessPanel() {
   const mcpUrl = dispatchMcpUrl();
 
   function persist(next: McpAccessState) {
-    if (next.mode === "selected-apps" && next.selectedAppIds.length === 0) {
-      toast.error(t("dispatch.pages.selectAppForMcp"));
-      return;
-    }
     setOptimistic(next);
     saveAccess.mutate(next);
   }
@@ -100,7 +102,7 @@ function DispatchMcpAccessPanel() {
   }
 
   return (
-    <section className="rounded-2xl border bg-card p-5">
+    <section className="rounded-2xl bg-card p-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-medium text-foreground">
@@ -150,7 +152,13 @@ function DispatchMcpAccessPanel() {
         </Button>
       </div>
 
-      {access.mode === "selected-apps" ? (
+      {isError ? (
+        <ActionQueryError
+          className="mt-4"
+          error={error}
+          onRetry={() => void refetch()}
+        />
+      ) : access.mode === "selected-apps" ? (
         <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
           {apps.map((app) => {
             const isSelected = selected.has(app.id);
@@ -194,7 +202,7 @@ function DispatchMcpAccessPanel() {
 
 export default function AgentsRoute() {
   const t = useT();
-  const { data, refetch } = useActionQuery("list-connected-agents", {});
+  const agentsQuery = useActionQuery("list-connected-agents", {});
 
   return (
     <DispatchShell
@@ -203,10 +211,17 @@ export default function AgentsRoute() {
     >
       <div className="space-y-4">
         <DispatchMcpAccessPanel />
-        <AgentsPanel
-          agents={(data || []) as ConnectedAgent[]}
-          onRefresh={refetch}
-        />
+        {agentsQuery.isError ? (
+          <ActionQueryError
+            error={agentsQuery.error}
+            onRetry={() => void agentsQuery.refetch()}
+          />
+        ) : (
+          <AgentsPanel
+            agents={(agentsQuery.data || []) as ConnectedAgent[]}
+            onRefresh={agentsQuery.refetch}
+          />
+        )}
       </div>
     </DispatchShell>
   );

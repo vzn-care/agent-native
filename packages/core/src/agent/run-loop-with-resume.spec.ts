@@ -90,6 +90,17 @@ describe("isResumableEngineError", () => {
     }
   });
 
+  it("recognizes Anthropic bare 'Connection error.' as resumable", () => {
+    expect(isResumableEngineError(new Error("Connection error."))).toBe(true);
+    expect(
+      isResumableEngineError(
+        new EngineError("Connection error.", {
+          errorCode: "provider_network_error",
+        }),
+      ),
+    ).toBe(true);
+  });
+
   it("recognizes raw transport errors by message", () => {
     const cases = [
       "socket hang up",
@@ -202,12 +213,14 @@ describe("runAgentLoopDirectWithSoftTimeout", () => {
 
   it("resumes on builder_gateway_timeout and runs another LLM call", async () => {
     let attempts = 0;
+    const seenRequestTexts: Array<string | undefined> = [];
     const messages: EngineMessage[] = [
       { role: "user", content: [{ type: "text", text: "go" }] },
     ];
 
-    mockRunAgentLoop.mockImplementation(async () => {
+    mockRunAgentLoop.mockImplementation(async (opts) => {
       attempts++;
+      seenRequestTexts.push(opts.finalResponseGuardRequestText);
       if (attempts === 1) {
         throw new EngineError("Builder gateway timed out after 45s", {
           errorCode: "builder_gateway_timeout",
@@ -228,6 +241,7 @@ describe("runAgentLoopDirectWithSoftTimeout", () => {
     );
 
     expect(attempts).toBe(2);
+    expect(seenRequestTexts).toEqual(["go", "go"]);
     expect(usage.inputTokens).toBe(100);
     expect(usage.outputTokens).toBe(50);
 
@@ -404,6 +418,77 @@ describe("runAgentLoopDirectWithSoftTimeout", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("stops early instead of gambling a 2nd in-process round past the elapsed budget", async () => {
+    // A hosted A2A/MCP call is one serverless invocation; timeoutMs is sized
+    // to survive ONCE. If round 1 genuinely consumes the whole window, round
+    // 2 must not get a fresh full window on top of it — it must see there's
+    // no safe budget left and give up cleanly instead of risking a platform
+    // hard-kill mid-stream. Round 1 uses the full budget (matches prior
+    // behavior); a would-be round 2 is skipped because 10_000 - 10_000 = 0 <
+    // SELF_CHAIN_MIN_CONTINUATION_BUDGET_MS (8_000).
+    vi.useFakeTimers();
+    try {
+      const sentEvents: AgentChatEvent[] = [];
+      let attempts = 0;
+      mockRunAgentLoop.mockImplementation(async (opts) => {
+        attempts++;
+        return new Promise((resolve) => {
+          opts.signal.addEventListener("abort", () =>
+            resolve({
+              inputTokens: 0,
+              outputTokens: 0,
+              cacheReadTokens: 0,
+              cacheWriteTokens: 0,
+              model: "test-model",
+            }),
+          );
+        });
+      });
+
+      const usagePromise = runAgentLoopDirectWithSoftTimeout(
+        makeOpts(
+          [{ role: "user", content: [{ type: "text", text: "go" }] }],
+          new AbortController().signal,
+          (event) => sentEvents.push(event),
+        ),
+        10_000,
+      );
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await usagePromise;
+
+      expect(attempts).toBe(1);
+      const terminal = sentEvents.find((e) => e.type === "error");
+      expect(terminal).toMatchObject({
+        type: "error",
+        errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still allows the full MAX_RUN_LOOP_CONTINUATIONS rounds when rounds finish fast (plenty of budget left each time)", async () => {
+    // The common real-world case: most rounds finish well under the soft
+    // timeout, so cumulative elapsed time stays low and every attempt keeps
+    // its full per-round budget — unchanged from before this fix.
+    let attempts = 0;
+    mockRunAgentLoop.mockImplementation(async () => {
+      attempts++;
+      throw new Error("socket hang up");
+    });
+
+    await runAgentLoopDirectWithSoftTimeout(
+      makeOpts(
+        [{ role: "user", content: [{ type: "text", text: "go" }] }],
+        new AbortController().signal,
+      ),
+      60_000,
+    );
+
+    expect(attempts).toBe(MAX_RUN_LOOP_CONTINUATIONS);
   });
 
   it("resumes on raw socket-hang-up errors with a network_interrupted nudge", async () => {

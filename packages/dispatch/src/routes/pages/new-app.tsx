@@ -1,6 +1,7 @@
-import { NewWorkspaceAppFlow, useT } from "@agent-native/core/client";
+import { useT } from "@agent-native/core/client/i18n";
+import { NewWorkspaceAppFlow } from "@agent-native/core/client/ui";
 
-import { DispatchShell } from "@/components/dispatch-shell";
+import { DispatchShell } from "../../components/dispatch-shell";
 
 export function meta() {
   return [{ title: "New App — Dispatch" }];

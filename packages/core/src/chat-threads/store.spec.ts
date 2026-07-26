@@ -5,6 +5,7 @@ const emitChatThreadChangeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../db/client.js", () => ({
   getDbExec: () => ({ execute: executeMock }),
+  getDialect: () => "sqlite",
   intType: () => "INTEGER",
   isPostgres: () => false,
 }));
@@ -17,6 +18,7 @@ import {
   createThreadShareLink,
   forkThread,
   getThreadByShareToken,
+  grantThreadUserShare,
   listThreads,
   renameThread,
   revokeThreadShareLink,
@@ -42,6 +44,8 @@ type ChatThreadRow = {
   pinned_at?: number | null;
   archived_at?: number | null;
   share_token_hash?: string | null;
+  org_id?: string | null;
+  visibility?: "private" | "org" | "public";
 };
 
 const userMessage = {
@@ -62,6 +66,14 @@ describe("chat thread store", () => {
   let row: ChatThreadRow | null;
   let conflictOnce: (() => void) | null;
   let conflictEveryThreadDataUpdate: boolean;
+  let transientThreadDataUpdateFailures: number;
+  let shareRows: Array<{
+    id: string;
+    resource_id: string;
+    principal_id: string;
+    role: string;
+    created_by: string;
+  }>;
 
   beforeEach(() => {
     row = {
@@ -76,6 +88,8 @@ describe("chat thread store", () => {
     };
     conflictOnce = null;
     conflictEveryThreadDataUpdate = false;
+    transientThreadDataUpdateFailures = 0;
+    shareRows = [];
     executeMock.mockReset();
     emitChatThreadChangeMock.mockReset();
     executeMock.mockImplementation(async (query: string | any) => {
@@ -115,6 +129,10 @@ describe("chat thread store", () => {
         };
       }
       if (/UPDATE chat_threads SET thread_data/i.test(sql)) {
+        if (transientThreadDataUpdateFailures > 0) {
+          transientThreadDataUpdateFailures -= 1;
+          throw new Error("temporary database unavailable");
+        }
         if (conflictOnce) {
           const applyConflict = conflictOnce;
           conflictOnce = null;
@@ -158,8 +176,88 @@ describe("chat thread store", () => {
         row = { ...row, archived_at: args[0] };
         return { rows: [], rowsAffected: 1 };
       }
+      if (/SELECT id, role FROM chat_thread_shares/i.test(sql)) {
+        return {
+          rows: shareRows.filter(
+            (share) =>
+              share.resource_id === args[0] &&
+              share.principal_id.toLowerCase() === args[1],
+          ),
+          rowsAffected: 0,
+        };
+      }
+      if (/UPDATE chat_thread_shares SET role/i.test(sql)) {
+        shareRows = shareRows.map((share) =>
+          share.id === args[1] ? { ...share, role: args[0] } : share,
+        );
+        return { rows: [], rowsAffected: 1 };
+      }
+      if (/INSERT INTO chat_thread_shares/i.test(sql)) {
+        shareRows.push({
+          id: args[0],
+          resource_id: args[1],
+          principal_id: args[2],
+          role: args[3],
+          created_by: args[4],
+        });
+        return { rows: [], rowsAffected: 1 };
+      }
       throw new Error(`Unexpected SQL: ${sql}`);
     });
+  });
+
+  it("grants a non-owner an explicit share so integration deep links resolve", async () => {
+    await grantThreadUserShare(
+      "thread-1",
+      "  Brent@Example.com ",
+      "editor",
+      "integration@slack",
+    );
+
+    expect(shareRows).toEqual([
+      expect.objectContaining({
+        resource_id: "thread-1",
+        principal_id: "brent@example.com",
+        role: "editor",
+        created_by: "integration@slack",
+      }),
+    ]);
+  });
+
+  it("is idempotent and never downgrades an existing stronger role", async () => {
+    await grantThreadUserShare(
+      "thread-1",
+      "brent@example.com",
+      "admin",
+      "integration@slack",
+    );
+    await grantThreadUserShare(
+      "thread-1",
+      "brent@example.com",
+      "editor",
+      "integration@slack",
+    );
+
+    expect(shareRows).toHaveLength(1);
+    expect(shareRows[0].role).toBe("admin");
+  });
+
+  it("upgrades a weaker existing role instead of inserting a duplicate", async () => {
+    await grantThreadUserShare(
+      "thread-1",
+      "brent@example.com",
+      "viewer",
+      "integration@slack",
+    );
+    await grantThreadUserShare(
+      "thread-1",
+      "brent@example.com",
+      "editor",
+      "integration@slack",
+    );
+
+    expect(shareRows).toHaveLength(1);
+    expect(shareRows[0].role).toBe("editor");
   });
 
   it("retries cross-process thread-data conflicts and preserves server-only messages", async () => {
@@ -210,6 +308,23 @@ describe("chat thread store", () => {
       "Failed to update chat thread thread-1 after concurrent write conflicts.",
     );
     expect(emitChatThreadChangeMock).not.toHaveBeenCalled();
+  });
+
+  it("retries transient thread-data write failures before surfacing an error", async () => {
+    transientThreadDataUpdateFailures = 2;
+
+    await updateThreadData(
+      "thread-1",
+      JSON.stringify({ messages: [userMessage, assistantMessage] }),
+      "Thread",
+      "Done.",
+      2,
+      { maxAttempts: 3 },
+    );
+
+    expect(JSON.parse(row!.thread_data).messages).toHaveLength(2);
+    expect(row!.message_count).toBe(2);
+    expect(emitChatThreadChangeMock).toHaveBeenCalledWith("thread-1");
   });
 
   it("can ignore exhausted conflicts for best-effort client saves", async () => {
@@ -373,7 +488,7 @@ describe("chat thread store", () => {
     expect(searchCall).toBeTruthy();
     const query = searchCall![0] as { sql: string; args: unknown[] };
     expect(query.sql).toContain("LIKE ? ESCAPE '!'");
-    expect(query.args.slice(1, 4)).toEqual([
+    expect(query.args.slice(2, 5)).toEqual([
       "%100!%!_done%",
       "%100!%!_done%",
       "%100!%!_done%",
@@ -423,8 +538,104 @@ describe("chat thread store", () => {
     // ...and the "has messages" filter is the maintained column, no LIKE scan.
     expect(sql).toContain("message_count > 0");
     expect(sql).not.toMatch(/thread_data LIKE/i);
+    expect(sql).toContain("chat_thread_shares");
     expect(result.map((t) => t.id)).toEqual(["thread-1"]);
     expect(result[0].messageCount).toBe(1);
+  });
+
+  it("excludes archived threads from list/search by default, includes them via includeArchived, and restores them on unarchive", async () => {
+    const activeRow: ChatThreadRow = {
+      id: "thread-active",
+      owner_email: "user@example.com",
+      title: "Active Thread",
+      preview: "hello there",
+      thread_data: "{}",
+      message_count: 1,
+      created_at: 1,
+      updated_at: 2,
+      scope_type: null,
+      scope_id: null,
+      scope_label: null,
+      pinned_at: null,
+      archived_at: null,
+    };
+    const archivedRow: ChatThreadRow = {
+      ...activeRow,
+      id: "thread-archived",
+      title: "Archived Thread",
+      archived_at: 5,
+    };
+    const rowsById = new Map<string, ChatThreadRow>([
+      [activeRow.id, activeRow],
+      [archivedRow.id, archivedRow],
+    ]);
+
+    executeMock.mockImplementation(async (query: string | any) => {
+      const sql = typeof query === "string" ? query : query.sql;
+      const args = typeof query === "string" ? [] : query.args;
+      if (/CREATE TABLE/i.test(sql) || /CREATE INDEX/i.test(sql)) {
+        return { rows: [], rowsAffected: 0 };
+      }
+      if (/SELECT id, thread_data, message_count/i.test(sql)) {
+        return { rows: [], rowsAffected: 0 };
+      }
+      if (/UPDATE chat_threads SET archived_at/i.test(sql)) {
+        const target = rowsById.get(args[1] as string);
+        if (!target) return { rows: [], rowsAffected: 0 };
+        target.archived_at = args[0] as number | null;
+        return { rows: [], rowsAffected: 1 };
+      }
+      if (/SELECT .* FROM chat_threads WHERE/i.test(sql)) {
+        const all = Array.from(rowsById.values());
+        const filtered = /archived_at IS NULL/i.test(sql)
+          ? all.filter((r) => r.archived_at == null)
+          : all;
+        return { rows: filtered, rowsAffected: 0 };
+      }
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+
+    // Default: archived thread is hidden from listThreads.
+    const defaultList = await listThreads("user@example.com", { limit: 10 });
+    expect(defaultList.map((t) => t.id)).toEqual(["thread-active"]);
+
+    // includeArchived: true surfaces it again.
+    const listWithArchived = await listThreads("user@example.com", {
+      limit: 10,
+      includeArchived: true,
+    });
+    expect(listWithArchived.map((t) => t.id).sort()).toEqual([
+      "thread-active",
+      "thread-archived",
+    ]);
+
+    // Default: archived thread is hidden from searchThreads.
+    const defaultSearch = await searchThreads("user@example.com", "Thread");
+    expect(defaultSearch.map((t) => t.id)).toEqual(["thread-active"]);
+
+    // includeArchived: true surfaces it in search too.
+    const searchWithArchived = await searchThreads(
+      "user@example.com",
+      "Thread",
+      50,
+      { includeArchived: true },
+    );
+    expect(searchWithArchived.map((t) => t.id).sort()).toEqual([
+      "thread-active",
+      "thread-archived",
+    ]);
+
+    // Unarchiving restores the thread to the default list.
+    const unarchived = await setThreadArchived("thread-archived", false);
+    expect(unarchived).toBe(true);
+    expect(archivedRow.archived_at).toBeNull();
+    const afterUnarchive = await listThreads("user@example.com", {
+      limit: 10,
+    });
+    expect(afterUnarchive.map((t) => t.id).sort()).toEqual([
+      "thread-active",
+      "thread-archived",
+    ]);
   });
 
   it("backfills message_count for legacy rows so they stay in the list", async () => {
@@ -514,7 +725,7 @@ describe("chat thread store", () => {
         return { rows: found ? [found] : [], rowsAffected: 0 };
       }
       if (/INSERT INTO chat_threads/i.test(sql)) {
-        if (args.length === 8) {
+        if (args.length === 9) {
           rows.set(args[0], {
             id: args[0],
             owner_email: args[1],
@@ -527,6 +738,8 @@ describe("chat thread store", () => {
             scope_type: args[5],
             scope_id: args[6],
             scope_label: args[7],
+            org_id: args[8],
+            visibility: "private",
           });
           return { rows: [], rowsAffected: 1 };
         }
@@ -542,6 +755,8 @@ describe("chat thread store", () => {
           scope_type: args[8],
           scope_id: args[9],
           scope_label: args[10],
+          org_id: args[11],
+          visibility: "private",
         });
         return { rows: [], rowsAffected: 1 };
       }
@@ -660,6 +875,8 @@ describe("chat thread store", () => {
           scope_type: args[8],
           scope_id: args[9],
           scope_label: args[10],
+          org_id: args[11],
+          visibility: "private",
         });
         return { rows: [], rowsAffected: 1 };
       }
@@ -739,6 +956,8 @@ describe("chat thread store", () => {
           scope_type: args[8],
           scope_id: args[9],
           scope_label: args[10],
+          org_id: args[11],
+          visibility: "private",
         });
         return { rows: [], rowsAffected: 1 };
       }

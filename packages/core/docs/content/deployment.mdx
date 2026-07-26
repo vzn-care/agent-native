@@ -233,7 +233,7 @@ receives upstream security updates.
 
 ### Docker {#docker}
 
-```dockerfile
+```dockerfile filename="Dockerfile"
 FROM node:24-slim AS build
 WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
@@ -273,7 +273,7 @@ node .output/server/index.mjs
 A reusable workspace Dockerfile can take the app name and path prefix as build
 arguments:
 
-```dockerfile maxLines=12
+```dockerfile filename="Dockerfile.workspace-app" maxLines=12
 FROM node:24-slim AS build
 WORKDIR /workspace
 RUN corepack enable
@@ -303,7 +303,7 @@ Then compose Postgres, the app containers, and your proxy. This example uses
 Caddy because it can terminate HTTP locally or sit behind Cloudflare's SSL
 proxy, but the important part is the path-prefix routing:
 
-```yaml maxLines=30
+```yaml filename="docker-compose.yml" maxLines=30
 services:
   postgres:
     image: postgres:17
@@ -365,7 +365,7 @@ volumes:
   postgres-data:
 ```
 
-```caddyfile
+```caddyfile filename="Caddyfile"
 agents.example.com {
   reverse_proxy /mail* mail:3000
   reverse_proxy /calendar* calendar:3000
@@ -387,8 +387,7 @@ Notes for this shape:
 
 ## Vercel {#vercel}
 
-```ts
-// vite.config.ts
+```ts filename="vite.config.ts"
 export default defineConfig({
   plugins: [agentNative({ nitro: { preset: "vercel" } })],
 });
@@ -418,8 +417,7 @@ The workspace build copies each app's Nitro `vercel` output into the root `.verc
 
 The Nitro `netlify` preset works well and, in practice, has given us much faster cold starts than Cloudflare Pages (~200ms TTFB vs ~9s) for templates that talk to external Postgres (Neon). Either set the preset in `vite.config.ts`:
 
-```ts
-// vite.config.ts
+```ts filename="vite.config.ts"
 export default defineConfig({
   plugins: [agentNative({ nitro: { preset: "netlify" } })],
 });
@@ -437,8 +435,7 @@ The workspace build writes static assets under `dist/_workspace_static/` and rou
 
 ## Cloudflare Pages {#cloudflare-pages}
 
-```ts
-// vite.config.ts
+```ts filename="vite.config.ts"
 export default defineConfig({
   plugins: [agentNative({ nitro: { preset: "cloudflare_pages" } })],
 });
@@ -446,8 +443,7 @@ export default defineConfig({
 
 ## AWS Lambda {#aws-lambda}
 
-```ts
-// vite.config.ts
+```ts filename="vite.config.ts"
 export default defineConfig({
   plugins: [agentNative({ nitro: { preset: "aws_lambda" } })],
 });
@@ -455,23 +451,61 @@ export default defineConfig({
 
 ## Deno Deploy {#deno-deploy}
 
-```ts
-// vite.config.ts
+```ts filename="vite.config.ts"
 export default defineConfig({
   plugins: [agentNative({ nitro: { preset: "deno_deploy" } })],
 });
 ```
 
+## SSR Caching {#ssr-caching}
+
+Every SSR HTML response and every React Router `.data` response is one impersonal, public shell: `createH3SSRHandler` strips cookies before rendering, so the same bytes are correct for every visitor and all personalization happens on the client after load. That is what makes it safe to stamp a single hard-cache policy on those responses by default:
+
+```txt
+cache-control: public, max-age=600, stale-while-revalidate=604800, stale-if-error=3600
+```
+
+The same value is mirrored onto `cdn-cache-control` and `netlify-cdn-cache-control`. One shared CDN entry then serves the whole site instead of a per-request render, which is the single biggest lever on first-response latency — leave it on unless one of the cases below applies to your deployment.
+
+### Overriding with `AGENT_NATIVE_SSR_CACHE` {#ssr-cache-env}
+
+Set `AGENT_NATIVE_SSR_CACHE` in the deploy environment to change the policy for the whole deployment:
+
+| Value                                               | Result                                                                               |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| unset, `on`, `default`, `true`, `1`                 | The default policy above, unchanged. Recommended — best performance.                 |
+| `off`, `false`, `0`, `none`, `no-store`, `disabled` | `no-store` on `cache-control`, `cdn-cache-control`, and `netlify-cdn-cache-control`. |
+| A duration: `30`, `30s`, `5m`, `2h`                 | `public, max-age=<n>, stale-while-revalidate=<n>, stale-if-error=3600`.              |
+
+Bare numbers are seconds. `stale-while-revalidate` deliberately mirrors `max-age` for a custom duration: a short freshness window paired with the default seven-day stale window would hand back exactly the staleness you opted out of. An unrecognized value logs a warning and falls back to the default, so a typo can never silently disable the CDN.
+
+Turn it down or off when either of these is true:
+
+1. **Your host does not purge its CDN on deploy.** Netlify and Vercel do; some self-managed setups do not. Without a purge, a shipped build can keep serving the previous shell for `max-age` plus `stale-while-revalidate`.
+2. **Your loaders return mutable public data.** After a successful mutation, a `useRevalidator()` or redirect-after-action re-fetch can read the browser's cached `.data` copy instead of fresh loader output.
+
+The setting applies to every public-shell surface: React Router SSR HTML and `.data`, the login HTML shell, the `/_agent-native/speculation-rules.json` route, the docs site, and the public-form SSR in the forms template. The generated Cloudflare Worker resolves it at build time, so set it in the deploy environment before the build runs.
+
+Three things to keep in mind:
+
+- **Turning caching off does not make SSR personalized.** Cookies are still stripped before render and SSR loaders still see the anonymous branch. Per-user data must still be resolved client-side. This variable controls cache _duration_ only.
+- **It is deployment-wide, not per-route, by design.** A per-route or per-request cache override is how one visitor's payload ends up in another visitor's shared CDN entry, so the framework does not offer one — `guard:ssr-cache-shell` enforces it.
+- **For mutation-fresh data, prefer actions over disabling the cache.** App data belongs in [actions](/docs/actions), read from the client with `useActionQuery` / `useActionMutation` and kept live by `useDbSync()` polling; none of that goes through the SSR shell cache. Keep SSR loaders rendering the public shell, and reach for this variable only when you genuinely want loader data fresher.
+
 ## Environment Variables {#environment-variables}
 
 ### Build / Runtime {#env-runtime}
 
-| Variable                    | Description                                                                                                                                       |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PORT`                      | Server port (Node.js only)                                                                                                                        |
-| `NITRO_PRESET`              | Override build preset at build time                                                                                                               |
-| `APP_BASE_PATH`             | Mount the app under a prefix (e.g. `/mail`). Set automatically by `npx @agent-native/core@latest deploy`; leave unset for standalone.             |
-| `AGENT_PROD_CODE_EXECUTION` | Optional production code-execution mode: `off` (default), `sandboxed`, or `trusted`. See [Production Code Execution](#production-code-execution). |
+| Variable                                    | Description                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`                                      | Server port (Node.js only)                                                                                                                                                                                                                                                                                                                                              |
+| `NITRO_PRESET`                              | Override build preset at build time                                                                                                                                                                                                                                                                                                                                     |
+| `APP_BASE_PATH`                             | Mount the app under a prefix (e.g. `/mail`). Set automatically by `npx @agent-native/core@latest deploy`; leave unset for standalone.                                                                                                                                                                                                                                   |
+| `APP_URL`                                   | Optional canonical public origin. Checked ahead of `BETTER_AUTH_URL` when resolving the A2A JWT audience, the OAuth public origin, self-dispatch webhook targets, and generated resource links. Set it explicitly on preview/staging deploys where the request host is unreliable.                                                                                      |
+| `AGENT_PROD_CODE_EXECUTION`                 | Optional production code-execution mode: `off` (default), `sandboxed`, or `trusted`. See [Production Code Execution](#production-code-execution).                                                                                                                                                                                                                       |
+| `AGENT_NATIVE_SSR_CACHE`                    | Deployment-wide SSR shell cache policy: unset/`on` keeps the default hard-cache, `off` sends `no-store`, or a duration such as `30s` / `5m` sets a shorter freshness. See [SSR Caching](#ssr-caching).                                                                                                                                                                  |
+| `AGENT_NATIVE_BUILDER_RELAY_SECRET`         | Dedicated 32+ char shared HMAC secret for preview-safe Builder authorization relay. Set the same value on the approved corporate callback deployment and preview deployments only when authorization must land in an isolated preview database.                                                                                                                         |
+| `AGENT_NATIVE_BUILDER_RELAY_TARGET_ORIGINS` | Corporate callback-only, comma-separated allowlist of exact trusted preview origins (for example, `https://0123456789abcdef01234567--content.netlify.app`). Set it only on the corporate callback deployment. Netlify origins must use an immutable, deploy-specific 24-hex permalink; mutable `deploy-preview-*` aliases, wildcards, and domain suffixes are rejected. |
 
 Database connection variables (`DATABASE_URL`, `DATABASE_AUTH_TOKEN`, per-app `<APP_NAME>_DATABASE_URL`) live in [Database](/docs/database#production).
 
@@ -506,7 +540,7 @@ Inside a workspace, the root `.env` is loaded into every app automatically, so s
 
 ### Generating Strong Secrets {#env-generate-secrets}
 
-For any secret marked "32+ char random" (`BETTER_AUTH_SECRET`, `OAUTH_STATE_SECRET`, `A2A_SECRET`, `SECRETS_ENCRYPTION_KEY`), generate fresh values with:
+For any secret marked "32+ char random" (`BETTER_AUTH_SECRET`, `OAUTH_STATE_SECRET`, `A2A_SECRET`, `SECRETS_ENCRYPTION_KEY`, `AGENT_NATIVE_BUILDER_RELAY_SECRET`), generate fresh values with:
 
 ```bash
 openssl rand -hex 32
@@ -521,8 +555,7 @@ the agent chat plugin. SQL inspection is enabled by default, while database
 writes go through typed app actions unless the app explicitly opts into raw
 write tools:
 
-```ts
-// server/plugins/agent-chat.ts
+```ts filename="server/plugins/agent-chat.ts"
 export default createAgentChatPlugin({
   // Default: "read"
   databaseTools: "read", // "write" | "read" | "off"
@@ -547,8 +580,7 @@ By default, production agents run without code-execution tools. They can call ap
 
 Node-compatible deployments can opt into production code execution through the agent chat plugin or an environment override:
 
-```ts
-// server/plugins/agent-chat.ts
+```ts filename="server/plugins/agent-chat.ts"
 export default createAgentChatPlugin({
   codeExecution: { production: "sandboxed" },
 });
@@ -572,7 +604,7 @@ In a standard production deployment with [production code execution](#production
 
 ### Builder.io: Visual Editing in Production {#builderio}
 
-[Builder.io](https://www.builder.io) solves this by providing a managed cloud environment where the agent retains the ability to modify your app's UI in production. Connect your repo to Builder.io and prompt for UI changes directly — no redeploy needed.
+[Builder.io](https://www.builder.io?utm_source=agent-native&utm_medium=docs&utm_campaign=framework&utm_content=deployment) solves this by providing a managed cloud environment where the agent retains the ability to modify your app's UI in production. Connect your repo to Builder.io and prompt for UI changes directly — no redeploy needed.
 
 **How it works:**
 
@@ -586,3 +618,12 @@ See [Frames](/docs/frames) for more on the embedded agent panel vs. cloud frame 
 ## Multi-instance deploys {#multi-instance}
 
 Agent-native apps store all state in SQL via Drizzle and sync the UI via [polling](/docs/key-concepts#polling-sync) against the database — no file-system state, no sticky sessions, no in-memory caches. That means multi-instance and serverless deployments work out of the box: point every instance at the same `DATABASE_URL` and they converge automatically. See [Key Concepts — Data in SQL](/docs/key-concepts#data-in-sql) and [Portability](/docs/key-concepts#hosting-agnostic).
+
+## What's next
+
+- [**Database**](/docs/database#production) — pick a persistent SQL backend before your first production deploy
+- [**Security**](/docs/security) — the production checklist and opt-in flags referenced throughout this page
+- [**Authentication**](/docs/authentication) — OAuth credentials and env vars for the auth mode you choose
+- [**Multi-App Workspace**](/docs/multi-app-workspace) — the workspace model behind `deploy`'s one-origin build
+- [**Frames**](/docs/frames) — the embedded agent panel vs. Builder.io's cloud frame for production UI edits
+- [**Public Agent Web**](/docs/agent-web-surfaces) — the `robots.txt`, `llms.txt`, and markdown-mirror files a Vite build writes into the deploy output for public routes

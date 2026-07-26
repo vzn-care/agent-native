@@ -83,6 +83,17 @@
   let bubbleDragLayer: HTMLDivElement | null = null;
   let bubblePersistTimer: ReturnType<typeof setTimeout> | undefined;
 
+  // The quick-actions toolbar is also draggable. Keep its geometry in the
+  // content script because the iframe cannot position itself on the host page.
+  const TOOLBAR_WIDTH = 68;
+  const TOOLBAR_COLLAPSED_HEIGHT = 154;
+  const toolbarGeom: { left: number | null; top: number | null } = {
+    left: null,
+    top: null,
+  };
+  let toolbarDragLayer: HTMLDivElement | null = null;
+  let toolbarPersistTimer: ReturnType<typeof setTimeout> | undefined;
+
   function bubbleSizePx(): number {
     return BUBBLE_SIZES[bubbleGeom.size] ?? BUBBLE_SIZES.lg;
   }
@@ -128,6 +139,92 @@
         /* ignore */
       }
     }, 200);
+  }
+
+  function clampToolbar(
+    left: number,
+    top: number,
+    height: number,
+  ): { left: number; top: number } {
+    return {
+      left: Math.max(8, Math.min(left, window.innerWidth - TOOLBAR_WIDTH - 8)),
+      top: Math.max(8, Math.min(top, window.innerHeight - height - 8)),
+    };
+  }
+
+  function applyToolbarGeom(): void {
+    const frame = document.getElementById(
+      partFrameId("toolbar"),
+    ) as HTMLIFrameElement | null;
+    if (!frame) return;
+    const height =
+      frame.getBoundingClientRect().height || TOOLBAR_COLLAPSED_HEIGHT;
+    const base = clampToolbar(
+      toolbarGeom.left ?? 16,
+      toolbarGeom.top ?? window.innerHeight / 2 - TOOLBAR_COLLAPSED_HEIGHT / 2,
+      height,
+    );
+    Object.assign(frame.style, {
+      left: `${base.left}px`,
+      top: `${base.top}px`,
+      right: "auto",
+    });
+  }
+
+  function persistToolbarGeom(): void {
+    clearTimeout(toolbarPersistTimer);
+    toolbarPersistTimer = setTimeout(() => {
+      try {
+        chrome.storage.local.set({ toolbarGeom });
+      } catch {
+        /* ignore */
+      }
+    }, 200);
+  }
+
+  function startToolbarDrag(): void {
+    if (toolbarDragLayer) return;
+    const frame = document.getElementById(
+      partFrameId("toolbar"),
+    ) as HTMLIFrameElement | null;
+    if (!frame) return;
+
+    const layer = document.createElement("div");
+    Object.assign(layer.style, {
+      position: "fixed",
+      inset: "0",
+      zIndex: "2147483647",
+      cursor: "grabbing",
+    });
+    (document.documentElement || document.body).appendChild(layer);
+    toolbarDragLayer = layer;
+
+    const onMove = (e: PointerEvent): void => {
+      const rect = frame.getBoundingClientRect();
+      const next = clampToolbar(
+        rect.left + e.movementX,
+        rect.top + e.movementY,
+        rect.height || TOOLBAR_COLLAPSED_HEIGHT,
+      );
+      toolbarGeom.left = next.left;
+      toolbarGeom.top = next.top;
+      Object.assign(frame.style, {
+        left: `${next.left}px`,
+        top: `${next.top}px`,
+        right: "auto",
+      });
+    };
+    const onUp = (): void => {
+      layer.removeEventListener("pointermove", onMove);
+      layer.removeEventListener("pointerup", onUp);
+      layer.removeEventListener("pointercancel", onUp);
+      layer.remove();
+      toolbarDragLayer = null;
+      persistToolbarGeom();
+    };
+    layer.addEventListener("pointermove", onMove);
+    layer.addEventListener("pointerup", onUp);
+    layer.addEventListener("pointercancel", onUp);
   }
 
   function startBubbleDrag(): void {
@@ -177,7 +274,7 @@
   }
 
   try {
-    chrome.storage.local.get("bubbleGeom", (value) => {
+    chrome.storage.local.get(["bubbleGeom", "toolbarGeom"], (value) => {
       if (chrome.runtime.lastError) return;
       const g = value.bubbleGeom as
         | { size?: unknown; left?: unknown; top?: unknown }
@@ -188,12 +285,24 @@
         bubbleGeom.top = typeof g.top === "number" ? g.top : null;
       }
       applyBubbleGeom();
+      const toolbar = value.toolbarGeom as
+        | { left?: unknown; top?: unknown }
+        | undefined;
+      if (toolbar && typeof toolbar === "object") {
+        toolbarGeom.left =
+          typeof toolbar.left === "number" ? toolbar.left : null;
+        toolbarGeom.top = typeof toolbar.top === "number" ? toolbar.top : null;
+      }
+      applyToolbarGeom();
     });
   } catch {
     /* ignore */
   }
 
-  window.addEventListener("resize", () => applyBubbleGeom());
+  window.addEventListener("resize", () => {
+    applyBubbleGeom();
+    applyToolbarGeom();
+  });
 
   function readCurrentParts(
     callback: (parts: OverlayPart[] | null) => void,
@@ -338,6 +447,7 @@
     styleFrame(frame, part);
     container.appendChild(frame);
     if (part === "bubble") applyBubbleGeom();
+    if (part === "toolbar") applyToolbarGeom();
   }
 
   // Camera-ready gating + connecting spinner: while the camera connects we show a
@@ -350,6 +460,7 @@
   let cameraReady = false;
   let countdownDeferred = false;
   let countdownFallbackTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastWantedParts = new Set<OverlayPart>();
 
   function showConnecting(container: HTMLDivElement): void {
     if (document.getElementById(CONNECTING_ID)) return;
@@ -430,6 +541,10 @@
   function reconcile(parts: OverlayPart[]): void {
     console.log("[clips-cs] reconcile parts:", parts, "on", location.href);
     const wanted = new Set(parts.filter((p) => ALL_PARTS.includes(p)));
+    const enteringCameraCountdown =
+      wanted.has("countdown") &&
+      wanted.has("bubble") &&
+      !lastWantedParts.has("countdown");
     // Leaving the countdown phase (recording / saving / idle): cancel any pending
     // deferred countdown + spinner so a late fallback timer can't pop the "3-2-1"
     // back up over a later overlay (this was the "countdown over the saving card"
@@ -438,13 +553,21 @@
       countdownDeferred = false;
       clearTimeout(countdownFallbackTimer);
       hideConnecting();
+      setBubbleHidden(false);
     }
     if (wanted.size === 0) {
       document.getElementById(CONTAINER_ID)?.remove();
       cameraReady = false;
+      lastWantedParts = wanted;
       return;
     }
     const container = ensureContainer();
+    if (enteringCameraCountdown) {
+      cameraReady = false;
+      hideConnecting();
+      setBubbleHidden(false);
+      document.getElementById(partFrameId("bubble"))?.remove();
+    }
     const gateCountdown =
       wanted.has("countdown") && wanted.has("bubble") && !cameraReady;
     for (const part of ALL_PARTS) {
@@ -467,6 +590,7 @@
       }
     }
     if (gateCountdown) showConnecting(container);
+    lastWantedParts = wanted;
   }
 
   // Guard against rare double-injection (SPA soft-reloads re-running the script).
@@ -506,6 +630,7 @@
       const frame = document.getElementById(partFrameId("toolbar"));
       if (frame && typeof data.height === "number") {
         frame.style.height = `${Math.round(data.height)}px`;
+        applyToolbarGeom();
       }
       return;
     }
@@ -521,6 +646,10 @@
     }
     if (data.kind === "bubble-drag-start") {
       startBubbleDrag();
+      return;
+    }
+    if (data.kind === "toolbar-drag-start") {
+      startToolbarDrag();
       return;
     }
     if (data.kind === "bubble-size") {

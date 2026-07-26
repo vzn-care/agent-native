@@ -34,6 +34,9 @@ const screenRouteSchema = z.object({
   url: z.string().optional(),
   title: z.string().optional(),
   sourceFile: z.string().optional(),
+  sourceKind: z.enum(["react-router", "html", "manual"]).optional(),
+  screenshotUrl: z.string().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   width: z.number().positive().optional(),
   height: z.number().positive().optional(),
   x: z.number().optional(),
@@ -46,6 +49,83 @@ const capabilitySchema = z.object({
   status: z.enum(["available", "planned", "disabled"]),
   reason: z.string().optional(),
 });
+
+const VIEWPORT_PRESETS = {
+  // `desktop` deliberately matches add-localhost-screens' 1280x900 fallback so
+  // asking for it never resizes frames placed by an earlier default call.
+  desktop: { label: "Desktop", width: 1280, height: 900 },
+  laptop: { label: "Laptop", width: 1440, height: 900 },
+  tablet: { label: "Tablet", width: 834, height: 1112 },
+  mobile: { label: "Mobile", width: 390, height: 844 },
+} as const;
+
+const viewportSchema = z.union([
+  z.enum(["desktop", "laptop", "tablet", "mobile"]),
+  z.object({
+    label: z.string().optional(),
+    width: z.number().positive(),
+    height: z.number().positive(),
+  }),
+]);
+
+type ViewportInput = z.infer<typeof viewportSchema>;
+interface ResolvedViewport {
+  label: string;
+  width: number;
+  height: number;
+}
+
+function resolveViewports(
+  inputs: ViewportInput[] | undefined,
+): ResolvedViewport[] | undefined {
+  if (!inputs?.length) return undefined;
+  return inputs.map((input) =>
+    typeof input === "string"
+      ? { ...VIEWPORT_PRESETS[input] }
+      : {
+          label: input.label ?? `${Math.round(input.width)}w`,
+          width: input.width,
+          height: input.height,
+        },
+  );
+}
+
+/**
+ * Expand one screen request per (route x viewport) and lay them out as a grid:
+ * one row per route, one column per viewport. Explicit x/y/width/height are
+ * what make add-localhost-screens treat each pair as its own frame instead of
+ * refreshing a single shared one, so they are always set here.
+ */
+function expandRoutesAcrossViewports(args: {
+  routes: Array<z.infer<typeof screenRouteSchema>>;
+  viewports: ResolvedViewport[];
+  startX: number;
+  startY: number;
+  gap: number;
+}): Array<z.infer<typeof screenRouteSchema>> {
+  const labelViewports = args.viewports.length > 1;
+  const expanded: Array<z.infer<typeof screenRouteSchema>> = [];
+  let rowY = args.startY;
+  for (const route of args.routes) {
+    let columnX = args.startX;
+    for (const viewport of args.viewports) {
+      expanded.push({
+        ...route,
+        title: labelViewports
+          ? `${route.title ?? titleFromRoutePath(route.path ?? "/")} — ${viewport.label}`
+          : route.title,
+        width: viewport.width,
+        height: viewport.height,
+        x: columnX,
+        y: rowY,
+      });
+      columnX += viewport.width + args.gap;
+    }
+    rowY +=
+      Math.max(...args.viewports.map((viewport) => viewport.height)) + args.gap;
+  }
+  return expanded;
+}
 
 const routeManifestSchema = z.object({
   version: z.literal(1).optional().default(1),
@@ -107,6 +187,11 @@ function routeManifestFromScreens(args: {
   if (screenInputs.length === 0) return undefined;
 
   return screenInputs.map((input) => {
+    if (!input.path && !input.url) {
+      throw new Error(
+        `Route "${input.routeId ?? "(unknown)"}" needs path or url when no routeManifest is provided.`,
+      );
+    }
     const url = routeUrl(args.devServerUrl, {
       path: input.path,
       url: input.url,
@@ -117,7 +202,9 @@ function routeManifestFromScreens(args: {
       path,
       title: input.title ?? titleFromRoutePath(path),
       sourceFile: input.sourceFile,
-      sourceKind: "manual" as const,
+      sourceKind: input.sourceKind ?? ("manual" as const),
+      screenshotUrl: input.screenshotUrl,
+      metadata: input.metadata,
     };
   });
 }
@@ -162,7 +249,16 @@ export default defineAction({
       .string()
       .optional()
       .describe(
-        "Real bridge token from the running bridge. Stored server-side only; never returned.",
+        "Optional bridge token to store on the connection (e.g. one a CLI " +
+          "self-registered). Omit it and the server mints one, stores it, and " +
+          "returns it as `bridgeToken` so the caller can start the local bridge " +
+          "with `design connect --bridge-token <token>`.",
+      ),
+    previewToken: z
+      .string()
+      .optional()
+      .describe(
+        "Optional paired read-only preview token from a self-registering CLI. Omit it with bridgeToken to derive the compatible token automatically.",
       ),
     routes: jsonArray(z.array(screenRouteSchema))
       .optional()
@@ -172,6 +268,11 @@ export default defineAction({
     paths: jsonArray(z.array(z.string()))
       .optional()
       .describe("Shortcut for routes when only paths/URLs are needed."),
+    viewports: jsonArray(z.array(viewportSchema))
+      .optional()
+      .describe(
+        'Place every requested route once per viewport, laid out one row per route and one column per viewport. Use preset names ("desktop", "laptop", "tablet", "mobile") or explicit {label?, width, height}. Example for responsive editing: ["desktop", "mobile"]. Overrides defaultWidth/defaultHeight.',
+      ),
     defaultWidth: z
       .number()
       .positive()
@@ -241,6 +342,7 @@ export default defineAction({
       routeManifest,
       capabilities: args.capabilities,
       bridgeToken: args.bridgeToken,
+      previewToken: args.previewToken,
       status: "connected",
     });
 
@@ -266,11 +368,38 @@ export default defineAction({
       }
     }
 
+    const viewports = resolveViewports(args.viewports);
+    const requestedRoutes = args.routes?.length
+      ? args.routes
+      : args.paths?.length
+        ? args.paths.map((path) => ({ path }))
+        : viewports
+          ? routeManifest.routes.map((route) => ({
+              routeId: route.id,
+              path: route.path,
+              title: route.title,
+            }))
+          : undefined;
+    if (viewports && !requestedRoutes?.length) {
+      throw new Error(
+        "viewports needs at least one route: pass routes/paths, or connect a bridge whose manifest lists routes.",
+      );
+    }
+
     const screens = await addLocalhostScreensAction.run({
       designId,
       connectionId: connection.id,
-      routes: args.routes,
-      paths: args.paths,
+      routes:
+        viewports && requestedRoutes
+          ? expandRoutesAcrossViewports({
+              routes: requestedRoutes,
+              viewports,
+              startX: args.startX ?? 0,
+              startY: args.startY ?? 0,
+              gap: args.gap ?? 160,
+            })
+          : args.routes,
+      paths: viewports ? undefined : args.paths,
       defaultWidth: args.defaultWidth,
       defaultHeight: args.defaultHeight,
       startX: args.startX,
@@ -315,6 +444,10 @@ export default defineAction({
       overview: true,
       urlPath,
       openUrl: designOverviewDeepLink(designId),
+      // Minted/stored by connect-localhost; the skill starts the bridge with
+      // `design connect --bridge-token <this>` so bridge and row agree.
+      bridgeToken: connection.bridgeToken,
+      previewToken: connection.previewToken,
     };
   },
   link: ({ result }) => {

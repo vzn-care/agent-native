@@ -1,4 +1,7 @@
-import { useActionMutation, useActionQuery } from "@agent-native/core/client";
+import {
+  useActionMutation,
+  useActionQuery,
+} from "@agent-native/core/client/hooks";
 import type {
   ConfigureDocumentPropertyRequest,
   ContentDatabaseResponse,
@@ -12,9 +15,11 @@ import type {
 import { useQueryClient } from "@tanstack/react-query";
 
 import {
+  applyDocumentPropertiesToDatabaseResponse,
   applyDocumentPropertyValueToDatabaseResponse,
   contentDatabaseQueryFilter,
   contentDatabaseQueryKey,
+  removeDocumentPropertyFromDatabaseResponse,
 } from "./use-content-database";
 
 export function useDocumentProperties(documentId: string | null) {
@@ -37,7 +42,12 @@ export function useConfigureDocumentProperty(
     DocumentPropertiesResponse,
     ConfigureDocumentPropertyRequest
   >("configure-document-property", {
-    onSuccess: () => {
+    skipActionQueryInvalidation: true,
+    onSuccess: (data) => {
+      queryClient.setQueriesData<ContentDatabaseResponse>(
+        contentDatabaseQueryFilter(databaseDocumentId),
+        (current) => applyDocumentPropertiesToDatabaseResponse(current, data),
+      );
       queryClient.invalidateQueries({
         queryKey: ["action", "list-document-properties", { documentId }],
       });
@@ -45,7 +55,7 @@ export function useConfigureDocumentProperty(
         queryKey: ["action", "get-document", { id: documentId }],
       });
       queryClient.invalidateQueries({
-        queryKey: contentDatabaseQueryKey(databaseDocumentId),
+        ...contentDatabaseQueryFilter(databaseDocumentId),
       });
     },
   });
@@ -60,6 +70,7 @@ export function useSetDocumentProperty(
     DocumentPropertiesResponse,
     SetDocumentPropertyRequest
   >("set-document-property", {
+    skipActionQueryInvalidation: true,
     onMutate: async (variables) => {
       await queryClient.cancelQueries(
         contentDatabaseQueryFilter(databaseDocumentId),
@@ -135,7 +146,12 @@ export function useDuplicateDocumentProperty(
     DocumentPropertiesResponse,
     DuplicateDocumentPropertyRequest
   >("duplicate-document-property", {
-    onSuccess: () => {
+    skipActionQueryInvalidation: true,
+    onSuccess: (data) => {
+      queryClient.setQueriesData<ContentDatabaseResponse>(
+        contentDatabaseQueryFilter(databaseDocumentId),
+        (current) => applyDocumentPropertiesToDatabaseResponse(current, data),
+      );
       queryClient.invalidateQueries({
         queryKey: ["action", "list-document-properties", { documentId }],
       });
@@ -143,7 +159,7 @@ export function useDuplicateDocumentProperty(
         queryKey: ["action", "get-document", { id: documentId }],
       });
       queryClient.invalidateQueries({
-        queryKey: contentDatabaseQueryKey(databaseDocumentId),
+        ...contentDatabaseQueryFilter(databaseDocumentId),
       });
     },
   });
@@ -181,7 +197,39 @@ export function useDeleteDocumentProperty(
     DocumentPropertiesResponse,
     DeleteDocumentPropertyRequest
   >("delete-document-property", {
-    onSuccess: () => {
+    skipActionQueryInvalidation: true,
+    onMutate: async (variables) => {
+      await queryClient.cancelQueries(
+        contentDatabaseQueryFilter(databaseDocumentId),
+      );
+      const previous = queryClient.getQueriesData<ContentDatabaseResponse>(
+        contentDatabaseQueryFilter(databaseDocumentId),
+      );
+      queryClient.setQueriesData<ContentDatabaseResponse>(
+        contentDatabaseQueryFilter(databaseDocumentId),
+        (current) =>
+          removeDocumentPropertyFromDatabaseResponse(
+            current,
+            variables.propertyId,
+          ),
+      );
+      return { previous };
+    },
+    onError: (_error, _variables, context) => {
+      const rollback = context as
+        | {
+            previous?: Array<[readonly unknown[], unknown]>;
+          }
+        | undefined;
+      for (const [queryKey, data] of rollback?.previous ?? []) {
+        queryClient.setQueryData(queryKey, data);
+      }
+    },
+    onSuccess: (data) => {
+      queryClient.setQueriesData<ContentDatabaseResponse>(
+        contentDatabaseQueryFilter(databaseDocumentId),
+        (current) => applyDocumentPropertiesToDatabaseResponse(current, data),
+      );
       queryClient.invalidateQueries({
         queryKey: ["action", "list-document-properties", { documentId }],
       });
@@ -189,7 +237,7 @@ export function useDeleteDocumentProperty(
         queryKey: ["action", "get-document", { id: documentId }],
       });
       queryClient.invalidateQueries({
-        queryKey: contentDatabaseQueryKey(databaseDocumentId),
+        ...contentDatabaseQueryFilter(databaseDocumentId),
       });
     },
   });

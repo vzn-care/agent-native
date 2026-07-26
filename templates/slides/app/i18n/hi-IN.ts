@@ -1,4 +1,7 @@
+import { creativeContextMessagesByLocale } from "@agent-native/creative-context/messages";
+
 const messages = {
+  creativeContext: creativeContextMessagesByLocale["hi-IN"],
   root: {
     commandPresentations: "प्रेज़ेंटेशन",
     searchDecks: "डेक खोजें",
@@ -33,10 +36,10 @@ const messages = {
       "टीम सदस्यों, संगठन पहुंच और साझा कार्यस्थान प्राथमिकताओं को प्रबंधित करें।",
     openTeamSettings: "टीम सेटिंग्स खोलें",
     openResourceSettings: "संसाधन सेटिंग्स खोलें",
-    agentTitle: "एजेंट सेटिंग्स",
+    agentTitle: "एजेंट प्रबंधित करें",
     agentDescription:
-      "मॉडल, API कुंजियों, ऑटोमेशन, आवाज़ और अन्य एजेंट नियंत्रणों के लिए साइडबार सेटिंग्स खोलें।",
-    openAgentSettings: "एजेंट सेटिंग्स खोलें",
+      "एजेंट के मॉडल, API कुंजियों, ऑटोमेशन, आवाज़ और अन्य नियंत्रणों को प्रबंधित करें।",
+    openAgentSettings: "एजेंट प्रबंधित करें",
   },
   agent: {
     emptyState: "अपनी प्रस्तुतियों के बारे में मुझसे कुछ भी पूछें",
@@ -91,6 +94,8 @@ const messages = {
     googlePickerNeedsKeys:
       "Google Picker precisa de GOOGLE_PICKER_API_KEY e GOOGLE_PICKER_APP_ID.",
     imageUploadFailed: "Falha ao enviar imagem",
+    imageUploadNeedsBuilder:
+      "स्लाइड पर चित्र अपलोड करने के लिए एजेंट composer के मॉडल मेनू से Builder.io कनेक्ट करें। खाली कैनवास पर चित्र छोड़ने से वह बिना provider के भी एजेंट को भेजा जा सकता है।",
     sentToAgent: "Enviado ao agente",
     imageUploadGenericError: "Algo deu errado ao enviar esta imagem.",
     uploading: "Enviando…",
@@ -101,6 +106,7 @@ const messages = {
     searchImagesPlaceholder: "Buscar imagens...",
     searchForLogosImagesIcons: "Buscar logos, imagens, ícones...",
     search: "खोजें",
+    searchFailed: "खोज विफल",
     logoSearchTitle: "लोगो खोज",
     searchCompanyLogo: "Busque uma empresa para encontrar seu logo",
     searchCompanyPlaceholder: "Buscar nome da empresa (ex.: Intuit)",
@@ -114,6 +120,7 @@ const messages = {
     uploadAttachedFailed: "Não foi possível enviar o arquivo anexado.",
     uploadFailed: "Falha no envio",
     doubleClickEdit: "Clique duas vezes em qualquer texto para editar",
+    dragToMove: "स्थानांतरित करने के लिए खींचें",
     aiEditing: "IA editando",
     startTypingCommands: "Comece a digitar… ou pressione / para comandos",
     pinDropHint: "Clique em qualquer lugar para soltar um pin de comentário",
@@ -203,6 +210,7 @@ const messages = {
     elementAnimations: "एलिमेंट एनिमेशन",
     tweaks: "ट्वीक्स",
     drawOnSlide: "स्लाइड पर ड्रॉ करें",
+    addTextBox: "टेक्स्ट बॉक्स जोड़ें",
     pinComments: "टिप्पणियां पिन करें",
     pinCommentsDescription:
       "कई एडिट कतार में डालने के लिए स्लाइड पर जगहों पर क्लिक करें, फिर उन्हें एक साथ भेजें।",
@@ -325,6 +333,8 @@ const messages = {
     hideResolved: "हल किए गए छिपाएं",
     showResolved: "{{count}} हल किए गए दिखाएं",
     noCommentsYet: "अभी कोई टिप्पणी नहीं",
+    loadFailed: "टिप्पणियाँ लोड नहीं हो सकीं",
+    retry: "फिर कोशिश करें",
     clickToAddComment: "टिप्पणी जोड़ने के लिए क्लिक करें",
     selectSlideToAdd: "एक टिप्पणी जोड़ने के लिए स्लाइड चुनें",
   },
@@ -472,6 +482,8 @@ const messages = {
     backToDecks: "डेक पर वापस जाएं",
     tryAgain: "फिर कोशिश करें",
     imageUploadFailed: "चित्र अपलोड विफल",
+    imageUploadNeedsBuilder:
+      "स्लाइड पर चित्र अपलोड करने के लिए एजेंट composer के मॉडल मेनू से Builder.io कनेक्ट करें। खाली कैनवास पर चित्र छोड़ने से वह बिना provider के भी एजेंट को भेजा जा सकता है।",
     imageAdded: "चित्र जोड़ा गया",
     imageUploadError: "यह चित्र अपलोड करते समय कुछ गलत हुआ।",
     exportFailed: "निर्यात विफल",
@@ -535,6 +547,10 @@ const messages = {
     chooseAnotherFile: "दूसरी फ़ाइल चुनें",
   },
   home: {
+    loadFailed: "आपका कॉन्टेंट लोड नहीं हो सका",
+    loadFailedDescription:
+      "आपका सहेजा गया कॉन्टेंट अभी भी उपलब्ध है। कनेक्शन जाँचें और फिर कोशिश करें।",
+    retry: "फिर कोशिश करें",
     decksTitle: "डेक",
     newDeck: "नया डेक",
     deckLengthQuestion: "यह डेक कितना लंबा होना चाहिए?",

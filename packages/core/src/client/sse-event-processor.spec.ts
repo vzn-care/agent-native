@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { RUN_NO_PROGRESS_HARD_TIMEOUT_MS } from "../agent/run-manager.js";
 import {
   AgentAutoContinueSignal,
   readSSEStream,
@@ -7,6 +8,7 @@ import {
   SSE_ACTION_PREPARATION_STALL_TIMEOUT_MS,
   SSE_DURABLE_ACTION_PREPARATION_STALL_TIMEOUT_MS,
   SSE_DURABLE_NO_PROGRESS_TIMEOUT_MS,
+  SSE_IN_FLIGHT_WORK_TIMEOUT_MS,
   SSE_NO_PROGRESS_TIMEOUT_MS,
 } from "./sse-event-processor.js";
 
@@ -298,6 +300,10 @@ function preparingActionProgressStream(
   });
 }
 
+// Long enough to exercise id-scoped preparation tracking, short enough to stay
+// inside the action-preparation stall window this fixture is not testing.
+const PARALLEL_PREPARATION_TERMINAL_DELAY_MS = 80_000;
+
 function parallelSameToolPreparationStream(
   tool = "edit-design",
 ): ReadableStream<Uint8Array> {
@@ -358,7 +364,7 @@ function parallelSameToolPreparationStream(
             ),
           );
           controller.close();
-        }, SSE_NO_PROGRESS_TIMEOUT_MS + 5_000),
+        }, PARALLEL_PREPARATION_TERMINAL_DELAY_MS),
       );
     },
     cancel() {
@@ -577,6 +583,256 @@ async function drain(iterable: AsyncIterable<unknown>) {
   }
   return results;
 }
+
+describe("SSE replay render pacing", () => {
+  it("yields to the browser event loop during a dense replay burst", async () => {
+    const textEvents = Array.from({ length: 60 }, (_, index) => ({
+      type: "text",
+      text: `${index}|`,
+    }));
+    const results: any[] = [];
+    let eventLoopAdvanced = false;
+    let firstResultAfterEventLoopAdvance: number | null = null;
+    const eventLoopTurn = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        eventLoopAdvanced = true;
+        resolve();
+      }, 0);
+    });
+
+    for await (const result of readSSEStream(
+      eventStream([...textEvents, { type: "done" }]),
+      [],
+      { value: 0 },
+      undefined,
+    )) {
+      results.push(result);
+      if (eventLoopAdvanced && firstResultAfterEventLoopAdvance === null) {
+        firstResultAfterEventLoopAdvance = results.length - 1;
+      }
+    }
+    await eventLoopTurn;
+
+    expect(firstResultAfterEventLoopAdvance).not.toBeNull();
+    expect(firstResultAfterEventLoopAdvance!).toBeLessThan(textEvents.length);
+    expect(results).toHaveLength(textEvents.length + 1);
+    expect(results.at(-1)?.content).toEqual([
+      {
+        type: "text",
+        text: textEvents.map((event) => event.text).join(""),
+      },
+    ]);
+  });
+
+  it("preserves event order and tool content across cooperative yields", async () => {
+    const before = Array.from({ length: 24 }, (_, index) => ({
+      type: "text",
+      text: `before-${index}|`,
+    }));
+    const after = Array.from({ length: 24 }, (_, index) => ({
+      type: "text",
+      text: `after-${index}|`,
+    }));
+    const events = [
+      ...before,
+      {
+        type: "tool_start",
+        id: "tool-1",
+        tool: "query-data",
+        input: { query: "select 1" },
+      },
+      {
+        type: "tool_done",
+        id: "tool-1",
+        tool: "query-data",
+        result: "one row",
+      },
+      ...after,
+      { type: "done" },
+    ].map((event, seq) => ({ ...event, seq }));
+    const seenSeq: number[] = [];
+
+    const results = (await drain(
+      readSSEStream(eventStream(events), [], { value: 0 }, undefined, (seq) =>
+        seenSeq.push(seq),
+      ),
+    )) as any[];
+
+    expect(seenSeq).toEqual(events.map((event) => event.seq));
+    expect(results).toHaveLength(events.length);
+    expect(results.at(-1)?.content).toEqual([
+      {
+        type: "text",
+        text: before.map((event) => event.text).join(""),
+      },
+      {
+        type: "tool-call",
+        toolCallId: "tool-1",
+        toolName: "query-data",
+        argsText: JSON.stringify({ query: "select 1" }),
+        args: { query: "select 1" },
+        result: "one row",
+      },
+      {
+        type: "text",
+        text: after.map((event) => event.text).join(""),
+      },
+    ]);
+  });
+
+  it("marks synthetic agent-call cards as presentation-only activity", async () => {
+    const results = (await drain(
+      readSSEStream(
+        eventStream([
+          {
+            type: "tool_start",
+            id: "call-analytics",
+            tool: "call-agent",
+            input: { agent: "analytics", message: "Count signups" },
+          },
+          { type: "agent_call", agent: "Analytics", status: "start" },
+          { type: "done" },
+        ]),
+        [],
+        { value: 0 },
+        undefined,
+      ),
+    )) as any[];
+
+    expect(results[1].content).toEqual([
+      expect.objectContaining({
+        toolCallId: "call-analytics",
+        toolName: "call-agent",
+      }),
+      expect.objectContaining({
+        toolName: "agent:Analytics",
+        activity: true,
+      }),
+    ]);
+  });
+
+  it("correlates concurrent same-name agent activity by call id", async () => {
+    const snapshot = {
+      kind: "agent-native/agent-activity",
+      version: 1,
+      sequence: 1,
+      startedAt: 1_000,
+      updatedAt: 2_000,
+      durationMs: 1_000,
+      activePhase: "tool",
+      reasoning: [],
+      toolCalls: [{ id: "query-1", name: "query-data", status: "running" }],
+    };
+    const results = (await drain(
+      readSSEStream(
+        eventStream([
+          {
+            type: "agent_call",
+            agent: "Analytics",
+            agentCallId: "analytics-a",
+            status: "start",
+          },
+          {
+            type: "agent_call",
+            agent: "Analytics",
+            agentCallId: "analytics-b",
+            status: "start",
+          },
+          {
+            type: "agent_call_activity",
+            agent: "Analytics",
+            agentCallId: "analytics-b",
+            snapshot,
+          },
+          {
+            type: "agent_call",
+            agent: "Analytics",
+            agentCallId: "analytics-b",
+            status: "done",
+            durationMs: 1_000,
+          },
+          { type: "done" },
+        ]),
+        [],
+        { value: 0 },
+        undefined,
+      ),
+    )) as any[];
+
+    const agentRows = results
+      .at(-1)
+      ?.content.filter((part: any) => part.toolName === "agent:Analytics");
+    expect(agentRows).toEqual([
+      expect.objectContaining({
+        toolCallId: "analytics-a",
+        result: "Stopped before this action started.",
+        isError: true,
+      }),
+      expect.objectContaining({
+        toolCallId: "analytics-b",
+        result: "Done",
+        structuredMeta: {
+          agentActivity: snapshot,
+          agentDurationMs: 1_000,
+        },
+      }),
+    ]);
+  });
+
+  it("stores generic A2A progress on only the matching agent call", async () => {
+    const results = (await drain(
+      readSSEStream(
+        eventStream([
+          {
+            type: "agent_call",
+            agent: "Analytics",
+            agentCallId: "analytics-a",
+            status: "start",
+          },
+          {
+            type: "agent_call",
+            agent: "Analytics",
+            agentCallId: "analytics-b",
+            status: "start",
+          },
+          {
+            type: "agent_call_progress",
+            agent: "Analytics",
+            agentCallId: "analytics-b",
+            state: "working",
+            elapsedSeconds: 30,
+            detail: "Querying the warehouse",
+          },
+          { type: "done" },
+        ]),
+        [],
+        { value: 0 },
+        undefined,
+      ),
+    )) as any[];
+
+    const agentRows = results[2]?.content.filter(
+      (part: any) => part.toolName === "agent:Analytics",
+    );
+    expect(agentRows).toHaveLength(2);
+    expect(agentRows?.[0]).toEqual(
+      expect.objectContaining({ toolCallId: "analytics-a" }),
+    );
+    expect(agentRows?.[0]).not.toHaveProperty("structuredMeta");
+    expect(agentRows?.[1]).toEqual(
+      expect.objectContaining({
+        toolCallId: "analytics-b",
+        structuredMeta: {
+          agentProgress: {
+            state: "working",
+            elapsedSeconds: 30,
+            detail: "Querying the warehouse",
+          },
+        },
+      }),
+    );
+  });
+});
 
 describe("SSE event processor no-progress recovery", () => {
   afterEach(() => {
@@ -1032,7 +1288,7 @@ describe("SSE event processor no-progress recovery", () => {
       ),
     );
 
-    await vi.advanceTimersByTimeAsync(SSE_NO_PROGRESS_TIMEOUT_MS + 5_000);
+    await vi.advanceTimersByTimeAsync(PARALLEL_PREPARATION_TERMINAL_DELAY_MS);
 
     await expect(donePromise).resolves.toBeDefined();
   });
@@ -1808,7 +2064,7 @@ describe("SSE event processor error classification", () => {
     );
   });
 
-  it("includes streamed tool-input size in visible preparation activity", async () => {
+  it("uses a calm writing label for streamed tool-input progress", async () => {
     const dispatchEvent = vi.fn();
     vi.stubGlobal("window", { dispatchEvent });
     vi.stubGlobal(
@@ -1866,7 +2122,7 @@ describe("SSE event processor error classification", () => {
       expect.objectContaining({
         type: "agent-chat:activity",
         detail: {
-          label: "Writing create document... (1.5 KB prepared)",
+          label: "Writing create document...",
           tool: "create-document",
           tabId: "tab-activity-progress",
         },
@@ -1927,7 +2183,7 @@ describe("SSE event processor error classification", () => {
     );
   });
 
-  it("does not render non-tool activity as visible content", async () => {
+  it("turns a terminal activity-only run into a visible final warning", async () => {
     const results = await drain(
       readSSEStream(
         eventStream([
@@ -1943,20 +2199,24 @@ describe("SSE event processor error classification", () => {
       ),
     );
 
-    expect(results).toEqual([
-      {
-        content: [],
-        metadata: {
-          custom: {
-            activityTrail: [
-              {
-                label: "Contacting model",
-              },
-            ],
+    expect(results.at(-1)).toMatchObject({
+      content: [
+        {
+          type: "text",
+          text: "The agent stopped without sending a final message. Ask the agent to continue or retry.",
+        },
+      ],
+      status: { type: "complete", reason: "stop" },
+      metadata: {
+        custom: {
+          activityTrail: [{ label: "Contacting model" }],
+          runWarning: {
+            errorCode: "final_response_missing",
+            recoverable: true,
           },
         },
       },
-    ]);
+    });
   });
 
   it("fills the pending tool activity card when tool_start arrives", async () => {
@@ -2009,6 +2269,284 @@ describe("SSE event processor error classification", () => {
         toolName: "generate-design",
         result: '{"saved":true}',
       }),
+    ]);
+  });
+
+  it("preserves an activity call id across repeated progress and tool completion", async () => {
+    const results = await drain(
+      readSSEStream(
+        eventStream([
+          {
+            type: "activity",
+            label: "Preparing generate-design action",
+            tool: "generate-design",
+            id: "activity-call-1",
+            progressBytes: 0,
+          },
+          {
+            type: "activity",
+            label: "Preparing generate-design action",
+            tool: "generate-design",
+            id: "activity-call-1",
+            progressBytes: 128,
+          },
+          {
+            type: "tool_start",
+            tool: "generate-design",
+            id: "activity-call-1",
+            input: { designId: "design-1" },
+          },
+          {
+            type: "tool_done",
+            tool: "generate-design",
+            id: "activity-call-1",
+            result: '{"saved":true}',
+          },
+          { type: "done" },
+        ]),
+        [],
+        { value: 0 },
+        "tab-tool-activity-id",
+      ),
+    );
+
+    expect(results[0].content).toEqual([
+      expect.objectContaining({
+        type: "tool-call",
+        toolCallId: "activity-call-1",
+        toolName: "generate-design",
+        activity: true,
+      }),
+    ]);
+    expect(
+      results[1].content.filter((part) => part.type === "tool-call"),
+    ).toHaveLength(1);
+    expect(
+      results.at(-1)?.content.filter((part) => part.type === "tool-call"),
+    ).toEqual([
+      expect.objectContaining({
+        type: "tool-call",
+        toolCallId: "activity-call-1",
+        toolName: "generate-design",
+        result: '{"saved":true}',
+      }),
+    ]);
+  });
+
+  it("upgrades one id-less activity placeholder when a later progress event gains an id", async () => {
+    const results = await drain(
+      readSSEStream(
+        eventStream([
+          {
+            type: "activity",
+            label: "Preparing generate-design action",
+            tool: "generate-design",
+            progressBytes: 0,
+          },
+          {
+            type: "activity",
+            label: "Preparing generate-design action",
+            tool: "generate-design",
+            id: "activity-call-1",
+            progressBytes: 128,
+          },
+          {
+            type: "tool_start",
+            tool: "generate-design",
+            id: "activity-call-1",
+            input: { designId: "design-1" },
+          },
+          {
+            type: "tool_done",
+            tool: "generate-design",
+            id: "activity-call-1",
+            result: '{"saved":true}',
+          },
+          { type: "done" },
+        ]),
+        [],
+        { value: 0 },
+        "tab-tool-activity-id-convergence",
+      ),
+    );
+
+    expect(
+      results[1].content.filter((part) => part.type === "tool-call"),
+    ).toEqual([
+      expect.objectContaining({
+        toolCallId: "activity-call-1",
+        activity: true,
+      }),
+    ]);
+    expect(
+      results.at(-1)?.content.filter((part) => part.type === "tool-call"),
+    ).toEqual([
+      expect.objectContaining({
+        toolCallId: "activity-call-1",
+        result: '{"saved":true}',
+      }),
+    ]);
+  });
+
+  it("keeps parallel same-name activity calls separate by id", async () => {
+    const results = await drain(
+      readSSEStream(
+        eventStream([
+          {
+            type: "activity",
+            label: "Preparing generate-design action",
+            tool: "generate-design",
+            id: "activity-call-1",
+          },
+          {
+            type: "activity",
+            label: "Preparing generate-design action",
+            tool: "generate-design",
+            id: "activity-call-2",
+          },
+          {
+            type: "tool_start",
+            tool: "generate-design",
+            id: "activity-call-1",
+            input: { designId: "design-1" },
+          },
+          {
+            type: "tool_start",
+            tool: "generate-design",
+            id: "activity-call-2",
+            input: { designId: "design-2" },
+          },
+          {
+            type: "tool_done",
+            tool: "generate-design",
+            id: "activity-call-1",
+            result: '{"saved":"design-1"}',
+          },
+          {
+            type: "tool_done",
+            tool: "generate-design",
+            id: "activity-call-2",
+            result: '{"saved":"design-2"}',
+          },
+          { type: "done" },
+        ]),
+        [],
+        { value: 0 },
+        "tab-parallel-tool-activity-ids",
+      ),
+    );
+
+    expect(
+      results[1].content
+        .filter((part) => part.type === "tool-call")
+        .map((part) => part.toolCallId),
+    ).toEqual(["activity-call-1", "activity-call-2"]);
+    expect(
+      results
+        .at(-1)
+        ?.content.filter((part) => part.type === "tool-call")
+        .map((part) => ({ id: part.toolCallId, result: part.result })),
+    ).toEqual([
+      { id: "activity-call-1", result: '{"saved":"design-1"}' },
+      { id: "activity-call-2", result: '{"saved":"design-2"}' },
+    ]);
+  });
+
+  it("adopts parallel same-name activity placeholders in order for id-less starts", async () => {
+    const results = await drain(
+      readSSEStream(
+        eventStream([
+          {
+            type: "activity",
+            label: "Preparing generate-design action",
+            tool: "generate-design",
+            id: "activity-call-1",
+          },
+          {
+            type: "activity",
+            label: "Preparing generate-design action",
+            tool: "generate-design",
+            id: "activity-call-2",
+          },
+          {
+            type: "tool_start",
+            tool: "generate-design",
+            input: { designId: "design-1" },
+          },
+          {
+            type: "tool_start",
+            tool: "generate-design",
+            input: { designId: "design-2" },
+          },
+          { type: "done" },
+        ]),
+        [],
+        { value: 0 },
+        "tab-parallel-id-less-starts",
+      ),
+    );
+
+    expect(
+      results[3].content
+        .filter((part) => part.type === "tool-call")
+        .map((part) => ({ id: part.toolCallId, args: part.args })),
+    ).toEqual([
+      { id: "activity-call-1", args: { designId: "design-1" } },
+      { id: "activity-call-2", args: { designId: "design-2" } },
+    ]);
+  });
+
+  it("shows a later same-tool activity when it has a new stable id", async () => {
+    const results = await drain(
+      readSSEStream(
+        eventStream([
+          {
+            type: "activity",
+            label: "Preparing generate-design action",
+            tool: "generate-design",
+            id: "activity-call-1",
+          },
+          {
+            type: "tool_start",
+            tool: "generate-design",
+            id: "activity-call-1",
+            input: { designId: "design-1" },
+          },
+          {
+            type: "tool_done",
+            tool: "generate-design",
+            id: "activity-call-1",
+            result: '{"saved":"design-1"}',
+          },
+          {
+            type: "activity",
+            label: "Preparing generate-design action",
+            tool: "generate-design",
+            id: "activity-call-2",
+          },
+          { type: "done" },
+        ]),
+        [],
+        { value: 0 },
+        "tab-sequential-tool-activity-ids",
+      ),
+    );
+
+    expect(
+      results[3].content
+        .filter((part) => part.type === "tool-call")
+        .map((part) => ({
+          id: part.toolCallId,
+          result: part.result,
+          activity: part.activity,
+        })),
+    ).toEqual([
+      {
+        id: "activity-call-1",
+        result: '{"saved":"design-1"}',
+        activity: undefined,
+      },
+      { id: "activity-call-2", result: undefined, activity: true },
     ]);
   });
 
@@ -2287,6 +2825,45 @@ describe("SSE event processor error classification", () => {
     ]);
   });
 
+  it("treats a completed custom UI as the final response", async () => {
+    const results = await drain(
+      readSSEStream(
+        eventStream([
+          {
+            type: "tool_start",
+            tool: "render-todo-list-inline",
+            input: {},
+            chatUI: { renderer: "todo-demo.todo-list-inline" },
+          },
+          {
+            type: "tool_done",
+            tool: "render-todo-list-inline",
+            result: '{"ok":true}',
+            chatUI: { renderer: "todo-demo.todo-list-inline" },
+          },
+          { type: "done" },
+        ]),
+        [],
+        { value: 0 },
+        "tab-custom-ui",
+        undefined,
+        "run-custom-ui",
+      ),
+    );
+
+    const last = results.at(-1) as any;
+    expect(last).toMatchObject({
+      content: [
+        expect.objectContaining({
+          type: "tool-call",
+          toolName: "render-todo-list-inline",
+          chatUI: { renderer: "todo-demo.todo-list-inline" },
+        }),
+      ],
+    });
+    expect(last.metadata?.custom?.runWarning).toBeUndefined();
+  });
+
   it("does not add a missing-final warning when text arrives after the last completed tool", async () => {
     const results = await drain(
       readSSEStream(
@@ -2485,6 +3062,63 @@ describe("SSE event processor error classification", () => {
         }),
         { type: "text", text: "Corrected answer" },
       ],
+    });
+  });
+
+  it("keeps materialized pending tool calls across clear events", async () => {
+    const results = await drain(
+      readSSEStream(
+        eventStream([
+          { type: "tool_start", tool: "query", input: { sql: "select 1" } },
+          { type: "clear" },
+          { type: "text", text: "Retrying" },
+          { type: "done" },
+        ]),
+        [],
+        { value: 0 },
+      ),
+    );
+
+    const clearSnapshot = results.find(
+      (result) =>
+        Array.isArray(result.content) &&
+        result.content.some(
+          (part) =>
+            part?.type === "tool-call" &&
+            part.toolName === "query" &&
+            !("result" in part),
+        ) &&
+        !result.content.some((part) => part?.type === "text"),
+    );
+    expect(clearSnapshot?.content).toEqual([
+      expect.objectContaining({
+        type: "tool-call",
+        toolName: "query",
+        args: { sql: "select 1" },
+      }),
+    ]);
+  });
+
+  it("still clears ephemeral activity placeholders on clear events", async () => {
+    const results = await drain(
+      readSSEStream(
+        eventStream([
+          {
+            type: "activity",
+            label: "Preparing query",
+            tool: "query",
+          },
+          { type: "clear" },
+          { type: "text", text: "Retrying" },
+          { type: "done" },
+        ]),
+        [],
+        { value: 0 },
+      ),
+    );
+
+    expect(results.at(-1)).toEqual({
+      content: [{ type: "text", text: "Retrying" }],
     });
   });
 
@@ -2725,6 +3359,49 @@ describe("SSE event processor error classification", () => {
       }),
     );
   });
+
+  it("does not auto-continue a deliberate abort reported as a recoverable aborted_* error", async () => {
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal("window", { dispatchEvent });
+    vi.stubGlobal(
+      "CustomEvent",
+      class CustomEvent {
+        type: string;
+        detail: unknown;
+        constructor(type: string, init?: { detail?: unknown }) {
+          this.type = type;
+          this.detail = init?.detail;
+        }
+      },
+    );
+
+    // Must NOT throw AgentAutoContinueSignal — restarting work a Slack cancel
+    // or the stuck banner just stopped is the destructive outcome.
+    const results = await drain(
+      readSSEStream(
+        eventStream([
+          {
+            type: "error",
+            error: "The agent run was stopped before it finished.",
+            errorCode: "aborted_slack_cancel",
+            recoverable: true,
+          },
+        ]),
+        [],
+        { value: 0 },
+        "tab-abort",
+      ),
+    );
+
+    const terminal = results.at(-1) as
+      | {
+          status?: { type: string; reason: string };
+          metadata?: { custom?: { runError?: { recoverable?: boolean } } };
+        }
+      | undefined;
+    expect(terminal?.status).toEqual({ type: "incomplete", reason: "error" });
+    expect(terminal?.metadata?.custom?.runError?.recoverable).toBe(true);
+  });
 });
 
 describe("SSE event processor tool id matching", () => {
@@ -2932,6 +3609,111 @@ describe("SSE event processor activity-label clearing", () => {
   });
 });
 
+describe("SSE event processor stream-progress signaling", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const stubWindow = () => {
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal("window", { dispatchEvent });
+    vi.stubGlobal(
+      "CustomEvent",
+      class CustomEvent {
+        type: string;
+        detail: unknown;
+        constructor(type: string, init?: { detail?: unknown }) {
+          this.type = type;
+          this.detail = init?.detail;
+        }
+      },
+    );
+    return dispatchEvent;
+  };
+
+  function streamProgressCalls(dispatchEvent: ReturnType<typeof vi.fn>) {
+    return dispatchEvent.mock.calls.filter(
+      (call) => (call[0] as CustomEvent).type === "agent-chat:stream-progress",
+    );
+  }
+
+  it("dispatches stream-progress once per chunk even across multiple text deltas", async () => {
+    const dispatchEvent = stubWindow();
+    await drain(
+      readSSEStream(
+        eventStream([
+          { type: "text", text: "Hello" },
+          { type: "text", text: " there" },
+          { type: "text", text: "!" },
+          { type: "done" },
+        ]),
+        [],
+        { value: 0 },
+        "tab-progress",
+      ),
+    );
+
+    expect(streamProgressCalls(dispatchEvent)).toHaveLength(1);
+    expect(dispatchEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agent-chat:stream-progress",
+        detail: { tabId: "tab-progress" },
+      }),
+    );
+  });
+
+  it("re-arms stream-progress after a server clear retries the draft", async () => {
+    const dispatchEvent = stubWindow();
+    await drain(
+      readSSEStream(
+        eventStream([
+          { type: "text", text: "Rejected draft" },
+          { type: "clear" },
+          { type: "text", text: "Corrected answer" },
+          { type: "done" },
+        ]),
+        [],
+        { value: 0 },
+        "tab-rearm",
+      ),
+    );
+
+    expect(streamProgressCalls(dispatchEvent)).toHaveLength(2);
+  });
+
+  it("dispatches stream-progress once per chunk for reasoning deltas too", async () => {
+    const dispatchEvent = stubWindow();
+    await drain(
+      readSSEStream(
+        eventStream([
+          { type: "thinking", text: "Let me consider" },
+          { type: "thinking", text: " this further." },
+          { type: "done" },
+        ]),
+        [],
+        { value: 0 },
+        "tab-reasoning-progress",
+      ),
+    );
+
+    expect(streamProgressCalls(dispatchEvent)).toHaveLength(1);
+  });
+
+  it("does not dispatch stream-progress for an empty text delta", async () => {
+    const dispatchEvent = stubWindow();
+    await drain(
+      readSSEStream(
+        eventStream([{ type: "text", text: "" }, { type: "done" }]),
+        [],
+        { value: 0 },
+        "tab-empty",
+      ),
+    );
+
+    expect(streamProgressCalls(dispatchEvent)).toHaveLength(0);
+  });
+});
+
 describe("journal-recovery tool replay coalescing", () => {
   function eventsStream(events: object[]): ReadableStream<Uint8Array> {
     return new ReadableStream<Uint8Array>({
@@ -3023,5 +3805,157 @@ describe("journal-recovery tool replay coalescing", () => {
     const toolCards = content.filter((p) => p.type === "tool-call");
     expect(toolCards).toHaveLength(2);
     expect(toolCards.map((p) => p.result)).toEqual(["row A", "row B"]);
+  });
+});
+
+describe("SSE thinking / reasoning events", () => {
+  function eventsStream(events: object[]): ReadableStream<Uint8Array> {
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        const enc = new TextEncoder();
+        for (const ev of events) {
+          controller.enqueue(enc.encode(`data: ${JSON.stringify(ev)}\n\n`));
+        }
+        controller.close();
+      },
+    });
+  }
+
+  it("coalesces thinking deltas into a single reasoning part", async () => {
+    const content: any[] = [];
+    await readSSEStreamRaw(
+      eventsStream([
+        { type: "thinking", text: "First, " },
+        { type: "reasoning", text: "check the schema." },
+        { type: "text", text: "Here is the answer." },
+        { type: "done" },
+      ]),
+      content,
+      { value: 0 },
+      undefined,
+      () => {},
+    ).catch(() => {});
+
+    expect(content).toEqual([
+      { type: "reasoning", text: "First, check the schema." },
+      { type: "text", text: "Here is the answer." },
+    ]);
+  });
+
+  it("clears in-flight reasoning on clear events", async () => {
+    const content: any[] = [];
+    await readSSEStreamRaw(
+      eventsStream([
+        { type: "thinking", text: "draft thought" },
+        { type: "clear" },
+        { type: "text", text: "retry" },
+        { type: "done" },
+      ]),
+      content,
+      { value: 0 },
+      undefined,
+      () => {},
+    ).catch(() => {});
+
+    expect(content).toEqual([{ type: "text", text: "retry" }]);
+  });
+});
+
+function inFlightToolStream(
+  terminalDelayMs: number,
+  toolDoneDelayMs?: number,
+): ReadableStream<Uint8Array> {
+  const timers: ReturnType<typeof setTimeout>[] = [];
+  const encode = (event: unknown) =>
+    new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(
+        encode({ type: "tool_start", tool: "run-report", id: "call-1" }),
+      );
+      if (toolDoneDelayMs !== undefined) {
+        timers.push(
+          setTimeout(() => {
+            controller.enqueue(
+              encode({
+                type: "tool_done",
+                tool: "run-report",
+                id: "call-1",
+                result: "ok",
+              }),
+            );
+          }, toolDoneDelayMs),
+        );
+      }
+      timers.push(
+        setTimeout(() => {
+          controller.enqueue(encode({ type: "done" }));
+          controller.close();
+        }, terminalDelayMs),
+      );
+    },
+    cancel() {
+      for (const timer of timers) clearTimeout(timer);
+    },
+  });
+}
+
+describe("SSE client watchdog ordering", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps the client no-progress window above the server backstop", () => {
+    // The server owns recovery. If the browser fires first, the whole
+    // server-side ladder becomes unreachable dead code.
+    expect(SSE_NO_PROGRESS_TIMEOUT_MS).toBeGreaterThan(
+      RUN_NO_PROGRESS_HARD_TIMEOUT_MS,
+    );
+    expect(SSE_IN_FLIGHT_WORK_TIMEOUT_MS).toBeGreaterThan(
+      SSE_NO_PROGRESS_TIMEOUT_MS,
+    );
+  });
+
+  it("suspends the no-progress watchdog while a tool call is in flight", async () => {
+    vi.useFakeTimers();
+
+    const donePromise = drain(
+      readSSEStream(
+        inFlightToolStream(SSE_NO_PROGRESS_TIMEOUT_MS + 120_000),
+        [],
+        { value: 0 },
+        undefined,
+      ),
+    );
+
+    await vi.advanceTimersByTimeAsync(SSE_NO_PROGRESS_TIMEOUT_MS + 120_000);
+
+    await expect(donePromise).resolves.toBeDefined();
+  });
+
+  it("resumes the no-progress watchdog once the tool settles", async () => {
+    vi.useFakeTimers();
+
+    const errPromise = (async () => {
+      try {
+        await drain(
+          readSSEStream(
+            inFlightToolStream(SSE_NO_PROGRESS_TIMEOUT_MS * 3, 1_000),
+            [],
+            { value: 0 },
+            undefined,
+          ),
+        );
+      } catch (err) {
+        return err;
+      }
+    })();
+
+    await vi.advanceTimersByTimeAsync(1_000 + SSE_NO_PROGRESS_TIMEOUT_MS + 1);
+    const err = await errPromise;
+
+    expect(err).toBeInstanceOf(AgentAutoContinueSignal);
+    expect((err as AgentAutoContinueSignal).reason).toBe("no_progress");
+    expect((err as AgentAutoContinueSignal).clientWatchdog).toBe(true);
   });
 });

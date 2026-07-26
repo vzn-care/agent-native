@@ -7,8 +7,13 @@ description: "Pause the agent before a high-consequence action runs — defineAc
 
 Most actions should just run. A few — sending an email, charging a card, deleting an account — are outward-facing and hard to undo, and you don't want the agent to do them autonomously. For those, `defineAction` has an opt-in **approval gate**: when the agent tries to call the action, the loop pauses, surfaces an Approve/Deny affordance to the human, and runs the action _only_ after the human approves that specific call.
 
-> [!WARNING]
-> Keep approvals rare. Every gated action is a hard stop in the agent loop — it interrupts the run and demands a human round-trip. Use `needsApproval` only for genuinely high-consequence, hard-to-undo, outward-facing operations. If you find yourself gating reads or routine writes, you're holding it wrong. The default is **off**, and almost every action should leave it off.
+<Callout tone="warning">
+  Keep approvals rare. Every gated action is a hard stop in the agent loop — it
+  interrupts the run and demands a human round-trip. Use `needsApproval` only
+  for genuinely high-consequence, hard-to-undo, outward-facing operations. If
+  you find yourself gating reads or routine writes, you're holding it wrong. The
+  default is **off**, and almost every action should leave it off.
+</Callout>
 
 ## The `needsApproval` gate {#needs-approval}
 
@@ -73,6 +78,15 @@ The paused tool returns a result telling the model the turn is paused and not to
 
 On `approval_required`, the chat UI renders an **Approve / Deny** affordance on the paused tool call. This is wired automatically in `AssistantChat` — you don't build it per template.
 
+<WireframeBlock id="doc-block-humanapprovalwf1">
+  <Screen
+    surface="panel"
+    html={
+      "<div style='display:flex;flex-direction:column;min-height:200px;box-sizing:border-box;padding:16px;gap:12px'><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><div style='display:flex;align-items:center;gap:8px'><span class='wf-pill warn'>Needs approval</span><strong>send-email</strong></div><div style='display:flex;flex-direction:column;gap:2px'><span class='wf-muted'>to: alex@acme.com</span><span class='wf-muted'>subject: Following up on the proposal</span></div><div style='display:flex;gap:8px'><button>Deny</button><button class='primary'>Approve</button></div></div></div>"
+    }
+  />
+</WireframeBlock>
+
 - **Approve** re-issues the turn (an ordinary continuation message) carrying the call's key in `approvedToolCalls: [approvalKey]`. On the re-issued turn, the gate sees the key in the approved set and lets that specific call run normally.
 - **Deny** dismisses the affordance locally; nothing is re-issued, so the action never runs.
 
@@ -135,7 +149,7 @@ On `approval_required`, the chat UI renders an **Approve / Deny** affordance on 
 
 The canonical (and intentionally rare) use of this gate in the framework is the Mail template's `send-email` action, which sets `needsApproval: true` so the agent can draft and queue freely but can never actually send a message without a human approving the specific send.
 
-## Related
+## What's next
 
 - [**Actions**](/docs/actions#needs-approval) — the full `defineAction` surface, including `outputSchema` for validating return values.
 - [**Security**](/docs/security) — when to reach for an approval gate vs. hiding an action from the model.

@@ -1,4 +1,7 @@
+import { creativeContextMessagesByLocale } from "@agent-native/creative-context/messages";
+
 const messages = {
+  creativeContext: creativeContextMessagesByLocale["pt-BR"],
   root: {
     commandPresentations: "Apresentações",
     searchDecks: "Buscar decks",
@@ -34,10 +37,10 @@ const messages = {
       "Gerencie membros da equipe, acesso da organização e preferências compartilhadas.",
     openTeamSettings: "Abrir configurações da equipe",
     openResourceSettings: "Abrir configurações de recursos",
-    agentTitle: "Configurações do agente",
+    agentTitle: "Gerenciar agente",
     agentDescription:
-      "Abra as configurações do agente na barra lateral para modelos, chaves de API, automações, voz e outros controles.",
-    openAgentSettings: "Abrir configurações do agente",
+      "Gerencie o modelo do agente, chaves de API, automações, voz e outros controles.",
+    openAgentSettings: "Gerenciar agente",
   },
   agent: {
     emptyState: "Pergunte qualquer coisa sobre suas apresentações",
@@ -92,6 +95,8 @@ const messages = {
     googlePickerNeedsKeys:
       "Google Picker precisa de GOOGLE_PICKER_API_KEY e GOOGLE_PICKER_APP_ID.",
     imageUploadFailed: "Falha ao enviar imagem",
+    imageUploadNeedsBuilder:
+      "Conecte o Builder.io no menu de modelo do compositor do agente para enviar imagens aos slides. Soltar uma imagem na tela vazia ainda pode enviá-la ao agente sem provedor.",
     sentToAgent: "Enviado ao agente",
     imageUploadGenericError: "Algo deu errado ao enviar esta imagem.",
     uploading: "Enviando…",
@@ -102,6 +107,7 @@ const messages = {
     searchImagesPlaceholder: "Buscar imagens...",
     searchForLogosImagesIcons: "Buscar logos, imagens, ícones...",
     search: "Buscar",
+    searchFailed: "Falha na pesquisa",
     logoSearchTitle: "Busca de logo",
     searchCompanyLogo: "Busque uma empresa para encontrar seu logo",
     searchCompanyPlaceholder: "Buscar nome da empresa (ex.: Intuit)",
@@ -115,6 +121,7 @@ const messages = {
     uploadAttachedFailed: "Não foi possível enviar o arquivo anexado.",
     uploadFailed: "Falha no envio",
     doubleClickEdit: "Clique duas vezes em qualquer texto para editar",
+    dragToMove: "Arraste para mover",
     aiEditing: "IA editando",
     startTypingCommands: "Comece a digitar… ou pressione / para comandos",
     pinDropHint: "Clique em qualquer lugar para soltar um pin de comentário",
@@ -205,6 +212,7 @@ const messages = {
     elementAnimations: "Animações de elementos",
     tweaks: "Ajustes",
     drawOnSlide: "Desenhar no slide",
+    addTextBox: "Adicionar caixa de texto",
     pinComments: "Fixar comentários",
     pinCommentsDescription:
       "Clique em pontos no slide para enfileirar várias edições e enviá-las de uma vez.",
@@ -329,6 +337,8 @@ const messages = {
     hideResolved: "Ocultar resolvidos",
     showResolved: "Mostrar {{count}} resolvidos",
     noCommentsYet: "Ainda não há comentários",
+    loadFailed: "Não foi possível carregar os comentários",
+    retry: "Tentar novamente",
     clickToAddComment: "Clique para adicionar um comentário",
     selectSlideToAdd: "Selecione um slide para adicionar um",
   },
@@ -483,6 +493,8 @@ const messages = {
     backToDecks: "Volver a decks",
     tryAgain: "Intentar de nuevo",
     imageUploadFailed: "Error al subir imagen",
+    imageUploadNeedsBuilder:
+      "Conecte o Builder.io no menu de modelo do compositor do agente para enviar imagens aos slides. Soltar uma imagem na tela vazia ainda pode enviá-la ao agente sem provedor.",
     imageAdded: "Imagen añadida",
     imageUploadError: "Algo salió mal al subir esta imagen.",
     exportFailed: "Error al exportar",
@@ -552,6 +564,10 @@ const messages = {
     chooseAnotherFile: "Escolher outro arquivo",
   },
   home: {
+    loadFailed: "Não foi possível carregar seu conteúdo",
+    loadFailedDescription:
+      "Seu conteúdo salvo continua disponível. Verifique a conexão e tente novamente.",
+    retry: "Tentar novamente",
     decksTitle: "Decks",
     newDeck: "Novo deck",
     deckLengthQuestion: "Qual deve ser o tamanho deste deck?",

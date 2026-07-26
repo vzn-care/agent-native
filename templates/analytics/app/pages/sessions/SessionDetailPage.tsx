@@ -1,12 +1,17 @@
 import {
   AgentToggleButton,
-  appApiPath,
-  PromptComposer,
-  useActionMutation,
   useSendToAgentChat,
-  useT,
-} from "@agent-native/core/client";
+} from "@agent-native/core/client/agent-chat";
+import { appApiPath } from "@agent-native/core/client/api-path";
+import { PromptComposer } from "@agent-native/core/client/composer";
+import { callAction, useActionMutation } from "@agent-native/core/client/hooks";
+import { useT } from "@agent-native/core/client/i18n";
 import { SESSION_REPLAY_AGENT_ACCESS_PARAM } from "@shared/session-replay-agent-access";
+import {
+  isFailedSessionReplayNetworkStatus,
+  SESSION_REPLAY_CONSOLE_EVENT_TAG,
+  SESSION_REPLAY_NETWORK_EVENT_TAG,
+} from "@shared/session-replay-diagnostics";
 import {
   IconArrowLeft,
   IconCheck,
@@ -22,21 +27,33 @@ import {
   IconPlayerSkipForward,
   IconPlayerTrackNext,
   IconRoute,
+  IconSearch,
   IconTerminal2,
   IconTimelineEvent,
 } from "@tabler/icons-react";
+import { useQuery } from "@tanstack/react-query";
 import {
+  type CSSProperties,
   type ReactNode,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type FormEvent,
 } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import {
   Popover,
   PopoverContent,
@@ -53,7 +70,11 @@ import { getIdToken } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
 import { extractReplayDiagnostics } from "./session-replay-devtools";
-import { SessionDevToolsPanel } from "./SessionDevToolsPanel";
+import type { ReplayDevToolsDiagnostics } from "./session-replay-devtools";
+import {
+  type SessionIssueMatch,
+  SessionDevToolsPanel,
+} from "./SessionDevToolsPanel";
 
 type SessionRecordingSummary = {
   id: string;
@@ -146,6 +167,10 @@ type ReplayViewportDimensions = {
   height: number;
 };
 
+type ReplayViewportChange = ReplayViewportDimensions & {
+  offsetMs: number;
+};
+
 const DEFAULT_PLAYER_WIDTH = 1024;
 const DEFAULT_PLAYER_HEIGHT = 640;
 const DEFAULT_SPEED = 2;
@@ -153,19 +178,59 @@ const SPEED_OPTIONS = [0.5, 1, 2, 4, 8];
 const SKIP_STEP_MS = 5000;
 const MIN_IDLE_SKIP_MS = 8000;
 const IDLE_EDGE_PAD_MS = 1200;
-const REPLAY_CHUNK_FETCH_CONCURRENCY = 6;
+const REPLAY_CHUNK_BATCH_MAX_CHUNKS = 20;
+const REPLAY_CHUNK_BATCH_MAX_DECLARED_BYTES = 4 * 1024 * 1024;
+const REPLAY_CHUNK_BATCH_FETCH_CONCURRENCY = 3;
 const REPLAY_CHUNK_UNAVAILABLE_MESSAGE = "Session replay chunk is unavailable";
-const DEFAULT_DEVTOOLS_HEIGHT = 280;
+const SCROLL_MARKER_BURST_MS = 1_000;
+const DEFAULT_DEVTOOLS_HEIGHT = 220;
+const MIN_STAGE_HEIGHT_PX = 240;
 const SCRUBBER_MARKER_LIMIT = 500;
-const SESSION_REPLAY_CONSOLE_EVENT_TAG = "agent-native.console";
-const SESSION_REPLAY_NETWORK_EVENT_TAG = "agent-native.network";
+const TIMELINE_MARKER_LIMIT = 300;
+const TIMELINE_FOLLOW_PAUSE_MS = 4000;
+const REPLAY_CLOCK_UPDATE_INTERVAL_MS = 100;
+/**
+ * Keep captured overlays intact. Toasts and snackbars are product feedback,
+ * not recorder chrome, and can be essential to understanding the session.
+ * The recorder does not inject notification UI into the recorded document, so
+ * blanket selectors (including Sonner's data attributes) are not justified.
+ */
+export const REPLAY_OVERLAY_STYLE_RULES: string[] = [];
+type ReplayConsoleDiagnostics = ReturnType<
+  typeof extractReplayDiagnostics
+>["console"];
 
-const EMPTY_DIAGNOSTICS: ReturnType<typeof extractReplayDiagnostics> = {
-  console: [],
-  network: [],
-  consoleErrorCount: 0,
-  networkFailedCount: 0,
+type ConsoleErrorSignaturePayload = {
+  key: string;
+  source: string;
+  message: string;
+  stack?: string;
 };
+
+/**
+ * Distill the resolvable error lines from a session's console diagnostics for
+ * issue matching. Only error-level lines are worth sending: window errors,
+ * unhandled rejections, and manual `captureException` all surface at `error`
+ * level with a serialized `Name: message` (+ stack) that the server can
+ * fingerprint back to a captured issue. Non-error console lines are left alone,
+ * and anything without a captured issue simply comes back unmatched.
+ */
+function buildConsoleErrorSignatures(
+  entries: ReplayConsoleDiagnostics,
+): ConsoleErrorSignaturePayload[] {
+  const signatures: ConsoleErrorSignaturePayload[] = [];
+  for (const entry of entries) {
+    if (entry.level !== "error" || !entry.message) continue;
+    signatures.push({
+      key: entry.id,
+      source: entry.source,
+      message: entry.message,
+      ...(entry.stack ? { stack: entry.stack } : {}),
+    });
+    if (signatures.length >= 100) break;
+  }
+  return signatures;
+}
 
 const RRWEB_EVENT_TYPE = {
   FullSnapshot: 2,
@@ -176,31 +241,38 @@ const RRWEB_EVENT_TYPE = {
 
 const INCREMENTAL_SOURCE = {
   Mutation: 0,
+  MouseMove: 1,
   MouseInteraction: 2,
   Scroll: 3,
+  ViewportResize: 4,
   Input: 5,
   TouchMove: 6,
+  Drag: 12,
 } as const;
 
 const MOUSE_INTERACTION = {
+  MouseUp: 0,
+  MouseDown: 1,
   Click: 2,
+  ContextMenu: 3,
   DblClick: 4,
   Focus: 5,
+  TouchStart: 7,
+  TouchEnd: 9,
 } as const;
-
-const INTERACTION_SOURCES = new Set<number>([
-  INCREMENTAL_SOURCE.MouseInteraction,
-  INCREMENTAL_SOURCE.Scroll,
-  INCREMENTAL_SOURCE.Input,
-  INCREMENTAL_SOURCE.TouchMove,
-]);
 
 export default function SessionDetailPage() {
   const t = useT();
   const { recordingId = "" } = useParams();
+  const [searchParams] = useSearchParams();
   const { codeRequiredDialog } = useSendToAgentChat();
   const { data, isLoading, error } = useSessionReplayPlayback(recordingId);
   const recording = data?.recording;
+  const initialSeekMs = useMemo(() => {
+    const raw = searchParams.get("atMs");
+    if (!raw || !/^\d+$/.test(raw)) return 0;
+    return Number(raw);
+  }, [searchParams]);
 
   return (
     <div className="analytics-session-detail-page flex h-full min-h-0 w-full flex-col gap-3 overflow-hidden">
@@ -252,7 +324,7 @@ export default function SessionDetailPage() {
         <DetailSkeleton />
       ) : data && recording ? (
         <div className="min-h-0 flex-1">
-          <ReplayWorkbench response={data} />
+          <ReplayWorkbench response={data} initialSeekMs={initialSeekMs} />
         </div>
       ) : null}
     </div>
@@ -361,8 +433,10 @@ function AskSessionPopover({
 
 function ReplayWorkbench({
   response,
+  initialSeekMs,
 }: {
   response: SessionReplayPlaybackResponse;
+  initialSeekMs: number;
 }) {
   const events = useReplayEvents(response);
   const markers = useMemo(() => buildReplayMarkers(events), [events]);
@@ -391,11 +465,13 @@ function ReplayWorkbench({
         events={events}
         markers={markers}
         response={response}
+        initialSeekMs={initialSeekMs}
         onTimeUpdate={setCurrentTime}
         registerSeek={registerSeek}
       />
       <ReplayTimeline
         markers={markers}
+        isLoading={!response.isComplete}
         activeMarkerId={activeMarkerId}
         onSeek={(ms) => seekRef.current(ms, true)}
       />
@@ -407,12 +483,14 @@ function ReplayPlayer({
   events,
   markers,
   response,
+  initialSeekMs,
   onTimeUpdate,
   registerSeek,
 }: {
   events: AnyReplayEvent[];
   markers: ReplayMarker[];
   response: SessionReplayPlaybackResponse;
+  initialSeekMs: number;
   onTimeUpdate: (ms: number) => void;
   registerSeek: (seek: (ms: number, autoplay?: boolean) => void) => void;
 }) {
@@ -421,6 +499,7 @@ function ReplayPlayer({
   const stageRootRef = useRef<HTMLDivElement>(null);
   const replayerRef = useRef<any>(null);
   const rafRef = useRef<number | null>(null);
+  const lastClockUpdateAtRef = useRef<number | null>(null);
   const [status, setStatus] = useState<ReplayPlayerStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -430,17 +509,44 @@ function ReplayPlayer({
   const [skipInactive, setSkipInactive] = useState(true);
   const [devToolsOpen, setDevToolsOpen] = useState(false);
   const [devToolsHeight, setDevToolsHeight] = useState(DEFAULT_DEVTOOLS_HEIGHT);
+  const [maxDevToolsHeight, setMaxDevToolsHeight] = useState(420);
+  const playerShellRef = useRef<HTMLDivElement>(null);
   const [streamedDims, setStreamedDims] = useState<{
     width: number;
     height: number;
   } | null>(null);
   const [fitScale, setFitScale] = useState(1);
-  const initialDims = useMemo(() => replayViewportDimensions(events), [events]);
+  const initialDims = useMemo(
+    () => replayInitialViewportDimensions(events),
+    [events],
+  );
+  const viewportTimeline = useMemo(
+    () => buildReplayViewportTimeline(events),
+    [events],
+  );
+  const eventsRef = useLiveRef(events);
+  const viewportTimelineRef = useLiveRef(viewportTimeline);
+  const streamedDimsRef = useLiveRef(streamedDims);
+  // Stable identity for the loaded event set so progressive chunk publishes
+  // that only grow the array do not tear down a healthy Replayer mid-playback.
+  const eventsIdentity = useMemo(
+    () =>
+      `${events.length}:${Number(events[0]?.timestamp ?? 0)}:${Number(
+        events[events.length - 1]?.timestamp ?? 0,
+      )}`,
+    [events],
+  );
+  const scrubbingRef = useRef(false);
+  const scrubResumePlayingRef = useRef(false);
 
-  const playerWidth =
-    streamedDims?.width ?? initialDims?.width ?? DEFAULT_PLAYER_WIDTH;
-  const playerHeight =
-    streamedDims?.height ?? initialDims?.height ?? DEFAULT_PLAYER_HEIGHT;
+  // Fall back to the default player size only when the viewport is unknown;
+  // otherwise render the raw recorded dimensions untouched. See the Replayer
+  // construction below for why "recovery" heuristics were removed here.
+  const displayDims = resolveReplayDisplayDimensions(
+    streamedDims ?? initialDims,
+  );
+  const playerWidth = displayDims.width;
+  const playerHeight = displayDims.height;
   const skipRanges = useMemo(() => buildIdleSkipRanges(events), [events]);
   const skipRangesRef = useLiveRef(skipRanges);
   const skipInactiveRef = useLiveRef(skipInactive);
@@ -452,13 +558,44 @@ function ReplayPlayer({
     () => currentUrlAt(events, currentTime),
     [events, currentTime],
   );
-  const diagnostics = useMemo(
-    () => (devToolsOpen ? extractReplayDiagnostics(events) : EMPTY_DIAGNOSTICS),
-    [devToolsOpen, events],
+  const diagnostics = useMemo(() => extractReplayDiagnostics(events), [events]);
+  const devToolsIssueCount = replayDevToolsIssueCount(
+    diagnostics,
+    response.isComplete,
   );
-  const devToolsIssueCount = devToolsOpen
-    ? diagnostics.consoleErrorCount + diagnostics.networkFailedCount
-    : response.recording.errorCount;
+
+  // Resolve captured console errors in this replay to their Sentry-style issue
+  // groups (one batched, access-scoped call, server-computed fingerprints) so
+  // each error can deep-link to its full issue detail. Only runs once devtools
+  // are open and there is at least one error line worth looking up.
+  const errorSignatures = useMemo(
+    () => buildConsoleErrorSignatures(diagnostics.console),
+    [diagnostics.console],
+  );
+  const errorSignaturesKey = useMemo(
+    () => JSON.stringify(errorSignatures),
+    [errorSignatures],
+  );
+  const recordingId = response.recording.id;
+  const issueMatchQuery = useQuery({
+    queryKey: ["match-error-issues", recordingId, errorSignaturesKey],
+    queryFn: () =>
+      callAction<Record<string, SessionIssueMatch>>(
+        "match-error-issues",
+        { signatures: errorSignatures },
+        { method: "POST" },
+      ),
+    enabled: devToolsOpen && errorSignatures.length > 0,
+    staleTime: 60_000,
+  });
+  const issueMatches = useMemo(() => {
+    const map = new Map<string, SessionIssueMatch>();
+    const data = issueMatchQuery.data;
+    if (data) {
+      for (const [key, value] of Object.entries(data)) map.set(key, value);
+    }
+    return map;
+  }, [issueMatchQuery.data]);
   const loadingPercent =
     response.totalChunks > 0
       ? clamp(response.loadedChunks / response.totalChunks, 0, 1)
@@ -471,6 +608,7 @@ function ReplayPlayer({
     if (!el) return;
     const update = () => {
       const next = Math.min(
+        1,
         el.clientWidth / playerWidth,
         el.clientHeight / playerHeight,
       );
@@ -482,12 +620,38 @@ function ReplayPlayer({
     return () => observer.disconnect();
   }, [playerHeight, playerWidth]);
 
+  // Keep Dev Tools from eating the stage. On short viewports the panel used to
+  // shrink the replay area into a ribbon even when Meta dimensions were fine.
+  useEffect(() => {
+    const el = playerShellRef.current;
+    if (!el) return;
+    const update = () => {
+      const chromeBudget = 140;
+      const available = Math.max(
+        160,
+        el.clientHeight - MIN_STAGE_HEIGHT_PX - chromeBudget,
+      );
+      setMaxDevToolsHeight(available);
+      setDevToolsHeight((current) => Math.min(current, available));
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [devToolsOpen]);
+
   const updateTime = useCallback(
     (next: number) => {
+      if (!Number.isFinite(next) || next === currentTimeRef.current) return;
+      // Keep the live value in sync before React commits. The animation clock
+      // can run again while React is still processing the previous render;
+      // relying on useLiveRef's effect here republishes the same value and can
+      // create a nested update loop in development.
+      currentTimeRef.current = next;
       setCurrentTime(next);
       onTimeUpdate(next);
     },
-    [onTimeUpdate],
+    [currentTimeRef, onTimeUpdate],
   );
 
   const seek = useCallback(
@@ -507,9 +671,54 @@ function ReplayPlayer({
         console.warn("[session-replay] seek failed", seekError);
         return;
       }
+      const seekDims = replayViewportDimensionsAtTime(
+        viewportTimelineRef.current,
+        clamped,
+      );
+      if (seekDims) {
+        // rrweb 2.1 does not reliably re-emit its resize event when seeking
+        // backwards, so mirror the raw viewport-timeline lookup onto both
+        // rrweb's iframe and the outer stage state to keep them in sync.
+        const currentDims = streamedDimsRef.current;
+        if (
+          currentDims?.width !== seekDims.width ||
+          currentDims?.height !== seekDims.height
+        ) {
+          replayer.handleResize?.(seekDims);
+          setStreamedDims(seekDims);
+        }
+      }
       updateTime(clamped);
     },
-    [playingRef, status, totalTime, updateTime],
+    [
+      playingRef,
+      status,
+      streamedDimsRef,
+      totalTime,
+      updateTime,
+      viewportTimelineRef,
+    ],
+  );
+
+  const beginScrub = useCallback(
+    (ms: number) => {
+      if (!scrubbingRef.current) {
+        scrubResumePlayingRef.current = playingRef.current;
+      }
+      scrubbingRef.current = true;
+      seek(ms, false);
+    },
+    [playingRef, seek],
+  );
+
+  const endScrub = useCallback(
+    (ms: number) => {
+      const resume = scrubResumePlayingRef.current;
+      scrubbingRef.current = false;
+      scrubResumePlayingRef.current = false;
+      seek(ms, resume);
+    },
+    [seek],
   );
 
   useEffect(() => {
@@ -520,21 +729,20 @@ function ReplayPlayer({
     if (!stageRootRef.current) return;
     let cancelled = false;
     let localReplayer: any = null;
+    let stopCursorVisibilityObserver = () => {};
 
     async function loadReplay() {
-      const hasPlayableEvents = hasPlayableReplayEvents(events);
-      if (!hasPlayableEvents && !response.isComplete) {
+      const replayEvents = eventsRef.current;
+      // Replayer construction remains all-or-nothing. Progressive response
+      // publishes update loading progress only; rebuilding during download
+      // rewinds the player and can desync the scrubber/playhead.
+      if (!response.isComplete) {
         setStatus("loading");
         setError(null);
         setPlaying(false);
         return;
       }
-      if (events.length < 2) {
-        throw new Error(t("sessions.noReplayEvents"));
-      }
-      if (
-        !events.some((event) => event.type === RRWEB_EVENT_TYPE.FullSnapshot)
-      ) {
+      if (replayEvents.length < 2 || !hasPlayableReplayEvents(replayEvents)) {
         throw new Error(t("sessions.noReplayEvents"));
       }
       setStatus("loading");
@@ -544,36 +752,45 @@ function ReplayPlayer({
       if (cancelled || !stageRootRef.current) return;
 
       stageRootRef.current.innerHTML = "";
-      setStreamedDims(initialDims);
-      localReplayer = new Replayer(events as any[], {
+      // Viewport and pointer events must pass through to rrweb untouched.
+      // The 2026-07 "ultra-wide replay" bugs (e.g. a stored 1,152px-wide
+      // recording rendering as a 4,491px Meta width) were caused by demo
+      // mode's fetch redaction faking numbers >= 1000 in raw replay JSON at
+      // view time, not by malformed stored geometry — fixed in
+      // packages/core/src/demo/fetch-interceptor.ts. Stored recordings were
+      // always sane, so never add viewport "recovery" heuristics here; they
+      // can only corrupt genuine recordings (e.g. a real ultrawide window).
+      setStreamedDims(replayInitialViewportDimensions(replayEvents));
+      // Keep this loosely typed: our internal AnyReplayEvent shape doesn't
+      // exactly match rrweb's declared eventWithTime type.
+      localReplayer = new Replayer(replayEvents as any[], {
         root: stageRootRef.current,
         speed: speedRef.current,
         skipInactive: false,
         showWarning: false,
         showDebug: false,
-        triggerFocus: false,
-        // Subtle FullStory-style trail behind the visitor cursor. The canvas
-        // is resized alongside the iframe in applyReplayFrameDimensions.
-        mouseTail: {
-          strokeStyle: "rgba(59, 130, 246, 0.35)",
-          lineWidth: 2,
-          duration: 600,
-          lineCap: "round",
-        },
-        insertStyleRules: [
-          "[data-radix-popper-content-wrapper], .Toastify, [class*='toast'], [class*='Toast'] { display: none !important; }",
-        ],
+        mouseTail: false,
+        // Match stock rrweb/builder-internal focus replay. Disabling focus
+        // drops recorded focus-visible state and can leave menus/forms looking
+        // unlike the source page even when the snapshot CSS is correct.
+        triggerFocus: true,
+        insertStyleRules: REPLAY_OVERLAY_STYLE_RULES,
       });
+      // rrweb already sandboxes the replay document without script execution.
+      // Do not mutate recorded URLs/CSS; suppress viewer-page referrer leakage
+      // at the iframe boundary while retaining historical visual resources.
+      localReplayer.iframe?.setAttribute?.("referrerpolicy", "no-referrer");
+      stopCursorVisibilityObserver =
+        hideReplayCursorUntilPosition(localReplayer);
       replayerRef.current = localReplayer;
       const meta = localReplayer.getMetaData?.();
-      const total = Number(meta?.totalTime ?? replayDuration(events));
+      const total = Number(meta?.totalTime ?? replayDuration(replayEvents));
       setTotalTime(Number.isFinite(total) ? total : 0);
       const startAt = clamp(
-        currentTimeRef.current,
+        initialSeekMs || currentTimeRef.current,
         0,
         Number.isFinite(total) ? total : 0,
       );
-      applyReplayFrameDimensions(localReplayer, initialDims);
       localReplayer.on?.("finish", () => {
         setPlaying(false);
         const finalTime = Number(localReplayer.getCurrentTime?.() ?? total);
@@ -581,19 +798,30 @@ function ReplayPlayer({
       });
       localReplayer.on?.("resize", (payload: unknown) => {
         const dims = payload as { width?: unknown; height?: unknown };
-        const nextDims = normalizeReplayDimensions(dims.width, dims.height);
-        if (nextDims) {
-          applyReplayFrameDimensions(localReplayer, nextDims);
-          revealReplayFrame(localReplayer);
-          setStreamedDims(nextDims);
+        if (
+          typeof dims.width === "number" &&
+          typeof dims.height === "number" &&
+          Number.isFinite(dims.width) &&
+          Number.isFinite(dims.height) &&
+          dims.width > 0 &&
+          dims.height > 0
+        ) {
+          const rawDims = {
+            width: Math.round(dims.width),
+            height: Math.round(dims.height),
+          };
+          // rrweb owns its iframe geometry from raw Meta/ViewportResize
+          // events. Only mirror the raw dims into React state here, for the
+          // outer stage's fit-to-container scaling.
+          const currentDims = streamedDimsRef.current;
+          if (
+            currentDims?.width === rawDims.width &&
+            currentDims?.height === rawDims.height
+          ) {
+            return;
+          }
+          setStreamedDims(rawDims);
         }
-      });
-      localReplayer.on?.("fullsnapshot-rebuilded", () => {
-        applyReplayFrameDimensions(
-          localReplayer,
-          replayViewportDimensions(events) ?? initialDims,
-        );
-        revealReplayFrame(localReplayer);
       });
       updateTime(startAt);
       setStatus("ready");
@@ -609,13 +837,6 @@ function ReplayPlayer({
         }
         setPlaying(false);
       }
-      window.requestAnimationFrame(() => {
-        applyReplayFrameDimensions(
-          localReplayer,
-          replayViewportDimensions(events) ?? initialDims,
-        );
-        revealReplayFrame(localReplayer);
-      });
     }
 
     void loadReplay().catch((loadError: any) => {
@@ -627,11 +848,13 @@ function ReplayPlayer({
 
     return () => {
       cancelled = true;
+      stopCursorVisibilityObserver();
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
       try {
         localReplayer?.pause?.();
         localReplayer?.destroy?.();
+        replayerRef.current?.pause?.();
         replayerRef.current?.destroy?.();
       } catch {
         // rrweb cleanup is best-effort across versions.
@@ -641,8 +864,9 @@ function ReplayPlayer({
     };
   }, [
     currentTimeRef,
-    events,
-    initialDims,
+    eventsIdentity,
+    eventsRef,
+    initialSeekMs,
     response.isComplete,
     speedRef,
     t,
@@ -653,12 +877,13 @@ function ReplayPlayer({
     if (!playing || status !== "ready") {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
+      lastClockUpdateAtRef.current = null;
       return;
     }
 
-    const tick = () => {
+    const tick = (frameTime: number) => {
       const replayer = replayerRef.current;
-      if (replayer) {
+      if (replayer && !scrubbingRef.current) {
         let nextTime = Number(
           replayer.getCurrentTime?.() ?? currentTimeRef.current,
         );
@@ -679,7 +904,17 @@ function ReplayPlayer({
             }
           }
         }
-        if (Number.isFinite(nextTime)) updateTime(nextTime);
+        if (
+          shouldPublishReplayClockUpdate(
+            lastClockUpdateAtRef.current,
+            frameTime,
+            currentTimeRef.current,
+            nextTime,
+          )
+        ) {
+          lastClockUpdateAtRef.current = frameTime;
+          updateTime(nextTime);
+        }
       }
       rafRef.current = requestAnimationFrame(tick);
     };
@@ -688,6 +923,7 @@ function ReplayPlayer({
     return () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
+      lastClockUpdateAtRef.current = null;
     };
   }, [
     currentTimeRef,
@@ -738,209 +974,249 @@ function ReplayPlayer({
 
   return (
     <TooltipProvider>
-      <Card className="flex min-h-0 overflow-hidden">
-        <CardContent className="flex min-h-0 flex-1 flex-col p-0">
-          <div className="flex min-h-0 flex-1 flex-col bg-muted/20 p-2">
-            {currentUrl ? (
+      <div
+        ref={playerShellRef}
+        className="flex min-h-0 min-w-0 flex-1 flex-col"
+      >
+        <Card className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+          <CardContent className="flex min-h-0 min-w-0 flex-1 flex-col p-0">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-muted/20 p-2">
+              {currentUrl ? (
+                <div
+                  className="flex h-8 shrink-0 items-center rounded-t-md border border-b-0 bg-background px-3 font-mono text-xs text-muted-foreground"
+                  title={currentUrl}
+                >
+                  <span className="truncate">{currentUrl}</span>
+                </div>
+              ) : null}
               <div
-                className="flex h-8 shrink-0 items-center rounded-t-md border border-b-0 bg-background px-3 font-mono text-xs text-muted-foreground"
-                title={currentUrl}
+                ref={stageAreaRef}
+                className={cn(
+                  "relative min-h-[200px] flex-1 overflow-hidden border bg-white dark:bg-zinc-950",
+                  currentUrl ? "rounded-b-md" : "rounded-md",
+                  !devToolsOpen && "min-h-[320px]",
+                )}
               >
-                <span className="truncate">{currentUrl}</span>
+                <div
+                  ref={stageRootRef}
+                  className="an-replay-stage-root absolute left-1/2 top-1/2"
+                  style={
+                    {
+                      width: playerWidth,
+                      height: playerHeight,
+                      "--an-replay-cursor-scale": String(1 / fitScale),
+                      transform: `translate(-50%, -50%) scale(${fitScale})`,
+                      transformOrigin: "center center",
+                    } as CSSProperties
+                  }
+                />
+                <button
+                  type="button"
+                  className={cn(
+                    "absolute inset-0 z-20 rounded-[inherit] border-0 bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-default",
+                    // INTENTIONAL — KEEP THE VIEWER CURSOR VISIBLE.
+                    // The recorded cursor is a separate overlay, while this
+                    // button owns the live hover target for pause/play. Do
+                    // not add `cursor-none`: it makes the user's cursor
+                    // disappear when they move over the preview.
+                    "cursor-pointer",
+                  )}
+                  disabled={disabled}
+                  aria-label={
+                    playing ? t("sessions.pause") : t("sessions.play")
+                  }
+                  onClick={togglePlay}
+                />
+                {status === "loading" ? (
+                  <div className="absolute inset-0 z-30 grid place-items-center bg-background/70 p-6 text-center text-sm text-muted-foreground">
+                    <div className="w-full max-w-sm">
+                      <p>{t("sessions.replayLoading")}</p>
+                      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full rounded-full bg-primary transition-[width]"
+                          style={{
+                            width: `${Math.round(loadingPercent * 100)}%`,
+                          }}
+                        />
+                      </div>
+                      {response.totalChunks > 0 ? (
+                        <p className="mt-2 font-mono text-[11px]">
+                          {t("sessions.replayLoadingProgress", {
+                            loaded: String(response.loadedChunks),
+                            total: String(response.totalChunks),
+                          })}
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+                {status === "error" && error ? (
+                  <div className="absolute inset-0 z-30 grid place-items-center bg-background/85 p-6 text-center text-sm text-destructive">
+                    {t("sessions.loadFailed", { message: error })}
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-            <div
-              ref={stageAreaRef}
-              className={cn(
-                "relative min-h-[320px] flex-1 overflow-hidden border bg-white dark:bg-zinc-950",
-                currentUrl ? "rounded-b-md" : "rounded-md",
-              )}
-            >
-              <div
-                ref={stageRootRef}
-                className="an-replay-stage-root absolute left-1/2 top-1/2"
-                style={{
-                  width: playerWidth,
-                  height: playerHeight,
-                  transform: `translate(-50%, -50%) scale(${fitScale})`,
-                  transformOrigin: "center center",
-                }}
+            </div>
+
+            <div className="flex shrink-0 flex-wrap items-center gap-2 border-t px-3 py-2">
+              <ReplayIconButton
+                label={t("sessions.skipBack")}
+                disabled={disabled}
+                onClick={() => seek(currentTime - SKIP_STEP_MS)}
+              >
+                <IconPlayerSkipBack className="h-4 w-4" />
+              </ReplayIconButton>
+              <Button
+                type="button"
+                size="icon"
+                disabled={disabled}
+                onClick={togglePlay}
+                aria-label={playing ? t("sessions.pause") : t("sessions.play")}
+                className="h-8 w-8"
+              >
+                {playing ? (
+                  <IconPlayerPause className="h-4 w-4" />
+                ) : (
+                  <IconPlayerPlay className="h-4 w-4" />
+                )}
+              </Button>
+              <ReplayIconButton
+                label={t("sessions.skipForward")}
+                disabled={disabled}
+                onClick={() => seek(currentTime + SKIP_STEP_MS)}
+              >
+                <IconPlayerSkipForward className="h-4 w-4" />
+              </ReplayIconButton>
+
+              <span className="w-12 text-center font-mono text-xs text-muted-foreground">
+                {formatClock(currentTime)}
+              </span>
+              <ReplayScrubber
+                currentTime={currentTime}
+                totalTime={totalTime}
+                markers={markers}
+                skipRanges={skipRanges}
+                skipInactive={skipInactive}
+                disabled={disabled}
+                onScrub={beginScrub}
+                onScrubEnd={endScrub}
               />
+              <span className="w-12 text-center font-mono text-xs text-muted-foreground">
+                {formatClock(totalTime)}
+              </span>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    aria-label={`${speed}x`}
+                    className="inline-flex h-8 min-w-11 items-center justify-center rounded-md border px-2 text-xs font-medium tabular-nums transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+                  >
+                    {speed}x
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="center" side="top">
+                  <DropdownMenuRadioGroup
+                    value={String(speed)}
+                    onValueChange={(value) => updateSpeed(Number(value))}
+                  >
+                    {SPEED_OPTIONS.map((option) => (
+                      <DropdownMenuRadioItem
+                        key={option}
+                        value={String(option)}
+                        className="tabular-nums"
+                      >
+                        {option}x
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className={cn(
+                      "inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-xs font-medium transition-colors hover:bg-muted",
+                      skipInactive &&
+                        "border-primary/40 bg-primary/10 text-primary",
+                    )}
+                    onClick={() => setSkipInactive((value) => !value)}
+                    aria-pressed={skipInactive}
+                  >
+                    <IconPlayerTrackNext className="h-4 w-4" />
+                    {t("sessions.skipInactive")}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {skipInactive
+                    ? t("sessions.skipInactiveOn")
+                    : t("sessions.skipInactiveOff")}
+                </TooltipContent>
+              </Tooltip>
+
               <button
                 type="button"
-                className="absolute inset-0 z-20 cursor-pointer rounded-[inherit] border-0 bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-default"
-                disabled={disabled}
-                aria-label={playing ? t("sessions.pause") : t("sessions.play")}
-                onClick={togglePlay}
-              />
-              {status === "loading" ? (
-                <div className="absolute inset-0 z-30 grid place-items-center bg-background/70 p-6 text-center text-sm text-muted-foreground">
-                  <div className="w-full max-w-sm">
-                    <p>{t("sessions.replayLoading")}</p>
-                    <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted">
-                      <div
-                        className="h-full rounded-full bg-primary transition-[width]"
-                        style={{
-                          width: `${Math.round(loadingPercent * 100)}%`,
-                        }}
-                      />
-                    </div>
-                    {response.totalChunks > 0 ? (
-                      <p className="mt-2 font-mono text-[11px]">
-                        {t("sessions.replayLoadingProgress", {
-                          loaded: String(response.loadedChunks),
-                          total: String(response.totalChunks),
-                        })}
-                      </p>
-                    ) : null}
-                  </div>
-                </div>
-              ) : null}
-              {status === "error" && error ? (
-                <div className="absolute inset-0 z-30 grid place-items-center bg-background/85 p-6 text-center text-sm text-destructive">
-                  {t("sessions.loadFailed", { message: error })}
-                </div>
-              ) : null}
-            </div>
-          </div>
+                className={cn(
+                  "inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-xs font-medium transition-colors hover:bg-muted",
+                  devToolsOpen &&
+                    "border-primary/40 bg-primary/10 text-primary",
+                  !response.isComplete && "cursor-not-allowed opacity-50",
+                )}
+                onClick={() => setDevToolsOpen((value) => !value)}
+                disabled={!response.isComplete}
+                aria-pressed={devToolsOpen}
+                aria-expanded={devToolsOpen}
+              >
+                <IconTerminal2 className="h-4 w-4" />
+                {t("sessions.devtools")}
+                {devToolsIssueCount > 0 ? (
+                  <span
+                    className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 font-mono text-[10px] font-semibold leading-none text-white"
+                    aria-label={t("sessions.devtoolsIssueCount", {
+                      count: String(devToolsIssueCount),
+                    })}
+                  >
+                    {devToolsIssueCount > 99 ? "99+" : devToolsIssueCount}
+                  </span>
+                ) : null}
+              </button>
 
-          <div className="flex shrink-0 flex-wrap items-center gap-2 border-t px-3 py-2">
-            <ReplayIconButton
-              label={t("sessions.skipBack")}
-              disabled={disabled}
-              onClick={() => seek(currentTime - SKIP_STEP_MS)}
-            >
-              <IconPlayerSkipBack className="h-4 w-4" />
-            </ReplayIconButton>
-            <Button
-              type="button"
-              size="icon"
-              disabled={disabled}
-              onClick={togglePlay}
-              aria-label={playing ? t("sessions.pause") : t("sessions.play")}
-              className="h-8 w-8"
-            >
-              {playing ? (
-                <IconPlayerPause className="h-4 w-4" />
-              ) : (
-                <IconPlayerPlay className="h-4 w-4" />
-              )}
-            </Button>
-            <ReplayIconButton
-              label={t("sessions.skipForward")}
-              disabled={disabled}
-              onClick={() => seek(currentTime + SKIP_STEP_MS)}
-            >
-              <IconPlayerSkipForward className="h-4 w-4" />
-            </ReplayIconButton>
-
-            <span className="w-12 text-center font-mono text-xs text-muted-foreground">
-              {formatClock(currentTime)}
-            </span>
-            <ReplayScrubber
-              currentTime={currentTime}
-              totalTime={totalTime}
-              markers={markers}
-              skipRanges={skipRanges}
-              skipInactive={skipInactive}
-              disabled={disabled}
-              onSeek={(ms) => seek(ms)}
-            />
-            <span className="w-12 text-center font-mono text-xs text-muted-foreground">
-              {formatClock(totalTime)}
-            </span>
-
-            <div className="flex items-center rounded-md bg-muted p-1">
-              {SPEED_OPTIONS.map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  className={cn(
-                    "rounded px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground",
-                    speed === option &&
-                      "bg-background text-foreground shadow-sm",
-                  )}
-                  onClick={() => updateSpeed(option)}
-                >
-                  {option}x
-                </button>
-              ))}
-            </div>
-
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  className={cn(
-                    "inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-xs font-medium transition-colors hover:bg-muted",
-                    skipInactive &&
-                      "border-primary/40 bg-primary/10 text-primary",
-                  )}
-                  onClick={() => setSkipInactive((value) => !value)}
-                  aria-pressed={skipInactive}
-                >
-                  <IconPlayerTrackNext className="h-4 w-4" />
-                  {t("sessions.skipInactive")}
-                </button>
-              </TooltipTrigger>
-              <TooltipContent>
-                {skipInactive
-                  ? t("sessions.skipInactiveOn")
-                  : t("sessions.skipInactiveOff")}
-              </TooltipContent>
-            </Tooltip>
-
-            <button
-              type="button"
-              className={cn(
-                "inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-xs font-medium transition-colors hover:bg-muted",
-                devToolsOpen && "border-primary/40 bg-primary/10 text-primary",
-              )}
-              onClick={() => setDevToolsOpen((value) => !value)}
-              aria-pressed={devToolsOpen}
-              aria-expanded={devToolsOpen}
-            >
-              <IconTerminal2 className="h-4 w-4" />
-              {t("sessions.devtools")}
-              {devToolsIssueCount > 0 ? (
-                <span
-                  className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 font-mono text-[10px] font-semibold leading-none text-white"
-                  aria-label={t("sessions.devtoolsIssueCount", {
-                    count: String(devToolsIssueCount),
+              {response.isComplete ? (
+                <span className="ms-auto hidden text-xs text-muted-foreground lg:inline">
+                  {t("sessions.replayEventCount", {
+                    events: String(response.eventCount),
                   })}
-                >
-                  {devToolsIssueCount > 99 ? "99+" : devToolsIssueCount}
+                  {response.truncated ? ` ${t("sessions.truncated")}` : ""}
                 </span>
               ) : null}
-            </button>
-
-            <span className="ms-auto hidden text-xs text-muted-foreground lg:inline">
-              {t("sessions.replayEventCount", {
-                events: String(response.eventCount),
-              })}
-              {response.truncated ? ` ${t("sessions.truncated")}` : ""}
-            </span>
-          </div>
-
-          {devToolsOpen ? (
-            <SessionDevToolsPanel
-              diagnostics={diagnostics}
-              currentTime={currentTime}
-              height={devToolsHeight}
-              onHeightChange={setDevToolsHeight}
-              onSeek={(ms) => seek(ms, true)}
-            />
-          ) : null}
-
-          {response.unavailableChunks > 0 ? (
-            <div className="border-t px-4 py-2 text-xs text-muted-foreground">
-              {t("sessions.unavailableChunks", {
-                count: String(response.unavailableChunks),
-              })}
             </div>
-          ) : null}
-        </CardContent>
-      </Card>
+
+            {devToolsOpen ? (
+              <SessionDevToolsPanel
+                diagnostics={diagnostics}
+                currentTime={currentTime}
+                height={Math.min(devToolsHeight, maxDevToolsHeight)}
+                maxHeight={maxDevToolsHeight}
+                onHeightChange={setDevToolsHeight}
+                onSeek={(ms) => seek(ms, true)}
+                issueMatches={issueMatches}
+                issueMatching={issueMatchQuery.isFetching}
+              />
+            ) : null}
+
+            {response.unavailableChunks > 0 ? (
+              <div className="border-t px-4 py-2 text-xs text-muted-foreground">
+                {t("sessions.unavailableChunks", {
+                  count: String(response.unavailableChunks),
+                })}
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+      </div>
     </TooltipProvider>
   );
 }
@@ -952,7 +1228,8 @@ function ReplayScrubber({
   skipRanges,
   skipInactive,
   disabled,
-  onSeek,
+  onScrub,
+  onScrubEnd,
 }: {
   currentTime: number;
   totalTime: number;
@@ -960,13 +1237,19 @@ function ReplayScrubber({
   skipRanges: SkipRange[];
   skipInactive: boolean;
   disabled: boolean;
-  onSeek: (ms: number) => void;
+  onScrub: (ms: number) => void;
+  onScrubEnd: (ms: number) => void;
 }) {
   const t = useT();
   const scrubberMarkers = useMemo(
     () => visibleScrubberMarkers(markers, totalTime),
     [markers, totalTime],
   );
+
+  function handleScrub(event: FormEvent<HTMLInputElement>) {
+    onScrub(Number(event.currentTarget.value));
+  }
+
   return (
     <div className="relative min-h-8 min-w-[180px] flex-1">
       <input
@@ -975,9 +1258,16 @@ function ReplayScrubber({
         min={0}
         max={Math.max(0, totalTime)}
         step={50}
-        value={Math.min(currentTime, totalTime)}
+        value={Math.min(currentTime, Math.max(totalTime, 0))}
         disabled={disabled}
-        onChange={(event) => onSeek(Number(event.target.value))}
+        onInput={handleScrub}
+        onChange={handleScrub}
+        onPointerUp={(event) =>
+          onScrubEnd(Number((event.target as HTMLInputElement).value))
+        }
+        onKeyUp={(event) =>
+          onScrubEnd(Number((event.target as HTMLInputElement).value))
+        }
         aria-label={t("sessions.replayTimeline")}
       />
       <div className="pointer-events-none absolute inset-x-0 top-1/2 z-10 h-2 -translate-y-1/2 overflow-hidden rounded-full">
@@ -1006,7 +1296,7 @@ function ReplayScrubber({
             <span
               key={marker.id}
               className={cn(
-                "absolute top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-background",
+                "absolute top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full opacity-90 ring-1 ring-background/80",
                 marker.kind === "navigation"
                   ? "bg-amber-500"
                   : marker.kind === "input"
@@ -1063,47 +1353,98 @@ function ReplayIconButton({
 
 function ReplayTimeline({
   markers,
+  isLoading,
   activeMarkerId,
   onSeek,
 }: {
   markers: ReplayMarker[];
+  isLoading: boolean;
   activeMarkerId: string | null;
   onSeek: (ms: number) => void;
 }) {
   const t = useT();
   const [expandedMarkerId, setExpandedMarkerId] = useState<string | null>(null);
-  const visibleMarkers = markers.slice(0, 300);
+  const [query, setQuery] = useState("");
+  const listRef = useRef<HTMLDivElement>(null);
+  const lastManualScrollAtRef = useRef(0);
+  const activeRowRef = useRef<HTMLDivElement | null>(null);
+
+  const filteredMarkers = useMemo(
+    () => filterReplayMarkers(markers, query).slice(0, TIMELINE_MARKER_LIMIT),
+    [markers, query],
+  );
+
+  useEffect(() => {
+    if (!activeMarkerId) return;
+    if (Date.now() - lastManualScrollAtRef.current < TIMELINE_FOLLOW_PAUSE_MS) {
+      return;
+    }
+    const row = activeRowRef.current;
+    const list = listRef.current;
+    if (!row || !list) return;
+    const rowTop = row.offsetTop;
+    const rowBottom = rowTop + row.offsetHeight;
+    if (
+      rowTop >= list.scrollTop &&
+      rowBottom <= list.scrollTop + list.clientHeight
+    ) {
+      return;
+    }
+    list.scrollTo({
+      top: Math.max(0, rowTop - list.clientHeight / 3),
+      behavior: "smooth",
+    });
+  }, [activeMarkerId, filteredMarkers]);
+
   return (
-    <Card className="analytics-session-detail-timeline min-h-0 overflow-hidden">
-      <CardContent className="flex min-h-0 flex-1 flex-col p-0">
-        <div className="shrink-0 border-b px-3 py-2">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <IconTimelineEvent className="h-4 w-4" />
+    <Card className="analytics-session-detail-timeline min-h-0 min-w-0 overflow-hidden">
+      <CardContent className="flex min-h-0 min-w-0 flex-1 flex-col p-0">
+        <div className="min-w-0 shrink-0 space-y-2 border-b px-3 py-2">
+          <div className="truncate text-sm font-semibold">
             {t("sessions.timeline")}
           </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {visibleMarkers.length
-              ? t("sessions.timelineDescription", {
-                  count: String(visibleMarkers.length),
-                  total: String(markers.length),
-                })
-              : t("sessions.noTimelineEvents")}
-          </p>
+          {!isLoading || markers.length ? (
+            <div className="relative">
+              <IconSearch className="pointer-events-none absolute start-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="search"
+                className="h-7 ps-7 text-xs"
+                value={query}
+                placeholder={t("sessions.timelineSearch")}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </div>
+          ) : null}
         </div>
-        <div className="min-h-0 flex-1 overflow-auto">
-          {visibleMarkers.length ? (
-            <div className="divide-y">
-              {visibleMarkers.map((marker) => {
+        <div
+          ref={listRef}
+          className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden"
+          onWheel={() => {
+            lastManualScrollAtRef.current = Date.now();
+          }}
+          onPointerDown={() => {
+            lastManualScrollAtRef.current = Date.now();
+          }}
+        >
+          {filteredMarkers.length ? (
+            <div className="min-w-0 divide-y">
+              {filteredMarkers.map((marker) => {
                 const expanded = marker.id === expandedMarkerId;
+                const active = marker.id === activeMarkerId;
                 return (
                   <div
                     key={marker.id}
-                    className={cn(marker.id === activeMarkerId && "bg-muted")}
+                    ref={active ? activeRowRef : undefined}
+                    className={cn(
+                      "transition-colors duration-300",
+                      active && "bg-primary/[0.06] dark:bg-primary/[0.09]",
+                    )}
                   >
                     <button
                       type="button"
-                      className="flex w-full gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
+                      className="flex w-full min-w-0 gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
                       aria-expanded={expanded}
+                      aria-current={active ? "true" : undefined}
                       onClick={() => {
                         onSeek(marker.offsetMs);
                         setExpandedMarkerId((current) =>
@@ -1132,12 +1473,12 @@ function ReplayTimeline({
                       >
                         <MarkerIcon kind={marker.kind} />
                       </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="flex items-center justify-between gap-3">
+                      <span className="min-w-0 flex-1 overflow-hidden">
+                        <span className="flex min-w-0 items-center justify-between gap-3">
                           <span className="truncate text-sm font-medium">
                             {marker.label}
                           </span>
-                          <span className="font-mono text-xs text-muted-foreground">
+                          <span className="shrink-0 font-mono text-xs text-muted-foreground">
                             {formatClock(marker.offsetMs)}
                           </span>
                         </span>
@@ -1159,9 +1500,11 @@ function ReplayTimeline({
                 );
               })}
             </div>
-          ) : (
+          ) : isLoading ? null : (
             <div className="p-4 text-sm text-muted-foreground">
-              {t("sessions.noTimelineEvents")}
+              {query.trim()
+                ? t("sessions.timelineNoMatches")
+                : t("sessions.noTimelineEvents")}
             </div>
           )}
         </div>
@@ -1247,22 +1590,21 @@ function useSessionReplayPlayback(recordingId: string) {
         let loadedCount = 0;
         let loadedBytes = 0;
         let unavailableChunks = 0;
-        let nextIndex = 0;
-        let firstPlayablePublished = false;
+        const chunkIndexBySeq = new Map(
+          manifest.chunks.map((chunk, index) => [chunk.seq, index]),
+        );
 
         const publish = (force = false) => {
           const complete = loadedCount >= manifest.chunks.length;
           const chunks = loadedChunks.filter(
             (chunk): chunk is ReplayChunkEvents => Boolean(chunk),
           );
-          const shouldPublishEvents =
-            force ||
-            complete ||
-            (!firstPlayablePublished &&
-              hasPlayableReplayEvents(chunks.flatMap((chunk) => chunk.events)));
+          // Only hand events to the player once every chunk is in. Partial
+          // publishes used to rebuild the Replayer mid-playback and break the
+          // scrubber; the loading bar still updates while chunks stream in.
+          const shouldPublishEvents = force || complete;
 
           if (shouldPublishEvents) {
-            firstPlayablePublished = true;
             setState({
               data: playbackResponseFromChunks(manifest, chunks, {
                 isComplete: complete,
@@ -1290,6 +1632,8 @@ function useSessionReplayPlayback(recordingId: string) {
                   loadedBytes,
                   unavailableChunks,
                 }),
+            // Keep the page shell mounted so the player loading bar can show
+            // chunk progress; the Replayer itself still waits for isComplete.
             isLoading: false,
             error: null,
           }));
@@ -1297,31 +1641,20 @@ function useSessionReplayPlayback(recordingId: string) {
 
         publish();
 
-        async function worker() {
-          while (!cancelled && nextIndex < manifest.chunks.length) {
-            const index = nextIndex;
-            nextIndex += 1;
-            const chunk = await fetchReplayChunk(manifest.chunks[index], {
-              agentAccessToken,
-            });
-            loadedChunks[index] = chunk;
-            loadedCount += 1;
-            loadedBytes += manifest.chunks[index].byteLength;
-            if (chunk.unavailable) unavailableChunks += 1;
+        await fetchReplayChunks(
+          manifest.chunks,
+          { agentAccessToken },
+          (batch) => {
+            for (const chunk of batch) {
+              const index = chunkIndexBySeq.get(chunk.seq);
+              if (index === undefined || loadedChunks[index]) continue;
+              loadedChunks[index] = chunk;
+              loadedCount += 1;
+              loadedBytes += manifest.chunks[index].byteLength;
+              if (chunk.unavailable) unavailableChunks += 1;
+            }
             if (!cancelled) publish();
-          }
-        }
-
-        await Promise.all(
-          Array.from(
-            {
-              length: Math.min(
-                REPLAY_CHUNK_FETCH_CONCURRENCY,
-                manifest.chunks.length,
-              ),
-            },
-            worker,
-          ),
+          },
         );
         if (!cancelled) publish(true);
       } catch (loadError) {
@@ -1419,25 +1752,116 @@ async function fetchReplayManifest(
 async function fetchReplayChunks(
   chunks: SessionReplayManifestResponse["chunks"],
   options: FetchSessionReplayPlaybackOptions,
+  onBatch?: (chunks: ReplayChunkEvents[]) => void,
 ): Promise<ReplayChunkEvents[]> {
   const results = new Array<ReplayChunkEvents>(chunks.length);
+  const indexBySeq = new Map(chunks.map((chunk, index) => [chunk.seq, index]));
+  const batches = partitionReplayChunkBatches(chunks);
   let nextIndex = 0;
 
   async function worker() {
-    while (nextIndex < chunks.length) {
+    while (nextIndex < batches.length) {
       const index = nextIndex;
       nextIndex += 1;
-      results[index] = await fetchReplayChunk(chunks[index], options);
+      const loaded = await fetchReplayChunkBatch(batches[index], options);
+      for (const chunk of loaded) {
+        const resultIndex = indexBySeq.get(chunk.seq);
+        if (resultIndex !== undefined) results[resultIndex] = chunk;
+      }
+      onBatch?.(loaded);
     }
   }
 
   await Promise.all(
     Array.from(
-      { length: Math.min(REPLAY_CHUNK_FETCH_CONCURRENCY, chunks.length) },
+      {
+        length: Math.min(REPLAY_CHUNK_BATCH_FETCH_CONCURRENCY, batches.length),
+      },
       worker,
     ),
   );
   return results;
+}
+
+export function partitionReplayChunkBatches(
+  chunks: SessionReplayManifestResponse["chunks"],
+): Array<SessionReplayManifestResponse["chunks"]> {
+  const batches: Array<SessionReplayManifestResponse["chunks"]> = [];
+  let batch: SessionReplayManifestResponse["chunks"] = [];
+  let declaredBytes = 0;
+
+  for (const chunk of chunks) {
+    const exceedsChunkLimit = batch.length >= REPLAY_CHUNK_BATCH_MAX_CHUNKS;
+    const exceedsByteLimit =
+      batch.length > 0 &&
+      declaredBytes + chunk.byteLength > REPLAY_CHUNK_BATCH_MAX_DECLARED_BYTES;
+    if (exceedsChunkLimit || exceedsByteLimit) {
+      batches.push(batch);
+      batch = [];
+      declaredBytes = 0;
+    }
+    batch.push(chunk);
+    declaredBytes += chunk.byteLength;
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
+}
+
+async function fetchReplayChunkBatch(
+  chunks: SessionReplayManifestResponse["chunks"],
+  options: FetchSessionReplayPlaybackOptions,
+): Promise<ReplayChunkEvents[]> {
+  const recordingId = replayRecordingIdFromChunkPath(chunks[0]?.bytesPath);
+  if (!recordingId) {
+    return Promise.all(chunks.map((chunk) => fetchReplayChunk(chunk, options)));
+  }
+  const query = new URLSearchParams({
+    seqs: chunks.map((chunk) => chunk.seq).join(","),
+  });
+  const response = await fetchReplayApi(
+    `/api/session-replay/recordings/${encodeURIComponent(recordingId)}/chunks?${query}`,
+    options.agentAccessToken,
+  );
+  if (!response.ok) {
+    if (response.status === 404 || response.status === 405) {
+      return Promise.all(
+        chunks.map((chunk) => fetchReplayChunk(chunk, options)),
+      );
+    }
+    throw await replayFetchError(response);
+  }
+
+  const payload = (await response.json()) as { chunks?: unknown };
+  const returnedChunks = Array.isArray(payload?.chunks)
+    ? payload.chunks.filter(isReplayChunkEvents)
+    : [];
+  const returnedBySeq = new Map(
+    returnedChunks.map((chunk) => [chunk.seq, chunk]),
+  );
+
+  return Promise.all(
+    chunks.map(async (manifestChunk) => {
+      const loaded = returnedBySeq.get(manifestChunk.seq);
+      return loaded ?? fetchReplayChunk(manifestChunk, options);
+    }),
+  );
+}
+
+function replayRecordingIdFromChunkPath(path: string | undefined): string {
+  if (!path) return "";
+  const match = path.match(/\/recordings\/([^/]+)\/chunks\//);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+function isReplayChunkEvents(value: unknown): value is ReplayChunkEvents {
+  return (
+    isRecord(value) &&
+    typeof value.seq === "number" &&
+    typeof value.checksum === "string" &&
+    typeof value.byteLength === "number" &&
+    typeof value.eventCount === "number" &&
+    Array.isArray(value.events)
+  );
 }
 
 async function fetchReplayChunk(
@@ -1542,7 +1966,7 @@ function useReplayEvents(
 ): AnyReplayEvent[] {
   return useMemo(
     () =>
-      sanitizeReplayEvents(
+      normalizeReplayEvents(
         response.chunks
           .flatMap((chunk) => chunk.events)
           .filter((event) => event && typeof event === "object"),
@@ -1551,187 +1975,20 @@ function useReplayEvents(
   );
 }
 
-export function sanitizeReplayEvents(events: unknown[]): AnyReplayEvent[] {
+/**
+ * Stock rrweb consumes the recorded event objects directly. Playback-time URL
+ * or CSS rewriting breaks snapshots, responsive rules, fonts, and navigation
+ * metadata, so filtering invalid container entries is the only normalization.
+ *
+ * IMPORTANT — DO NOT add URL/CSS sanitization here. A previous security review
+ * changed href/src/_cssText to about:blank and immediately regressed every
+ * historical recording that depended on captured styles. Network/privacy
+ * controls belong at capture or the sandbox boundary, never in rrweb events.
+ */
+export function normalizeReplayEvents(events: unknown[]): AnyReplayEvent[] {
   return events
-    .map((event) => sanitizeReplayEvent(event))
-    .filter((event): event is AnyReplayEvent => Boolean(event))
+    .filter((event): event is AnyReplayEvent => isRecord(event))
     .sort((a, b) => Number(a.timestamp ?? 0) - Number(b.timestamp ?? 0));
-}
-
-function sanitizeReplayEvent(event: unknown): AnyReplayEvent | null {
-  if (!isRecord(event)) return null;
-  let copy: AnyReplayEvent;
-  try {
-    copy = JSON.parse(JSON.stringify(event));
-  } catch {
-    copy = { ...event };
-  }
-  if (copy.type === RRWEB_EVENT_TYPE.FullSnapshot && isRecord(copy.data)) {
-    const node = sanitizeSerializedNode(copy.data.node);
-    if (!node) return null;
-    copy.data.node = node;
-  }
-  if (
-    copy.type === RRWEB_EVENT_TYPE.IncrementalSnapshot &&
-    copy.data?.source === INCREMENTAL_SOURCE.Mutation &&
-    isRecord(copy.data)
-  ) {
-    copy.data = sanitizeMutationData(copy.data);
-  }
-  return copy;
-}
-
-function sanitizeMutationData(data: AnyRecord): AnyRecord {
-  const next = { ...data };
-  if (Array.isArray(next.adds)) {
-    next.adds = next.adds
-      .map((add) => {
-        if (!isRecord(add)) return add;
-        const node = sanitizeSerializedNode(add.node);
-        if (!node) return null;
-        return { ...add, node };
-      })
-      .filter(Boolean);
-  }
-  if (Array.isArray(next.attributes)) {
-    next.attributes = next.attributes.map((attributeMutation) => {
-      if (
-        !isRecord(attributeMutation) ||
-        !isRecord(attributeMutation.attributes)
-      ) {
-        return attributeMutation;
-      }
-      return {
-        ...attributeMutation,
-        attributes: sanitizeAttributes(attributeMutation.attributes),
-      };
-    });
-  }
-  if (Array.isArray(next.texts)) {
-    next.texts = next.texts.map((textMutation) => {
-      if (!isRecord(textMutation)) return textMutation;
-      const copy = { ...textMutation };
-      if (
-        typeof copy.value === "string" &&
-        containsStylesheetNetworkLoad(copy.value)
-      ) {
-        copy.value = sanitizeCssText(copy.value);
-      }
-      if (
-        typeof copy.textContent === "string" &&
-        containsStylesheetNetworkLoad(copy.textContent)
-      ) {
-        copy.textContent = sanitizeCssText(copy.textContent);
-      }
-      return copy;
-    });
-  }
-  return next;
-}
-
-function sanitizeSerializedNode(node: unknown): AnyRecord | null {
-  if (!isRecord(node)) return node as AnyRecord;
-  const next: AnyRecord = { ...node };
-  const tagName =
-    typeof next.tagName === "string" ? next.tagName.toLowerCase() : "";
-  if (next.type === 2 && tagName === "script") {
-    return {
-      ...next,
-      tagName: "noscript",
-      attributes: {},
-      childNodes: [],
-    };
-  }
-  if (
-    next.type === 3 &&
-    typeof next.textContent === "string" &&
-    containsStylesheetNetworkLoad(next.textContent)
-  ) {
-    next.textContent = sanitizeCssText(next.textContent);
-  }
-  if (
-    next.type === 2 &&
-    tagName === "link" &&
-    isScriptLikeLink(next.attributes)
-  ) {
-    return null;
-  }
-  if (isRecord(next.attributes)) {
-    next.attributes = sanitizeAttributes(next.attributes);
-  }
-  if (Array.isArray(next.childNodes)) {
-    next.childNodes = next.childNodes
-      .map((child) => sanitizeSerializedNode(child))
-      .filter(Boolean);
-  }
-  return next;
-}
-
-function containsStylesheetNetworkLoad(value: string): boolean {
-  return /@import\b/i.test(value) || /\burl\s*\(/i.test(value);
-}
-
-function sanitizeCssText(value: string): string {
-  if (!containsStylesheetNetworkLoad(value)) return value;
-  return value
-    .replace(/@import\s+(?:url\s*\()?[^;{}]+;?/gi, "")
-    .replace(/\burl\s*\(\s*((?:\\.|[^\\)])*)\)/gi, sanitizeCssUrlToken);
-}
-
-function sanitizeCssUrlToken(match: string, rawValue: string): string {
-  const urlValue = rawValue.trim();
-  const unquoted = urlValue.replace(/^(['"])(.*)\1$/, "$2").trim();
-  if (/^(?:data:|blob:|#)/i.test(unquoted)) return match;
-  return "none";
-}
-
-function sanitizeAttributes(attributes: AnyRecord): AnyRecord {
-  const next: AnyRecord = {};
-  for (const [key, value] of Object.entries(attributes)) {
-    const normalized = key.toLowerCase();
-    if (normalized.startsWith("on")) continue;
-    if (normalized === "srcdoc") continue;
-    if (isReplayResourceAttribute(normalized)) continue;
-    if (normalized === "style") {
-      const style = sanitizeCssText(String(value));
-      if (style.trim()) next[key] = style;
-      continue;
-    }
-    if (normalized === "_csstext") {
-      const cssText = sanitizeCssText(String(value));
-      if (cssText.trim()) next[key] = cssText;
-      continue;
-    }
-    next[key] = value;
-  }
-  return next;
-}
-
-function isReplayResourceAttribute(name: string): boolean {
-  return (
-    name === "src" ||
-    name === "srcset" ||
-    name === "href" ||
-    name === "xlink:href" ||
-    name === "poster" ||
-    name === "data" ||
-    name === "action" ||
-    name === "formaction" ||
-    name === "background" ||
-    name === "cite"
-  );
-}
-
-function isScriptLikeLink(attributes: unknown): boolean {
-  if (!isRecord(attributes)) return false;
-  const rel = String(attributes.rel ?? "").toLowerCase();
-  const as = String(attributes.as ?? "").toLowerCase();
-  const href = String(attributes.href ?? "").toLowerCase();
-  return (
-    rel === "modulepreload" ||
-    (rel === "preload" && as === "script") ||
-    (rel === "prefetch" && href.endsWith(".js"))
-  );
 }
 
 export function buildReplayMarkers(events: AnyReplayEvent[]): ReplayMarker[] {
@@ -1791,6 +2048,23 @@ export function buildReplayMarkers(events: AnyReplayEvent[]): ReplayMarker[] {
           ["Y", event.data?.y],
         ]),
       });
+    } else if (
+      event.type === RRWEB_EVENT_TYPE.IncrementalSnapshot &&
+      event.data?.source === INCREMENTAL_SOURCE.Scroll
+    ) {
+      markers.push({
+        id: `scroll-${timestamp}-${markers.length}`,
+        timestamp,
+        offsetMs: Math.max(0, timestamp - startedAt),
+        kind: "custom",
+        label: "Scroll",
+        detail: pointerDetail(event.data),
+        fields: markerFields([
+          ["Element id", event.data?.id],
+          ["X", event.data?.x],
+          ["Y", event.data?.y],
+        ]),
+      });
     } else if (event.type === RRWEB_EVENT_TYPE.Custom) {
       const marker = customReplayMarker(
         event,
@@ -1801,7 +2075,53 @@ export function buildReplayMarkers(events: AnyReplayEvent[]): ReplayMarker[] {
       if (marker) markers.push(marker);
     }
   }
-  return markers.sort((a, b) => a.offsetMs - b.offsetMs);
+  return collapseScrollMarkerBursts(
+    markers.sort((a, b) => a.offsetMs - b.offsetMs),
+  );
+}
+
+function collapseScrollMarkerBursts(markers: ReplayMarker[]): ReplayMarker[] {
+  const collapsed: ReplayMarker[] = [];
+  const lastScrollByTarget = new Map<
+    string,
+    { index: number; timestamp: number }
+  >();
+  for (const marker of markers) {
+    if (marker.label !== "Scroll") {
+      collapsed.push(marker);
+      continue;
+    }
+    const target =
+      marker.fields?.find((field) => field.label === "Element id")?.value ??
+      "viewport";
+    const previous = lastScrollByTarget.get(target);
+    if (
+      previous &&
+      marker.timestamp - previous.timestamp <= SCROLL_MARKER_BURST_MS
+    ) {
+      // Keep one marker per continuous scroll gesture, using its final
+      // position while retaining the first marker's stable id/time.
+      collapsed[previous.index] = {
+        ...marker,
+        id: collapsed[previous.index].id,
+        timestamp: collapsed[previous.index].timestamp,
+        offsetMs: collapsed[previous.index].offsetMs,
+      };
+      previous.timestamp = marker.timestamp;
+      continue;
+    }
+    const index = collapsed.push(marker) - 1;
+    lastScrollByTarget.set(target, { index, timestamp: marker.timestamp });
+  }
+  return collapsed;
+}
+
+export function replayDevToolsIssueCount(
+  diagnostics: ReplayDevToolsDiagnostics,
+  isComplete: boolean,
+): number {
+  if (!isComplete) return 0;
+  return diagnostics.consoleErrorCount + diagnostics.networkFailedCount;
 }
 
 function customReplayMarker(
@@ -1839,7 +2159,33 @@ function customReplayMarker(
   }
 
   if (tag === SESSION_REPLAY_NETWORK_EVENT_TAG) {
-    return null;
+    const status = Number(payload.status ?? 0);
+    if (
+      payload.ok !== false &&
+      (!Number.isFinite(status) || !isFailedSessionReplayNetworkStatus(status))
+    ) {
+      return null;
+    }
+    const method =
+      typeof payload.method === "string" ? payload.method : undefined;
+    const url = typeof payload.url === "string" ? payload.url : undefined;
+    const error = typeof payload.error === "string" ? payload.error : undefined;
+    return {
+      id: `network-${timestamp}-${index}`,
+      timestamp,
+      offsetMs,
+      kind: "custom",
+      label: "Network error", // i18n-ignore: timeline protocol label.
+      detail: [method, url].filter(Boolean).join(" ") || error,
+      severity: "error",
+      fields: markerFields([
+        ["Method", method],
+        ["URL", url],
+        ["Status", Number.isFinite(status) ? status : undefined],
+        ["Error", error],
+        ["Duration", payload.durationMs],
+      ]),
+    };
   }
 
   return {
@@ -1852,7 +2198,7 @@ function customReplayMarker(
   };
 }
 
-function buildIdleSkipRanges(events: AnyReplayEvent[]): SkipRange[] {
+export function buildIdleSkipRanges(events: AnyReplayEvent[]): SkipRange[] {
   const startedAt = replayStartedAt(events);
   const interactions: number[] = [];
   let lastTimestamp = startedAt;
@@ -1860,15 +2206,7 @@ function buildIdleSkipRanges(events: AnyReplayEvent[]): SkipRange[] {
     const timestamp = Number(event.timestamp ?? 0);
     if (!Number.isFinite(timestamp) || timestamp <= 0) continue;
     lastTimestamp = Math.max(lastTimestamp, timestamp);
-    if (event.type === RRWEB_EVENT_TYPE.Meta) {
-      interactions.push(timestamp);
-    } else if (
-      event.type === RRWEB_EVENT_TYPE.IncrementalSnapshot &&
-      typeof event.data?.source === "number" &&
-      INTERACTION_SOURCES.has(event.data.source)
-    ) {
-      interactions.push(timestamp);
-    }
+    interactions.push(...replayActivityTimestamps(event, timestamp));
   }
   interactions.sort((a, b) => a - b);
   const ranges: SkipRange[] = [];
@@ -1889,6 +2227,55 @@ function buildIdleSkipRanges(events: AnyReplayEvent[]): SkipRange[] {
     );
   }
   return ranges;
+}
+
+function replayActivityTimestamps(
+  event: AnyReplayEvent,
+  timestamp: number,
+): number[] {
+  if (event.type === RRWEB_EVENT_TYPE.Meta) return [timestamp];
+  if (event.type !== RRWEB_EVENT_TYPE.IncrementalSnapshot) return [];
+
+  const source = event.data?.source;
+  if (
+    source === INCREMENTAL_SOURCE.MouseMove ||
+    source === INCREMENTAL_SOURCE.TouchMove ||
+    source === INCREMENTAL_SOURCE.Drag
+  ) {
+    const positions = Array.isArray(event.data?.positions)
+      ? event.data.positions
+      : [];
+    // IMPORTANT: rrweb batches pointer positions and schedules each one at
+    // event.timestamp + timeOffset. Treat those exact moments as activity.
+    // Ignoring the batch made Skip inactivity jump across visible movement,
+    // which looked like a frozen cursor even though the recording was intact.
+    return positions.flatMap((position: unknown) => {
+      if (!isRecord(position)) return [];
+      const timeOffset = Number(position.timeOffset ?? 0);
+      return [timestamp + (Number.isFinite(timeOffset) ? timeOffset : 0)];
+    });
+  }
+  if (
+    source === INCREMENTAL_SOURCE.Input ||
+    source === INCREMENTAL_SOURCE.Scroll
+  ) {
+    return [timestamp];
+  }
+  if (source !== INCREMENTAL_SOURCE.MouseInteraction) return [];
+
+  const interactionType = event.data?.type;
+  return [
+    interactionType === MOUSE_INTERACTION.MouseUp ||
+    interactionType === MOUSE_INTERACTION.MouseDown ||
+    interactionType === MOUSE_INTERACTION.Click ||
+    interactionType === MOUSE_INTERACTION.ContextMenu ||
+    interactionType === MOUSE_INTERACTION.DblClick ||
+    interactionType === MOUSE_INTERACTION.Focus ||
+    interactionType === MOUSE_INTERACTION.TouchStart ||
+    interactionType === MOUSE_INTERACTION.TouchEnd
+      ? timestamp
+      : null,
+  ].filter((value): value is number => value !== null);
 }
 
 function pushIdleRange(
@@ -1930,21 +2317,129 @@ function hasPlayableReplayEvents(events: unknown[]): boolean {
   return false;
 }
 
+function hideReplayCursorUntilPosition(replayer: any): () => void {
+  const cursor = replayer?.mouse as HTMLElement | undefined;
+  if (!cursor || typeof MutationObserver === "undefined") return () => {};
+
+  let observer: MutationObserver | null = null;
+  const revealWhenPositioned = () => {
+    if (!cursor.style.left || !cursor.style.top) return;
+    cursor.classList.add("has-position");
+    observer?.disconnect();
+    observer = null;
+  };
+
+  cursor.classList.remove("has-position");
+  observer = new MutationObserver(revealWhenPositioned);
+  observer.observe(cursor, {
+    attributes: true,
+    attributeFilter: ["style"],
+  });
+  revealWhenPositioned();
+
+  return () => {
+    observer?.disconnect();
+    observer = null;
+  };
+}
+
 export function replayViewportDimensions(
   events: AnyReplayEvent[],
 ): ReplayViewportDimensions | null {
+  // Latest Meta / ViewportResize for CSS fit-to-stage only. Never rewrite these
+  // into the event stream — rrweb must keep Meta in sync with the FullSnapshot.
+  let best: ReplayViewportDimensions | null = null;
+  for (const event of events) {
+    const dims = dimensionsFromReplayEvent(event);
+    if (dims) best = dims;
+  }
+  return best;
+}
+
+export function replayInitialViewportDimensions(
+  events: AnyReplayEvent[],
+): ReplayViewportDimensions | null {
+  // rrweb itself initializes from the first Meta event. A resize can appear
+  // earlier in chunk order after reconnect/flush boundaries, but it must not
+  // replace the snapshot's native starting viewport.
   for (const event of events) {
     if (event.type !== RRWEB_EVENT_TYPE.Meta) continue;
-    const dims = normalizeReplayDimensions(
-      event.data?.width,
-      event.data?.height,
-    );
+    const dims = dimensionsFromReplayEvent(event);
+    if (dims) return dims;
+  }
+  for (const event of events) {
+    const dims = dimensionsFromReplayEvent(event);
     if (dims) return dims;
   }
   return null;
 }
 
-function normalizeReplayDimensions(
+export function buildReplayViewportTimeline(
+  events: AnyReplayEvent[],
+): ReplayViewportChange[] {
+  const initial = replayInitialViewportDimensions(events);
+  if (!initial) return [];
+  const startedAt = replayStartedAt(events);
+  const firstMetaTimestamp = events.reduce((best, event) => {
+    if (event.type !== RRWEB_EVENT_TYPE.Meta) return best;
+    const timestamp = Number(event.timestamp ?? 0);
+    return Number.isFinite(timestamp) && timestamp > 0
+      ? Math.min(best, timestamp)
+      : best;
+  }, Number.POSITIVE_INFINITY);
+  const changes: ReplayViewportChange[] = [{ ...initial, offsetMs: 0 }];
+  for (const event of events) {
+    const timestamp = Number(event.timestamp ?? 0);
+    if (!Number.isFinite(timestamp) || timestamp <= firstMetaTimestamp)
+      continue;
+    const dims = dimensionsFromReplayEvent(event);
+    if (!dims) continue;
+    const previous = changes[changes.length - 1];
+    if (previous?.width === dims.width && previous.height === dims.height) {
+      continue;
+    }
+    changes.push({
+      ...dims,
+      offsetMs: Math.max(0, timestamp - startedAt),
+    });
+  }
+  return changes;
+}
+
+export function replayViewportDimensionsAtTime(
+  changes: ReplayViewportChange[],
+  elapsedMs: number,
+): ReplayViewportDimensions | null {
+  if (changes.length === 0) return null;
+  const target = Math.max(0, elapsedMs);
+  let low = 0;
+  let high = changes.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if ((changes[middle]?.offsetMs ?? 0) <= target) low = middle;
+    else high = middle - 1;
+  }
+  const match = changes[low];
+  return match ? { width: match.width, height: match.height } : null;
+}
+
+function dimensionsFromReplayEvent(
+  event: AnyReplayEvent,
+): ReplayViewportDimensions | null {
+  if (event.type === RRWEB_EVENT_TYPE.Meta) {
+    return normalizeReplayDimensions(event.data?.width, event.data?.height);
+  }
+  if (
+    event.type === RRWEB_EVENT_TYPE.IncrementalSnapshot &&
+    event.data?.source === INCREMENTAL_SOURCE.ViewportResize
+  ) {
+    return normalizeReplayDimensions(event.data?.width, event.data?.height);
+  }
+  return null;
+}
+
+/** Read raw positive finite dimensions; no aspect clamping. */
+export function normalizeReplayDimensions(
   width: unknown,
   height: unknown,
 ): ReplayViewportDimensions | null {
@@ -1964,37 +2459,60 @@ function normalizeReplayDimensions(
   };
 }
 
-function applyReplayFrameDimensions(
-  replayer: any,
+/**
+ * Fall back to the default player size only when the viewport is entirely
+ * unknown (no Meta/ViewportResize event yet). This is not a "recovery"
+ * heuristic for real recorded geometry — it never rewrites valid dims, no
+ * matter how wide, narrow, or unusual the aspect ratio. See the Replayer
+ * construction in ReplayPlayer for why viewport "correction" was removed:
+ * the 2026-07 ultra-wide replay bugs were caused by demo mode's fetch
+ * redaction faking numbers at view time, not by malformed stored geometry.
+ */
+export function resolveReplayDisplayDimensions(
   dims: ReplayViewportDimensions | null,
-) {
-  const width = dims?.width ?? DEFAULT_PLAYER_WIDTH;
-  const height = dims?.height ?? DEFAULT_PLAYER_HEIGHT;
-  const wrapper = replayer?.wrapper as HTMLElement | undefined;
-  const iframe = replayer?.iframe as HTMLIFrameElement | undefined;
-  const mouseTail = replayer?.mouseTail as HTMLCanvasElement | undefined;
-  for (const element of [wrapper, iframe]) {
-    if (!element) continue;
-    element.style.width = `${width}px`;
-    element.style.height = `${height}px`;
+): ReplayViewportDimensions {
+  if (
+    dims &&
+    Number.isFinite(dims.width) &&
+    Number.isFinite(dims.height) &&
+    dims.width > 0 &&
+    dims.height > 0
+  ) {
+    return dims;
   }
-  for (const element of [iframe, mouseTail]) {
-    if (!element) continue;
-    element.setAttribute("width", String(width));
-    element.setAttribute("height", String(height));
-  }
+  return { width: DEFAULT_PLAYER_WIDTH, height: DEFAULT_PLAYER_HEIGHT };
 }
 
-function revealReplayFrame(replayer: any) {
-  const iframe = replayer?.iframe as HTMLIFrameElement | undefined;
-  if (iframe) iframe.style.display = "inherit";
+export function filterReplayMarkers(
+  markers: ReplayMarker[],
+  query: string,
+): ReplayMarker[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return markers;
+  return markers.filter((marker) => {
+    const haystack = [
+      marker.label,
+      marker.detail,
+      marker.kind,
+      marker.severity,
+      ...(marker.fields?.flatMap((field) => [field.label, field.value]) ?? []),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(needle);
+  });
 }
 
 function replayStartedAt(events: AnyReplayEvent[]): number {
-  const first = events.find((event) =>
-    Number.isFinite(Number(event.timestamp)),
-  );
-  return Number(first?.timestamp ?? 0);
+  let startedAt = Number.POSITIVE_INFINITY;
+  for (const event of events) {
+    const timestamp = Number(event.timestamp);
+    if (Number.isFinite(timestamp) && timestamp > 0) {
+      startedAt = Math.min(startedAt, timestamp);
+    }
+  }
+  return Number.isFinite(startedAt) ? startedAt : 0;
 }
 
 function replayDuration(events: AnyReplayEvent[]): number {
@@ -2119,6 +2637,20 @@ function formatNumber(value: number): string {
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
+}
+
+export function shouldPublishReplayClockUpdate(
+  lastUpdateAt: number | null,
+  frameTime: number,
+  currentTime: number,
+  nextTime: number,
+): boolean {
+  if (!Number.isFinite(frameTime) || !Number.isFinite(nextTime)) return false;
+  if (nextTime === currentTime) return false;
+  return (
+    lastUpdateAt == null ||
+    frameTime - lastUpdateAt >= REPLAY_CLOCK_UPDATE_INTERVAL_MS
+  );
 }
 
 function isRecord(value: unknown): value is AnyRecord {

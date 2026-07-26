@@ -1,53 +1,17 @@
+import { useCodeMode } from "@agent-native/core/client/agent-chat";
+import { agentNativePath } from "@agent-native/core/client/api-path";
 import {
-  agentNativePath,
   getBrowserTabId,
+  setClientAppState,
+  useSession,
+} from "@agent-native/core/client/hooks";
+import { useT } from "@agent-native/core/client/i18n";
+import {
   useBuilderConnectFlow,
   useBuilderStatus,
-  useCodeMode,
-} from "@agent-native/core/client";
+} from "@agent-native/core/client/settings";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@agent-native/toolkit/ui/alert-dialog";
-import { Button } from "@agent-native/toolkit/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from "@agent-native/toolkit/ui/dropdown-menu";
-import { Input } from "@agent-native/toolkit/ui/input";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@agent-native/toolkit/ui/popover";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@agent-native/toolkit/ui/sheet";
-import { Spinner } from "@agent-native/toolkit/ui/spinner";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@agent-native/toolkit/ui/tooltip";
-import {
-  BUILDER_CMS_SAFE_WRITE_MODEL,
+  CONTENT_DATABASE_PERSONAL_VIEW_OVERRIDES_VERSION,
   type BuilderCmsModelSummary,
   type ContentDatabaseItem,
   type ContentDatabaseResponse,
@@ -55,13 +19,17 @@ import {
   type ContentDatabaseSourceChangeSet,
   type ContentDatabaseSourceJoinRequest,
   type ContentDatabaseSourceReviewPayload,
+  type ContentDatabaseSourceWriteMode,
+  type ProcessBuilderBodyHydrationResponse,
   type SourceJoinSuggestion,
+  type ContentDatabasePersonalViewOverrides,
   type ContentDatabaseView,
   type ContentDatabaseViewConfig,
   type ContentDatabaseColumnCalculation,
   type ContentDatabaseFilter,
   type ContentDatabaseFilterMode,
   type ContentDatabaseFilterOperator,
+  type ContentDatabaseFormQuestion,
   type ContentDatabaseOpenPagesIn,
   type ContentDatabaseRowDensity,
   type ContentDatabaseSort,
@@ -73,6 +41,7 @@ import {
   type DocumentPropertyType,
   type DocumentPropertyValue,
 } from "@shared/api";
+import { contentDatabaseFormQuestions } from "@shared/database-form";
 import {
   type DocumentPropertyOptionColor,
   countWords,
@@ -106,6 +75,8 @@ import {
   IconEyeOff,
   IconFilter,
   IconFileText,
+  IconFolder,
+  IconForms,
   IconGripVertical,
   IconLayoutKanban,
   IconLayoutGrid,
@@ -118,6 +89,7 @@ import {
   IconPencil,
   IconRefresh,
   IconSearch,
+  IconStarOff,
   IconTable,
   IconTimeline,
   IconTrash,
@@ -126,6 +98,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useEffect,
+  useCallback,
   useMemo,
   useRef,
   useState,
@@ -134,17 +107,67 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { useLocation, useNavigate } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 import { toast } from "sonner";
 
+import {
+  contentSpaceForCatalogItem,
+  createContentSpaceSelectionQueue,
+  SELECTED_CONTENT_SPACE_STORAGE_KEY,
+  selectContentSpace,
+} from "@/components/sidebar/select-content-space";
+import { WorkspaceSourceMenu } from "@/components/sidebar/WorkspaceSourceMenu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   isContentDatabaseUnavailable,
   useAddDatabaseItem,
   useAddContentDatabaseSourceFieldProperty,
   useAttachContentDatabaseSource,
   useBuilderCmsModels,
+  useCancelPreparedBuilderSourceUpdate,
   useChangeContentDatabaseSourceRole,
   useContentDatabase,
+  useContentDatabasePersonalView,
   useContentDatabases,
   contentDatabaseQueryKey,
   useDeleteDatabaseItems,
@@ -153,23 +176,36 @@ import {
   useDuplicateDatabaseItems,
   useExecuteBuilderSourceExecution,
   useMoveDatabaseItem,
+  useMaterializeBuilderRequiredFields,
+  useNotionDatabaseSources,
   usePrepareBuilderSourceReview,
+  usePreviewBuilderSourceReview,
   useProcessBuilderBodyHydration,
   useRefreshContentDatabaseSource,
   useSetContentDatabaseSourceWriteMode,
   useSuggestSourceJoinKey,
+  useUpdateContentDatabasePersonalView,
   useUpdateContentDatabaseView,
 } from "@/hooks/use-content-database";
+import {
+  useContentSpaces,
+  useDeleteContentSpace,
+} from "@/hooks/use-content-spaces";
 import {
   useConfigureDocumentProperty,
   useSetDocumentProperty,
 } from "@/hooks/use-document-properties";
 import {
+  isDocumentUpdateConflict,
+  type DocumentUpdateResult,
   useDeleteDocument,
   useDocument,
   seedDatabaseItemDocumentCaches,
+  usePreviewDocumentDraft,
+  useUpdatePreviewDocumentDraft,
   useUpdateDocument,
 } from "@/hooks/use-documents";
+import { useLocalStorage } from "@/hooks/use-local-storage";
 import { messagesByLocale } from "@/i18n-data";
 import { cn } from "@/lib/utils";
 
@@ -180,6 +216,7 @@ import {
   isEffectivelyEmptyDocumentContent,
   previewBodyHydrationIsPending,
   previewBodyHydrationIsTerminalError,
+  previewDraftConflictsWithHydratedBody,
   shouldIgnorePreviewEmptyNormalization,
 } from "../body-hydration";
 import {
@@ -207,6 +244,9 @@ import {
   filesMediaItems,
   displayValue,
   nextPropertyOption,
+  personItems,
+  personLabel,
+  PersonPill,
   removePropertyOption,
   renamePropertyOption,
   updatePropertyOptionColor,
@@ -214,7 +254,11 @@ import {
 import { EmojiPicker } from "../EmojiPicker";
 import {
   createPreviewDocumentSaveController,
-  skippedPreviewDocumentSave,
+  deferredPreviewDocumentSave,
+  type PreviewDocumentPayload,
+  type PreviewDocumentSaveAdapter,
+  type PreviewDocumentSaveDeferred,
+  type PreviewDocumentSaveSuccess,
 } from "../previewDocumentSaveController";
 import {
   acquirePreviewDocumentSaveController,
@@ -222,6 +266,10 @@ import {
   releasePreviewDocumentSaveController,
 } from "../previewDocumentSaveRegistry";
 import { VisualEditor } from "../VisualEditor";
+import { DatabaseFormView } from "./FormView";
+import { DatabaseGalleryView } from "./GalleryView";
+import { DatabaseListView } from "./ListView";
+import { DatabaseTimelineView } from "./TimelineView";
 
 export interface DatabaseViewProps {
   databaseId: string;
@@ -234,6 +282,46 @@ export interface DatabaseViewProps {
 
 const CONTENT_DATABASE_PAGE_SIZE = 100;
 const CONTENT_DATABASE_MAX_ITEM_LIMIT = 5_000;
+
+export function databaseSearchExpandedItemLimit(
+  searchQuery: string,
+  currentLimit: number,
+  totalItemCount: number,
+) {
+  if (!searchQuery.trim()) return currentLimit;
+  return Math.max(
+    currentLimit,
+    Math.min(totalItemCount, CONTENT_DATABASE_MAX_ITEM_LIMIT),
+  );
+}
+
+export function databaseSearchExpansionIsPending(
+  searchQuery: string,
+  requestedLimit: number,
+  responseLimit: number,
+) {
+  return !!searchQuery.trim() && responseLimit < requestedLimit;
+}
+
+export function databaseClientQueryExpandedItemLimit(
+  requiresCompleteDataset: boolean,
+  currentLimit: number,
+  totalItemCount: number,
+) {
+  if (!requiresCompleteDataset) return currentLimit;
+  return Math.max(
+    currentLimit,
+    Math.min(totalItemCount, CONTENT_DATABASE_MAX_ITEM_LIMIT),
+  );
+}
+
+export function databaseClientQueryExpansionIsPending(
+  requiresCompleteDataset: boolean,
+  requestedLimit: number,
+  responseLimit: number,
+) {
+  return requiresCompleteDataset && responseLimit < requestedLimit;
+}
 
 export type SortDirection = ContentDatabaseSortDirection;
 export type DatabaseSort = ContentDatabaseSort;
@@ -248,7 +336,7 @@ const DEFAULT_NAME_COLUMN_WIDTH = 240;
 const DEFAULT_PROPERTY_COLUMN_WIDTH = 180;
 const MIN_COLUMN_WIDTH = 96;
 const MAX_COLUMN_WIDTH = 640;
-const ACTION_COLUMN_WIDTH = 48;
+const ACTION_COLUMN_WIDTH = 36;
 const EMPTY_DEFAULT_ADD_PROPERTY_COLUMN_WIDTH = 220;
 const EMPTY_DEFAULT_BLANK_ROW_COUNT = 5;
 const DATABASE_DRAG_THRESHOLD = 6;
@@ -259,18 +347,52 @@ const DATABASE_VIEW_TYPES: ContentDatabaseViewType[] = [
   "list",
   "timeline",
   "calendar",
+  "form",
 ];
 const DATABASE_OPEN_PAGES_IN: ContentDatabaseOpenPagesIn[] = [
   "preview",
   "full_page",
 ];
 const DATABASE_FILTER_MODES: DatabaseFilterMode[] = ["and", "or"];
+const DATABASE_ADVANCED_FILTER_GROUP_ID = "advanced";
+export const PERSONAL_DATABASE_VIEW_OVERRIDES_VERSION =
+  CONTENT_DATABASE_PERSONAL_VIEW_OVERRIDES_VERSION;
 export const BUILDER_SOURCE_CONTINUATION_STALL_MS = 5_000;
 export const BUILDER_SOURCE_CONTINUATION_MAX_BACKOFF_MS = 30_000;
 
-type DatabaseMessageKey = keyof (typeof messagesByLocale)["en-US"]["database"];
+export type PersonalDatabaseViewOverrides =
+  ContentDatabasePersonalViewOverrides;
 
-function dbText(
+type BuilderSourceWriteSettingsInput = {
+  sourceId: string;
+  writeMode: ContentDatabaseSourceWriteMode;
+  allowPublicationTransitions?: boolean;
+};
+
+export function previewDraftNeedsConflict(args: {
+  returnedDraft: { title: string; content: string };
+  pending: { title: string; content: string };
+}) {
+  return (
+    args.returnedDraft.title !== args.pending.title ||
+    args.returnedDraft.content !== args.pending.content
+  );
+}
+
+export function previewDraftMissingCasRecovery(args: {
+  operation: "upsert" | "delete";
+  allowCreateRetry: boolean;
+}) {
+  if (args.operation === "delete") return "converged" as const;
+  return args.allowCreateRetry
+    ? ("retry-create" as const)
+    : ("failed" as const);
+}
+
+type DatabaseMessageKey = keyof (typeof messagesByLocale)["en-US"]["database"];
+type SidebarMessageKey = keyof (typeof messagesByLocale)["en-US"]["sidebar"];
+
+export function dbText(
   key: DatabaseMessageKey,
   values?: Record<string, string | number>,
 ): string {
@@ -289,9 +411,145 @@ function dbText(
   );
 }
 
-type CreateDatabaseRowHandler = (
+function sidebarText(key: SidebarMessageKey): string {
+  const locale =
+    typeof document === "undefined" ? "en-US" : document.documentElement.lang;
+  const messages =
+    messagesByLocale[locale as keyof typeof messagesByLocale] ??
+    messagesByLocale["en-US"];
+  return messages.sidebar[key] ?? messagesByLocale["en-US"].sidebar[key];
+}
+
+export type CreateDatabaseRowHandler = (
   title?: string,
 ) => Promise<ContentDatabaseItem | null>;
+
+export function databaseCreatedItemForImmediatePreview(
+  response: ContentDatabaseResponse,
+  args: {
+    databaseId: string;
+    parentDocument: Document;
+    title: string;
+    propertyValues: Record<string, DocumentPropertyValue>;
+    now?: string;
+  },
+): ContentDatabaseItem | null {
+  const returnedItem = response.items.find(
+    (item) => item.id === response.createdItemId,
+  );
+  if (returnedItem) return returnedItem;
+  if (!response.createdItemId || !response.createdDocumentId) return null;
+
+  const now =
+    response.createdDocumentUpdatedAt ?? args.now ?? new Date().toISOString();
+  const position = Math.max(
+    0,
+    (response.pagination?.totalItems ?? response.items.length + 1) - 1,
+  );
+  return {
+    id: response.createdItemId,
+    databaseId: args.databaseId,
+    position,
+    properties: response.properties.map((property) => ({
+      ...property,
+      value: Object.prototype.hasOwnProperty.call(
+        args.propertyValues,
+        property.definition.id,
+      )
+        ? args.propertyValues[property.definition.id]
+        : null,
+    })),
+    document: {
+      id: response.createdDocumentId,
+      parentId: args.parentDocument.id,
+      title: args.title.trim(),
+      content: "",
+      icon: null,
+      position,
+      isFavorite: false,
+      hideFromSearch: args.parentDocument.hideFromSearch,
+      visibility: args.parentDocument.visibility,
+      accessRole: args.parentDocument.accessRole,
+      canEdit: true,
+      canManage: args.parentDocument.canManage,
+      createdAt: now,
+      updatedAt: now,
+    },
+  };
+}
+
+export function previewDocumentSaveResult(args: {
+  result: DocumentUpdateResult;
+  payload: PreviewDocumentPayload;
+  baseline?: PreviewDocumentPayload;
+  contentChanged: boolean;
+}): PreviewDocumentSaveDeferred | PreviewDocumentSaveSuccess {
+  const serverDocument = isDocumentUpdateConflict(args.result)
+    ? args.result.document
+    : args.result;
+  const titleSaveObservedExternalBody =
+    !args.contentChanged && serverDocument.content !== args.payload.content;
+
+  if (isDocumentUpdateConflict(args.result) || titleSaveObservedExternalBody) {
+    return deferredPreviewDocumentSave("conflict", {
+      lastSaved: args.baseline ?? args.payload,
+      pending: {
+        title: serverDocument.title,
+        content: serverDocument.content,
+        loadedUpdatedAt: serverDocument.updatedAt,
+        loadedContentWasEmpty: isEffectivelyEmptyDocumentContent(
+          serverDocument.content,
+        ),
+      },
+      deferredReason: "conflict",
+    });
+  }
+
+  return {
+    outcome: "saved",
+    loadedUpdatedAt: args.result.updatedAt,
+    loadedContentWasEmpty: isEffectivelyEmptyDocumentContent(
+      args.result.content,
+    ),
+  };
+}
+
+export function databaseBuilderHydrationSourceForItem(
+  item: ContentDatabaseItem,
+  sources: ContentDatabaseSource[],
+) {
+  const sourceId = item.document.databaseMembership?.sourceId;
+  if (!sourceId) return null;
+  const itemSource = sources.find((candidate) => candidate.id === sourceId);
+  return itemSource?.sourceType === "builder-cms" ? itemSource : null;
+}
+
+export function databasePreviewItem(
+  items: ContentDatabaseItem[],
+  previewDocumentId: string | null,
+  createdPreviewItem: ContentDatabaseItem | null,
+) {
+  return (
+    items.find((item) => item.document.id === previewDocumentId) ??
+    (createdPreviewItem?.document.id === previewDocumentId
+      ? createdPreviewItem
+      : null)
+  );
+}
+
+export function databaseCreatedItemNeedsPreview(
+  items: ContentDatabaseItem[],
+  createdItem: ContentDatabaseItem,
+  options: {
+    openAfterCreate?: boolean;
+    focusInlineTitle?: boolean;
+  },
+) {
+  if (options.openAfterCreate !== false) return true;
+  if (!options.focusInlineTitle) return false;
+  return !items.some((item) => item.id === createdItem.id);
+}
+
 type DatabaseDragPreviewState =
   | {
       kind: "view";
@@ -420,14 +678,16 @@ export function databaseItemPageIconText(
   return icon ? icon : null;
 }
 
-function DatabaseItemPageIcon({
+export function DatabaseItemPageIcon({
   document,
   className,
   fallbackClassName,
+  fallback = "page",
 }: {
   document: Pick<Document, "icon">;
   className?: string;
   fallbackClassName?: string;
+  fallback?: "page" | "folder";
 }) {
   const icon = databaseItemPageIconText(document);
   if (icon) {
@@ -444,8 +704,9 @@ function DatabaseItemPageIcon({
     );
   }
 
+  const FallbackIcon = fallback === "folder" ? IconFolder : IconFileText;
   return (
-    <IconFileText
+    <FallbackIcon
       className={cn("shrink-0 text-muted-foreground", fallbackClassName)}
     />
   );
@@ -493,12 +754,21 @@ function DatabaseTable({
   canEdit: boolean;
   isActive: boolean;
 }) {
+  const t = useT();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [databaseItemLimit, setDatabaseItemLimit] = useState(
+  const contentSpacesQuery = useContentSpaces();
+  const [, setStoredSpaceId] = useLocalStorage<string | null>(
+    SELECTED_CONTENT_SPACE_STORAGE_KEY,
+    null,
+  );
+  const [manualDatabaseItemLimit, setManualDatabaseItemLimit] = useState(
     CONTENT_DATABASE_PAGE_SIZE,
   );
-  const database = useContentDatabase(document.id, databaseItemLimit);
+  const [databaseRequestItemLimit, setDatabaseRequestItemLimit] = useState(
+    CONTENT_DATABASE_PAGE_SIZE,
+  );
+  const database = useContentDatabase(document.id, databaseRequestItemLimit);
   const addItem = useAddDatabaseItem(document.id);
   const attachSource = useAttachContentDatabaseSource(document.id);
   const changeSourceRole = useChangeContentDatabaseSourceRole(document.id);
@@ -507,6 +777,9 @@ function DatabaseTable({
   const processBuilderBodies = useProcessBuilderBodyHydration(document.id);
   const prepareBuilderReview = usePrepareBuilderSourceReview(document.id);
   const executeBuilderExecution = useExecuteBuilderSourceExecution(document.id);
+  const cancelPreparedBuilderUpdate = useCancelPreparedBuilderSourceUpdate(
+    document.id,
+  );
   const setSourceWriteMode = useSetContentDatabaseSourceWriteMode(document.id);
   const setProperty = useSetDocumentProperty(document.id, document.id);
   const updateView = useUpdateContentDatabaseView(document.id);
@@ -516,21 +789,37 @@ function DatabaseTable({
   const data = isContentDatabaseUnavailable(database.data)
     ? undefined
     : database.data;
+  const isWorkspaceCatalog = data?.database.systemRole === "workspaces";
+  const isCreatingDatabaseItem = addItem.isPending;
   const isDatabaseInitialLoading = database.isLoading && !data;
   const properties = data?.properties ?? [];
   const items = data?.items ?? [];
   const totalItemCount = data?.pagination?.totalItems ?? items.length;
   const hasMoreItems =
     data?.pagination?.hasMore === true &&
-    databaseItemLimit < CONTENT_DATABASE_MAX_ITEM_LIMIT;
+    databaseRequestItemLimit < CONTENT_DATABASE_MAX_ITEM_LIMIT;
   const isLoadingMoreItems =
-    database.isFetching && data?.pagination?.limit !== databaseItemLimit;
+    database.isFetching && data?.pagination?.limit !== databaseRequestItemLimit;
   const databaseId = data?.database.id ?? expectedDatabaseId;
+  const newDatabaseRowLabel = isWorkspaceCatalog
+    ? t("sidebar.addWorkspace")
+    : dbText("newPage");
+  const personalView = useContentDatabasePersonalView(databaseId);
+  const updatePersonalView = useUpdateContentDatabasePersonalView(databaseId);
   const source = data?.source ?? null;
-  const sources = data?.sources ?? (source ? [source] : []);
+  const sources = useMemo(
+    () => databaseAttachedSources(data?.sources, source),
+    [data?.sources, source],
+  );
+  const builderSources = useMemo(
+    () => databaseAttachedBuilderSources(sources, source),
+    [sources, source],
+  );
   const [previewDocumentId, setPreviewDocumentId] = useState<string | null>(
     null,
   );
+  const [createdPreviewItem, setCreatedPreviewItem] =
+    useState<ContentDatabaseItem | null>(null);
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   const [previewTitleFocusDocumentId, setPreviewTitleFocusDocumentId] =
     useState<string | null>(null);
@@ -540,17 +829,45 @@ function DatabaseTable({
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [inlineFilterControlsOpen, setInlineFilterControlsOpen] =
+    useState(false);
+  const [inlineAddFilterOpen, setInlineAddFilterOpen] = useState(false);
+  const [toolbarFilterOpen, setToolbarFilterOpen] = useState(false);
+  const [inlineFilterOpenIndex, setInlineFilterOpenIndex] = useState<
+    number | null
+  >(null);
+  const [inlineAdvancedFilterOpen, setInlineAdvancedFilterOpen] =
+    useState(false);
+  const [inlineSortOpenIndex, setInlineSortOpenIndex] = useState<number | null>(
+    null,
+  );
   const [builderReviewOpen, setBuilderReviewOpen] = useState(false);
+
+  const [builderReviewSourceId, setBuilderReviewSourceId] = useState<
+    string | null
+  >(null);
   const [builderReviewResult, setBuilderReviewResult] =
     useState<ContentDatabaseSourceReviewPayload | null>(null);
   const [builderReviewCheckedAt, setBuilderReviewCheckedAt] = useState<
     string | null
   >(null);
+  const [builderReviewError, setBuilderReviewError] = useState<string | null>(
+    null,
+  );
+  const [
+    preparedBuilderReviewConfirmation,
+    setPreparedBuilderReviewConfirmation,
+  ] = useState<PreparedBuilderReviewConfirmation | null>(null);
+  const [builderReviewSelectionRemap, setBuilderReviewSelectionRemap] =
+    useState<Record<string, string> | null>(null);
   const [settingsPanel, setSettingsPanel] =
     useState<DatabaseSettingsPanel>("main");
   const [viewConfig, setViewConfig] = useState<ContentDatabaseViewConfig>(
     defaultDatabaseViewConfig(),
   );
+  const [savedViewConfig, setSavedViewConfig] =
+    useState<ContentDatabaseViewConfig>(defaultDatabaseViewConfig());
+  const [personalQueryDirty, setPersonalQueryDirty] = useState(false);
   const [dateViewMonth, setDateViewMonth] = useState(() =>
     startOfMonth(new Date()),
   );
@@ -564,7 +881,11 @@ function DatabaseTable({
   );
   const sorts = activeView.sorts;
   const filters = activeView.filters;
+  const visibleFilters = filters;
   const filterMode = activeView.filterMode ?? "and";
+  const workspaceCreationPropertyValues = isWorkspaceCatalog
+    ? databasePropertyValuesForNewItem(filters, properties, filterMode)
+    : undefined;
   const columnWidths = activeView.columnWidths;
   const databaseGroupProperty = useMemo(
     () => databaseViewGroupingProperty(activeView, orderedProperties),
@@ -584,29 +905,26 @@ function DatabaseTable({
   );
   const hydratedViewRef = useRef("");
   const saveViewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const autoContinueBuilderSourceRef = useRef<string | null>(null);
-  const builderContinuationWatchdogRef = useRef<{
-    key: string | null;
-    refires: number;
-  }>({ key: null, refires: 0 });
+  const personalViewSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const autoContinueBuilderSourceRef = useRef<Set<string>>(new Set());
+  const builderContinuationWatchdogRef = useRef<Map<string, number>>(new Map());
+  const refreshSourceInFlightRef = useRef<string | null>(null);
+  const hydrationSourceInFlightRef = useRef<string | null>(null);
+  const workspaceSelectionQueueRef = useRef(createContentSpaceSelectionQueue());
+  const builderReviewGenerationRef = useRef(0);
+  const builderReviewSessionRef = useRef<BuilderReviewSession | null>(null);
   const [
-    builderContinuationClientErrorKey,
-    setBuilderContinuationClientErrorKey,
-  ] = useState<string | null>(null);
-  const autoPumpBuilderBodiesRef = useRef<string | null>(null);
-  const [builderHydrationClientErrorKey, setBuilderHydrationClientErrorKey] =
-    useState<string | null>(null);
-  const [builderProgressHighWater, setBuilderProgressHighWater] = useState<{
-    sourceId: string | null;
-    fetchedCount: number;
-    hydratedCount: number;
-    rowsComplete: boolean;
-  }>({
-    sourceId: null,
-    fetchedCount: 0,
-    hydratedCount: 0,
-    rowsComplete: false,
-  });
+    builderContinuationClientErrorKeys,
+    setBuilderContinuationClientErrorKeys,
+  ] = useState<string[]>([]);
+  const autoPumpBuilderBodiesRef = useRef<Set<string>>(new Set());
+  const [builderHydrationClientErrorKeys, setBuilderHydrationClientErrorKeys] =
+    useState<string[]>([]);
+  const [builderProgressHighWater, setBuilderProgressHighWater] = useState<
+    Record<string, BuilderSourceProgressHighWater>
+  >({});
   const previewStateRef = useRef<{
     documentId: string | null;
     visibleItems: ContentDatabaseItem[];
@@ -657,14 +975,43 @@ function DatabaseTable({
     sorts,
     filters,
   );
+  const visibleConstraintCount = activeDatabaseConstraintCount(
+    searchQuery,
+    sorts,
+    visibleFilters,
+  );
+  const requiresCompleteClientDataset =
+    activeConstraintCount > 0 ||
+    !!databaseGroupProperty ||
+    activeView.type === "calendar" ||
+    activeView.type === "timeline";
+  const clientQueryExpandedItemLimit = databaseClientQueryExpandedItemLimit(
+    requiresCompleteClientDataset,
+    manualDatabaseItemLimit,
+    totalItemCount,
+  );
+  const isClientQueryExpansionPending = databaseClientQueryExpansionIsPending(
+    requiresCompleteClientDataset,
+    clientQueryExpandedItemLimit,
+    data?.pagination?.limit ?? items.length,
+  );
+  const isDatabaseViewLoading =
+    isDatabaseInitialLoading || isClientQueryExpansionPending;
+  useEffect(() => {
+    if (clientQueryExpandedItemLimit === databaseRequestItemLimit) return;
+    setDatabaseRequestItemLimit(clientQueryExpandedItemLimit);
+  }, [clientQueryExpandedItemLimit, databaseRequestItemLimit]);
   const rowsAreManuallyOrdered =
     !searchQuery.trim() &&
     sorts.length === 0 &&
     activeFilters.length === 0 &&
     !databaseGroupProperty;
   const hasResultConstraints = !!searchQuery.trim() || activeFilters.length > 0;
-  const previewItem =
-    items.find((item) => item.document.id === previewDocumentId) ?? null;
+  const previewItem = databasePreviewItem(
+    items,
+    previewDocumentId,
+    createdPreviewItem,
+  );
   const previousPreviewItem = previewItem
     ? databaseItemPreviewNeighbor(
         screenVisibleItems,
@@ -686,18 +1033,136 @@ function DatabaseTable({
     () => databaseSelectedItems(visibleItems, selectedItemIds),
     [visibleItems, selectedItemIds],
   );
+  const builderReviewSource = databaseBuilderReviewSource(
+    sources,
+    source,
+    builderReviewSourceId,
+  );
+  const builderReviewPreviewQuery = usePreviewBuilderSourceReview({
+    documentId: document.id,
+    sourceId: builderReviewSourceId,
+    scope: selectedItemIds.length > 0 ? "selected" : "all",
+    documentIds: selectedItems.map((item) => item.document.id),
+    enabled: builderReviewOpen,
+  });
+  const completeBuilderReviewPreview =
+    builderReviewPreviewQuery.data &&
+    builderReviewSource &&
+    builderReviewPreviewQuery.data.sourceId === builderReviewSource.id &&
+    builderReviewPreviewQuery.data.sourceTable ===
+      builderReviewSource.sourceTable
+      ? builderReviewPreviewQuery.data
+      : null;
   const builderReviewChangeSets = useMemo(
-    () => builderReviewableChangeSets(source),
-    [source],
+    () => builderReviewableChangeSets(builderReviewSource),
+    [builderReviewSource],
   );
   const builderReviewPreview = useMemo(
     () =>
-      source?.sourceType === "builder-cms" && builderReviewChangeSets.length > 0
-        ? buildClientBuilderReviewPayload(source, builderReviewChangeSets)
+      builderReviewSource && builderReviewChangeSets.length > 0
+        ? buildClientBuilderReviewPayload(
+            builderReviewSource,
+            builderReviewChangeSets,
+          )
         : null,
-    [builderReviewChangeSets, source],
+    [builderReviewChangeSets, builderReviewSource],
   );
-  const activeBuilderReview = builderReviewResult ?? builderReviewPreview;
+  const activeBuilderReview =
+    builderReviewResult ??
+    (builderReviewOpen
+      ? (completeBuilderReviewPreview?.review ?? null)
+      : builderReviewPreview);
+  const sourcePendingOperations: DatabaseSourcePendingOperations = {
+    attach: attachSource.isPending,
+    changeRole: changeSourceRole.isPending,
+    refresh:
+      refreshSource.isPending || refreshSourceInFlightRef.current !== null,
+    hydration:
+      processBuilderBodies.isPending ||
+      hydrationSourceInFlightRef.current !== null,
+    disconnect: disconnectSource.isPending,
+    review: prepareBuilderReview.isPending,
+    execute: executeBuilderExecution.isPending,
+    writeMode: setSourceWriteMode.isPending,
+    changeRoleSourceId: pendingMutationSourceId(
+      changeSourceRole.isPending,
+      changeSourceRole.variables,
+    ),
+    refreshSourceId:
+      refreshSourceInFlightRef.current ??
+      pendingMutationSourceId(refreshSource.isPending, refreshSource.variables),
+    hydrationSourceId:
+      hydrationSourceInFlightRef.current ??
+      pendingMutationSourceId(
+        processBuilderBodies.isPending,
+        processBuilderBodies.variables,
+      ),
+    disconnectSourceId: pendingMutationSourceId(
+      disconnectSource.isPending,
+      disconnectSource.variables,
+    ),
+    reviewSourceId: pendingMutationSourceId(
+      prepareBuilderReview.isPending,
+      prepareBuilderReview.variables,
+    ),
+    executeSourceId: pendingMutationSourceId(
+      executeBuilderExecution.isPending,
+      executeBuilderExecution.variables,
+    ),
+    writeModeSourceId: pendingMutationSourceId(
+      setSourceWriteMode.isPending,
+      setSourceWriteMode.variables,
+    ),
+  };
+  const runSourceRefresh = useCallback(
+    (sourceId: string, onError?: () => void) => {
+      if (!acquireDatabaseSourceOperation(refreshSourceInFlightRef, sourceId)) {
+        return false;
+      }
+      refreshSource.mutate(
+        { documentId: document.id, sourceId },
+        {
+          onError,
+          onSettled: () => {
+            releaseDatabaseSourceOperation(refreshSourceInFlightRef, sourceId);
+          },
+        },
+      );
+      return true;
+    },
+    [document.id, refreshSource.mutate],
+  );
+  const runBuilderHydration = useCallback(
+    (
+      sourceId: string,
+      options: {
+        onSuccess?: (result: ProcessBuilderBodyHydrationResponse) => void;
+        onError?: () => void;
+      } = {},
+      request: { documentId?: string; limit?: number } = {},
+    ) => {
+      if (
+        !acquireDatabaseSourceOperation(hydrationSourceInFlightRef, sourceId)
+      ) {
+        return false;
+      }
+      processBuilderBodies.mutate(
+        { sourceId, ...request },
+        {
+          onSuccess: options.onSuccess,
+          onError: options.onError,
+          onSettled: () => {
+            releaseDatabaseSourceOperation(
+              hydrationSourceInFlightRef,
+              sourceId,
+            );
+          },
+        },
+      );
+      return true;
+    },
+    [processBuilderBodies.mutate],
+  );
 
   useEffect(() => {
     previewStateRef.current = {
@@ -713,191 +1178,125 @@ function DatabaseTable({
   }, [visibleItems]);
 
   useEffect(() => {
-    if (!source || source.sourceType !== "builder-cms") {
-      autoPumpBuilderBodiesRef.current = null;
-      setBuilderHydrationClientErrorKey(null);
-      setBuilderProgressHighWater({
-        sourceId: null,
-        fetchedCount: 0,
-        hydratedCount: 0,
-        rowsComplete: false,
-      });
-      return;
-    }
-    const rawFetchedCount =
-      typeof source.metadata.lastReadFetchedEntryCount === "number"
-        ? source.metadata.lastReadFetchedEntryCount
-        : typeof source.metadata.lastReadEntryCount === "number"
-          ? source.metadata.lastReadEntryCount
-          : 0;
-    const fetchedCount =
-      source.metadata.lastReadHasMore === false
-        ? Math.max(rawFetchedCount, source.bodyHydration?.total ?? 0)
-        : rawFetchedCount;
-    const hydratedCount = source.bodyHydration?.hydrated ?? 0;
-    const rowsComplete = source.metadata.lastReadHasMore === false;
-    setBuilderProgressHighWater((current) => {
-      if (current.sourceId !== source.id) {
-        return {
-          sourceId: source.id,
-          fetchedCount,
-          hydratedCount,
-          rowsComplete,
-        };
-      }
-      const next = {
-        sourceId: source.id,
-        fetchedCount: Math.max(current.fetchedCount, fetchedCount),
-        hydratedCount: Math.max(current.hydratedCount, hydratedCount),
-        rowsComplete: current.rowsComplete || rowsComplete,
-      };
-      return next.fetchedCount === current.fetchedCount &&
-        next.hydratedCount === current.hydratedCount &&
-        next.rowsComplete === current.rowsComplete
-        ? current
-        : next;
-    });
-  }, [source]);
+    setBuilderProgressHighWater((current) =>
+      databaseBuilderProgressHighWater(builderSources, current),
+    );
+  }, [builderSources]);
 
   useEffect(() => {
-    if (
-      !isActive ||
-      !canEdit ||
-      !source ||
-      source.sourceType !== "builder-cms" ||
-      sourceAddsDetails(source) ||
-      refreshSource.isPending
-    ) {
-      return;
-    }
-    const sourceStatus = builderSourceRowFetchStatus(source);
-    if (
-      sourceStatus !== "fetching" ||
-      source.metadata.lastReadHasMore !== true
-    ) {
-      return;
-    }
-    const continuationKey = builderSourceContinuationKey(source);
+    if (!isActive || !canEdit || refreshSource.isPending) return;
+    const candidate = databaseNextBuilderContinuationSource(builderSources, {
+      attemptedKeys: autoContinueBuilderSourceRef.current,
+      errorKeys: new Set(builderContinuationClientErrorKeys),
+    });
+    if (!candidate) return;
+    const continuationKey = builderSourceContinuationKey(candidate);
     if (!continuationKey) return;
-    if (builderContinuationClientErrorKey === continuationKey) return;
-    if (autoContinueBuilderSourceRef.current === continuationKey) return;
-    autoContinueBuilderSourceRef.current = continuationKey;
-    refreshSource.mutate(
-      {
-        documentId: document.id,
-        sourceId: source.id,
-      },
-      {
-        onError: () => setBuilderContinuationClientErrorKey(continuationKey),
-      },
+    databaseRecordBuilderContinuationAttempt(
+      autoContinueBuilderSourceRef.current,
+      continuationKey,
     );
+    if (
+      !runSourceRefresh(candidate.id, () =>
+        setBuilderContinuationClientErrorKeys((current) =>
+          addUniqueKey(current, continuationKey),
+        ),
+      )
+    ) {
+      autoContinueBuilderSourceRef.current.delete(continuationKey);
+    }
   }, [
-    builderContinuationClientErrorKey,
+    builderContinuationClientErrorKeys,
+    builderSources,
     canEdit,
-    document.id,
     isActive,
-    refreshSource.mutate,
     refreshSource.isPending,
-    source,
+    runSourceRefresh,
   ]);
 
   useEffect(() => {
+    if (!isActive || !canEdit || processBuilderBodies.isPending) return;
+    const candidate = databaseNextBuilderHydrationSource(builderSources, {
+      attemptedKeys: autoPumpBuilderBodiesRef.current,
+      errorKeys: new Set(builderHydrationClientErrorKeys),
+    });
+    if (!candidate) return;
+    const hydrationKey = builderBodyHydrationPumpKey(candidate);
+    if (!hydrationKey) return;
+    autoPumpBuilderBodiesRef.current.add(hydrationKey);
     if (
-      !isActive ||
-      !canEdit ||
-      !source ||
-      !shouldPumpBuilderBodyHydration(
-        source,
-        processBuilderBodies.isPending,
-        builderHydrationClientErrorKey,
-      )
-    ) {
-      return;
-    }
-    const hydrationKey = builderBodyHydrationPumpKey(source);
-    if (!hydrationKey || autoPumpBuilderBodiesRef.current === hydrationKey) {
-      return;
-    }
-    autoPumpBuilderBodiesRef.current = hydrationKey;
-    processBuilderBodies.mutate(
-      { sourceId: source.id },
-      {
+      !runBuilderHydration(candidate.id, {
         onSuccess: (result) => {
           if (!builderBodyHydrationMutationMadeProgress(result)) {
-            setBuilderHydrationClientErrorKey(hydrationKey);
+            setBuilderHydrationClientErrorKeys((current) =>
+              addUniqueKey(current, hydrationKey),
+            );
           }
         },
-        onError: () => setBuilderHydrationClientErrorKey(hydrationKey),
-      },
-    );
+        onError: () =>
+          setBuilderHydrationClientErrorKeys((current) =>
+            addUniqueKey(current, hydrationKey),
+          ),
+      })
+    ) {
+      autoPumpBuilderBodiesRef.current.delete(hydrationKey);
+    }
   }, [
-    builderHydrationClientErrorKey,
+    builderHydrationClientErrorKeys,
+    builderSources,
     canEdit,
     isActive,
     processBuilderBodies.isPending,
-    processBuilderBodies.mutate,
-    source,
+    runBuilderHydration,
   ]);
 
   useEffect(() => {
-    const continuationKey =
-      source?.sourceType === "builder-cms"
-        ? builderSourceContinuationKey(source)
-        : null;
-    if (
-      !isActive ||
-      !canEdit ||
-      !source ||
-      source.sourceType !== "builder-cms" ||
-      sourceAddsDetails(source) ||
-      refreshSource.isPending ||
-      builderSourceRowFetchStatus(source) !== "fetching" ||
-      source.metadata.lastReadHasMore !== true ||
-      !continuationKey ||
-      builderContinuationClientErrorKey === continuationKey
-    ) {
-      return;
-    }
-    if (builderContinuationWatchdogRef.current.key !== continuationKey) {
-      builderContinuationWatchdogRef.current = {
-        key: continuationKey,
-        refires: 0,
-      };
-    }
-    const refireDelay = builderSourceContinuationWatchdogDelay(
-      builderContinuationWatchdogRef.current.refires,
+    if (!isActive || !canEdit || refreshSource.isPending) return;
+    const candidate = databaseNextBuilderContinuationWatchdogSource(
+      builderSources,
+      {
+        attemptedKeys: autoContinueBuilderSourceRef.current,
+        errorKeys: new Set(builderContinuationClientErrorKeys),
+        refiresByKey: builderContinuationWatchdogRef.current,
+      },
     );
+    if (!candidate) return;
+    const continuationKey = builderSourceContinuationKey(candidate);
+    if (!continuationKey) return;
+    const refires =
+      builderContinuationWatchdogRef.current.get(continuationKey) ?? 0;
     const timer = window.setTimeout(() => {
-      const watchdog = builderContinuationWatchdogRef.current;
-      if (watchdog.key !== continuationKey) return;
       if (
-        builderSourceContinuationWatchdogDecision(watchdog.refires) !== "refire"
-      )
+        builderSourceContinuationWatchdogDecision(refires) !== "refire" ||
+        refreshSource.isPending
+      ) {
         return;
-      builderContinuationWatchdogRef.current = {
-        key: continuationKey,
-        refires: watchdog.refires + 1,
-      };
-      autoContinueBuilderSourceRef.current = null;
-      refreshSource.mutate(
-        {
-          documentId: document.id,
-          sourceId: source.id,
-        },
-        {
-          onError: () => setBuilderContinuationClientErrorKey(continuationKey),
-        },
-      );
-    }, refireDelay);
+      }
+      if (
+        runSourceRefresh(candidate.id, () =>
+          setBuilderContinuationClientErrorKeys((current) =>
+            addUniqueKey(current, continuationKey),
+          ),
+        )
+      ) {
+        builderContinuationWatchdogRef.current.set(
+          continuationKey,
+          refires + 1,
+        );
+        databaseRecordBuilderContinuationAttempt(
+          autoContinueBuilderSourceRef.current,
+          continuationKey,
+        );
+      }
+    }, builderSourceContinuationWatchdogDelay(refires));
     return () => window.clearTimeout(timer);
   }, [
-    builderContinuationClientErrorKey,
+    builderContinuationClientErrorKeys,
+    builderSources,
     canEdit,
-    document.id,
     isActive,
-    refreshSource.mutate,
     refreshSource.isPending,
-    source,
+    runSourceRefresh,
   ]);
 
   useEffect(() => {
@@ -957,6 +1356,7 @@ function DatabaseTable({
   ]);
 
   function previewItemPage(item: ContentDatabaseItem) {
+    if (openWorkspaceFiles(item)) return;
     seedDatabaseItemDocumentCaches(queryClient, item);
     prioritizeBuilderBodyHydrationForItem(item);
     if (activeView.openPagesIn === "full_page") {
@@ -996,25 +1396,65 @@ function DatabaseTable({
   }
 
   function openItemPage(item: ContentDatabaseItem) {
+    if (openWorkspaceFiles(item)) return;
     seedDatabaseItemDocumentCaches(queryClient, item);
     prioritizeBuilderBodyHydrationForItem(item);
     navigate(`/page/${item.document.id}`);
   }
 
+  function openWorkspaceFiles(item: ContentDatabaseItem) {
+    if (data?.database.systemRole !== "workspaces") {
+      return false;
+    }
+    const spacesResponse = contentSpacesQuery.data;
+    if (!spacesResponse) return false;
+    const space = contentSpaceForCatalogItem({
+      databaseId,
+      catalogDatabaseId: spacesResponse.catalogDatabaseId,
+      documentId: item.document.id,
+      spaces: spacesResponse.spaces,
+    });
+    if (!space) return false;
+    void workspaceSelectionQueueRef
+      .current(async () => {
+        await selectContentSpace({
+          space,
+          syncApplicationState: (selected) =>
+            setClientAppState(
+              "content-space",
+              {
+                spaceId: selected.id,
+                name: selected.name,
+                kind: selected.kind,
+                filesDatabaseId: selected.filesDatabaseId,
+              },
+              { requestSource: "content-workspaces-database" },
+            ),
+          persistSelection: setStoredSpaceId,
+          openFiles: (documentId) => navigate(`/page/${documentId}`),
+        });
+      })
+      .catch((error) => {
+        toast.error(error instanceof Error ? error.message : String(error));
+      });
+    return true;
+  }
+
   function prioritizeBuilderBodyHydrationForItem(item: ContentDatabaseItem) {
-    const sourceId = item.document.databaseMembership?.sourceId ?? source?.id;
-    if (!sourceId) return;
-    const builderSource =
-      sources.find((candidate) => candidate.id === sourceId) ?? source;
-    if (builderSource?.sourceType !== "builder-cms") return;
+    const builderSource = databaseBuilderHydrationSourceForItem(item, sources);
+    if (!builderSource) return;
+    const sourceId = builderSource.id;
     const hydration =
       item.bodyHydration ?? item.document.databaseMembership?.bodyHydration;
     if (hydration && !databaseItemBodyHydrationIsPending(item)) return;
-    processBuilderBodies.mutate({
+    runBuilderHydration(
       sourceId,
-      documentId: item.document.id,
-      limit: 1,
-    });
+      {},
+      {
+        documentId: item.document.id,
+        limit: 1,
+      },
+    );
   }
 
   async function createRow(
@@ -1026,24 +1466,41 @@ function DatabaseTable({
     } = {},
   ) {
     if (!databaseId) return null;
+    if (isWorkspaceCatalog) return null;
     const propertyValues = {
       ...databasePropertyValuesForNewItem(filters, properties, filterMode),
       ...propertyValueOverrides,
     };
-    const response = await addItem.mutateAsync({
+    let response;
+    try {
+      response = await addItem.mutateAsync({
+        databaseId,
+        title,
+        propertyValues:
+          Object.keys(propertyValues).length > 0 ? propertyValues : undefined,
+      });
+    } catch (err) {
+      toast.error(dbText("failedToCreateRow"), {
+        description:
+          err instanceof Error ? err.message : dbText("somethingWentWrong"),
+      });
+      return null;
+    }
+    const createdItem = databaseCreatedItemForImmediatePreview(response, {
       databaseId,
+      parentDocument: document,
       title,
-      propertyValues:
-        Object.keys(propertyValues).length > 0 ? propertyValues : undefined,
+      propertyValues,
     });
-    const createdItem = response.items.find(
-      (item) => item.id === response.createdItemId,
-    );
-    if (createdItem && options.openAfterCreate !== false) {
+    const needsPreview =
+      !!createdItem &&
+      databaseCreatedItemNeedsPreview(items, createdItem, options);
+    if (createdItem && needsPreview) {
+      setCreatedPreviewItem(createdItem);
       setPreviewDocumentId(createdItem.document.id);
       setPreviewTitleFocusDocumentId(createdItem.document.id);
     }
-    if (createdItem && options.focusInlineTitle) {
+    if (createdItem && options.focusInlineTitle && !needsPreview) {
       setInlineTitleFocusDocumentId(createdItem.document.id);
     }
     return createdItem ?? null;
@@ -1122,15 +1579,111 @@ function DatabaseTable({
   }
 
   function setActiveSorts(nextSorts: DatabaseSort[]) {
-    updateActiveView((view) => ({ ...view, sorts: nextSorts }));
+    updatePersonalQueryView((view) => ({ ...view, sorts: nextSorts }));
   }
 
   function setActiveFilters(nextFilters: DatabaseFilter[]) {
-    updateActiveView((view) => ({ ...view, filters: nextFilters }));
+    updatePersonalQueryView((view) => ({ ...view, filters: nextFilters }));
   }
 
   function setFilterMode(filterMode: DatabaseFilterMode) {
-    updateActiveView((view) => ({ ...view, filterMode }));
+    updatePersonalQueryView((view) => ({ ...view, filterMode }));
+  }
+
+  function updatePersonalQueryView(
+    update: (view: ContentDatabaseView) => ContentDatabaseView,
+  ) {
+    setViewConfig((current) => {
+      const next = updateActiveDatabaseView(current, update);
+      if (databaseId) {
+        schedulePersonalDatabaseViewOverrideWrite(databaseId, next);
+      }
+      setPersonalQueryDirty(
+        databaseViewHasPersonalQueryChanges(next, savedViewConfig),
+      );
+      return next;
+    });
+  }
+
+  async function savePersonalQueryForEveryone() {
+    if (!databaseId) return;
+
+    try {
+      const response = await updateView.mutateAsync({
+        databaseId,
+        viewConfig,
+      });
+      const nextViewConfig = normalizeClientDatabaseViewConfig(
+        response.database.viewConfig,
+      );
+      if (personalViewSaveTimerRef.current) {
+        clearTimeout(personalViewSaveTimerRef.current);
+        personalViewSaveTimerRef.current = null;
+      }
+      updatePersonalView.mutate({ databaseId, overrides: null });
+      setSavedViewConfig(nextViewConfig);
+      setViewConfig(nextViewConfig);
+      setPersonalQueryDirty(false);
+      hydratedViewRef.current = databaseViewStateKey(
+        databaseId,
+        nextViewConfig,
+      );
+    } catch (err) {
+      toast.error(dbText("failedToSaveView"), {
+        description:
+          err instanceof Error ? err.message : dbText("somethingWentWrong"),
+      });
+    }
+  }
+
+  function resetPersonalQueryChanges() {
+    if (!databaseId) return;
+    if (personalViewSaveTimerRef.current) {
+      clearTimeout(personalViewSaveTimerRef.current);
+      personalViewSaveTimerRef.current = null;
+    }
+    setViewConfig((current) => {
+      const nextViewConfig = databaseViewConfigWithSavedQueryState(
+        current,
+        savedViewConfig,
+      );
+      updatePersonalView.mutate({
+        databaseId,
+        overrides: null,
+      });
+      setPersonalQueryDirty(false);
+      hydratedViewRef.current = databaseViewStateKey(
+        databaseId,
+        nextViewConfig,
+      );
+      return nextViewConfig;
+    });
+  }
+
+  function schedulePersonalDatabaseViewOverrideWrite(
+    databaseId: string,
+    viewConfig: ContentDatabaseViewConfig,
+  ) {
+    if (personalViewSaveTimerRef.current) {
+      clearTimeout(personalViewSaveTimerRef.current);
+    }
+    const overrides = personalDatabaseViewOverridesFromConfig(viewConfig);
+    personalViewSaveTimerRef.current = setTimeout(() => {
+      personalViewSaveTimerRef.current = null;
+      updatePersonalView.mutate(
+        { databaseId, overrides },
+        {
+          onError: (err) => {
+            toast.error(dbText("failedToSaveView"), {
+              description:
+                err instanceof Error
+                  ? err.message
+                  : dbText("somethingWentWrong"),
+            });
+          },
+        },
+      );
+    }, 300);
   }
 
   function clearSearchAndFilters() {
@@ -1202,6 +1755,10 @@ function DatabaseTable({
     updateActiveView((view) => ({ ...view, openPagesIn }));
   }
 
+  function setFormQuestions(formQuestions: ContentDatabaseFormQuestion[]) {
+    updateActiveView((view) => ({ ...view, formQuestions }));
+  }
+
   function setGroupCollapsed(groupId: string, collapsed: boolean) {
     updateActiveView((view) =>
       setDatabaseViewCollapsedGroup(view, groupId, collapsed),
@@ -1218,61 +1775,294 @@ function DatabaseTable({
     updateActiveView((view) => ({ ...view, hideEmptyGroups }));
   }
 
-  async function handleBuilderReviewPush(
-    transitions: BuilderReviewPublicationTransitions = {},
-  ) {
+  function openBuilderReview(sourceId: string) {
+    if (
+      prepareBuilderReview.isPending ||
+      executeBuilderExecution.isPending ||
+      cancelPreparedBuilderUpdate.isPending
+    ) {
+      return;
+    }
+    const session = {
+      sourceId,
+      generation: builderReviewGenerationRef.current + 1,
+    };
+    builderReviewGenerationRef.current = session.generation;
+    builderReviewSessionRef.current = session;
+    setBuilderReviewSourceId(sourceId);
     setBuilderReviewResult(null);
     setBuilderReviewCheckedAt(null);
-    const scopedChangeSetIds =
-      activeBuilderReview && activeBuilderReview.rows.length > 0
-        ? activeBuilderReview.rows.map((row) => row.changeSetId)
-        : undefined;
-    try {
-      const prepared = await prepareBuilderReview.mutateAsync({
-        documentId: document.id,
-        sourceId: source?.id,
-        changeSetIds: scopedChangeSetIds,
-        pushModeConfirmation: "autosave",
-      });
-      let nextReview = prepared.review;
+    setBuilderReviewError(null);
+    setPreparedBuilderReviewConfirmation(null);
+    setBuilderReviewSelectionRemap(null);
+    setBuilderReviewOpen(true);
+  }
 
-      if (
-        nextReview.liveWritesEnabled &&
-        nextReview.result.status === "validated"
-      ) {
-        const executableRows = builderReviewExecutableRows(nextReview);
-        let executedResponse: ContentDatabaseResponse | null = null;
-        for (const row of executableRows) {
-          if (!row.execution?.idempotencyKey) continue;
-          const transition = transitions[row.changeSetId];
-          executedResponse = await executeBuilderExecution.mutateAsync({
-            documentId: document.id,
-            changeSetId: row.changeSetId,
-            idempotencyKey: row.execution.idempotencyKey,
-            pushModeConfirmation: nextReview.pushMode,
-            publicationTransition: transition?.publicationTransition,
-            confirmUnpublish: transition?.confirmUnpublish,
-          });
+  function closeBuilderReview(force = false) {
+    if (
+      !force &&
+      (prepareBuilderReview.isPending ||
+        executeBuilderExecution.isPending ||
+        cancelPreparedBuilderUpdate.isPending)
+    ) {
+      return;
+    }
+    builderReviewGenerationRef.current += 1;
+    builderReviewSessionRef.current = null;
+    setBuilderReviewOpen(false);
+    setBuilderReviewSourceId(null);
+    setBuilderReviewResult(null);
+    setBuilderReviewCheckedAt(null);
+    setBuilderReviewError(null);
+    setPreparedBuilderReviewConfirmation(null);
+    setBuilderReviewSelectionRemap(null);
+  }
+
+  async function handleBuilderReviewPush(selection: {
+    changeSetIds: string[];
+    transitions: BuilderReviewPublicationTransitions;
+  }) {
+    const session = builderReviewSessionRef.current;
+    const reviewSource = builderReviewSource;
+    if (
+      !session ||
+      !reviewSource ||
+      session.sourceId !== reviewSource.id ||
+      !databaseBuilderReviewSessionIsCurrent(
+        builderReviewSessionRef.current,
+        session,
+      )
+    ) {
+      return;
+    }
+    if (
+      !activeBuilderReview ||
+      !databaseBuilderReviewSelectedChangeSetIds(
+        activeBuilderReview,
+        reviewSource,
+        selection.changeSetIds,
+        !builderReviewResult
+          ? completeBuilderReviewPreview?.changeSetIds
+          : undefined,
+      )
+    ) {
+      toast.error(dbText("builderUpdateFailed"), {
+        description: dbText("needsAFreshReview"),
+      });
+      return;
+    }
+    const selectedChangeSetIds = databaseBuilderReviewSelectedChangeSetIds(
+      activeBuilderReview,
+      reviewSource,
+      selection.changeSetIds,
+      !builderReviewResult
+        ? completeBuilderReviewPreview?.changeSetIds
+        : undefined,
+    )!;
+    const selectedChangeSetIdSet = new Set(selectedChangeSetIds);
+    const selectionFingerprint = builderReviewSelectionFingerprint({
+      changeSetIds: selectedChangeSetIds,
+      transitions: selection.transitions,
+    });
+    const shouldExecute = preparedBuilderReviewMatches(
+      preparedBuilderReviewConfirmation,
+      session,
+      selectionFingerprint,
+    );
+
+    if (!shouldExecute) {
+      setBuilderReviewResult(null);
+      setBuilderReviewCheckedAt(null);
+      setBuilderReviewError(null);
+      setPreparedBuilderReviewConfirmation(null);
+      try {
+        const prepared = await prepareBuilderReview.mutateAsync({
+          documentId: document.id,
+          sourceId: session.sourceId,
+          changeSetIds: selectedChangeSetIds,
+          documentIds:
+            selectedItemIds.length > 0
+              ? selectedItems.map((item) => item.document.id)
+              : undefined,
+          pushModeConfirmation:
+            activeBuilderReview.pushMode === "none"
+              ? undefined
+              : activeBuilderReview.pushMode,
+          transitions: selection.transitions,
+        });
+        if (
+          !databaseBuilderReviewSessionIsCurrent(
+            builderReviewSessionRef.current,
+            session,
+          )
+        ) {
+          return;
         }
-        const executedSource = executedResponse?.source ?? null;
-        if (executedSource) {
-          const reviewedIds = new Set(
-            nextReview.rows.map((row) => row.changeSetId),
+        const preparedSelection = databaseBuilderPreparedReviewSelection(
+          prepared.review,
+          reviewSource,
+          selectedChangeSetIds,
+          prepared.preparedChangeSetMappings,
+        );
+        if (!preparedSelection) {
+          throw new Error(
+            "The prepared Builder review returned changes from another source.",
           );
-          const reviewedChangeSets = executedSource.changeSets.filter(
-            (changeSet) => reviewedIds.has(changeSet.id),
+        }
+
+        const preparedTransitions = Object.fromEntries(
+          Object.entries(selection.transitions).map(
+            ([changeSetId, transition]) => [
+              preparedSelection.changeSetIdMap[changeSetId] ?? changeSetId,
+              transition,
+            ],
+          ),
+        );
+        const preparedSelectionFingerprint = builderReviewSelectionFingerprint({
+          changeSetIds: preparedSelection.preparedChangeSetIds,
+          transitions: preparedTransitions,
+        });
+        setBuilderReviewSelectionRemap(preparedSelection.changeSetIdMap);
+        setBuilderReviewResult(prepared.review);
+        const executableRows = builderReviewExecutableRows(
+          prepared.review,
+          new Set(preparedSelection.preparedChangeSetIds),
+        );
+        if (
+          prepared.review.liveWritesEnabled &&
+          executableRows.length ===
+            preparedSelection.preparedChangeSetIds.length
+        ) {
+          setPreparedBuilderReviewConfirmation({
+            ...session,
+            selectionFingerprint: preparedSelectionFingerprint,
+          });
+          toast.info(dbText("ready"), {
+            description: dbText("reviewBuilderUpdate"),
+          });
+          return;
+        }
+
+        setBuilderReviewCheckedAt(new Date().toISOString());
+        toast.success(dbText("checkedStatus"), {
+          description: prepared.review.result.message,
+        });
+      } catch (error) {
+        if (
+          !databaseBuilderReviewSessionIsCurrent(
+            builderReviewSessionRef.current,
+            session,
+          )
+        ) {
+          return;
+        }
+        const message =
+          error instanceof Error ? error.message : dbText("tryAgain");
+        setBuilderReviewError(message);
+        toast.error(dbText("builderUpdateFailed"), {
+          description: message,
+        });
+      }
+      return;
+    }
+
+    const preparedReview = builderReviewResult;
+    if (
+      !preparedReview ||
+      !databaseBuilderReviewExactSelectionIsValid(
+        preparedReview,
+        selectedChangeSetIds,
+      )
+    ) {
+      setPreparedBuilderReviewConfirmation(null);
+      setBuilderReviewError(dbText("needsAFreshReview"));
+      return;
+    }
+
+    setBuilderReviewCheckedAt(null);
+    setBuilderReviewError(null);
+    let preparedReviewForError = activeBuilderReview;
+    try {
+      let nextReview = preparedReview;
+      preparedReviewForError = nextReview;
+
+      const executableRows = builderReviewExecutableRows(
+        nextReview,
+        selectedChangeSetIdSet,
+      );
+      let executedResponse: ContentDatabaseResponse | null = null;
+      for (const row of executableRows) {
+        if (!row.execution?.idempotencyKey) continue;
+        if (
+          !databaseBuilderReviewSessionIsCurrent(
+            builderReviewSessionRef.current,
+            session,
+          )
+        ) {
+          return;
+        }
+        const transition = selection.transitions[row.changeSetId];
+        executedResponse = await executeBuilderExecution.mutateAsync({
+          documentId: document.id,
+          sourceId: session.sourceId,
+          changeSetId: row.changeSetId,
+          idempotencyKey: row.execution.idempotencyKey,
+          pushModeConfirmation: nextReview.pushMode,
+          publicationTransition: transition?.publicationTransition,
+          confirmUnpublish: transition?.confirmUnpublish,
+        });
+        if (
+          !databaseBuilderReviewSessionIsCurrent(
+            builderReviewSessionRef.current,
+            session,
+          )
+        ) {
+          return;
+        }
+      }
+      const executedSource = executedResponse
+        ? databaseAttachedBuilderSource(
+            databaseAttachedSources(
+              executedResponse.sources,
+              executedResponse.source,
+            ),
+            executedResponse.source,
+            { sourceId: session.sourceId },
+          )
+        : null;
+      if (executedSource) {
+        const reviewedIds = new Set(
+          nextReview.rows.map((row) => row.changeSetId),
+        );
+        const reviewedChangeSets = executedSource.changeSets.filter(
+          (changeSet) => reviewedIds.has(changeSet.id),
+        );
+        if (reviewedChangeSets.length > 0) {
+          nextReview = buildClientBuilderReviewPayload(
+            executedSource,
+            reviewedChangeSets,
           );
-          if (reviewedChangeSets.length > 0) {
-            nextReview = buildClientBuilderReviewPayload(
-              executedSource,
-              reviewedChangeSets,
-            );
-          }
         }
       }
 
+      if (
+        !databaseBuilderReviewSessionIsCurrent(
+          builderReviewSessionRef.current,
+          session,
+        )
+      ) {
+        return;
+      }
       setBuilderReviewResult(nextReview);
       setBuilderReviewCheckedAt(new Date().toISOString());
+      setBuilderReviewError(null);
+      setPreparedBuilderReviewConfirmation(null);
+      if (nextReview.result.status === "running") {
+        toast.info(dbText("working"), {
+          description: dbText("builderPushAlreadyRunning"),
+        });
+        return;
+      }
       toast.success(
         nextReview.result.status === "succeeded"
           ? "Builder update pushed"
@@ -1282,9 +2072,83 @@ function DatabaseTable({
         },
       );
     } catch (error) {
+      if (
+        !databaseBuilderReviewSessionIsCurrent(
+          builderReviewSessionRef.current,
+          session,
+        )
+      ) {
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : dbText("tryAgain");
+      setPreparedBuilderReviewConfirmation(null);
+      const ambiguousReview = databaseBuilderReviewAfterExecutionError(
+        preparedReviewForError,
+        message,
+      );
+      if (ambiguousReview) {
+        setBuilderReviewResult(ambiguousReview);
+        setBuilderReviewCheckedAt(new Date().toISOString());
+        if (ambiguousReview.result.status === "running") {
+          setBuilderReviewError(null);
+          toast.info(dbText("working"), {
+            description: ambiguousReview.result.message,
+          });
+          return;
+        }
+      }
+      setBuilderReviewError(message);
       toast.error(dbText("builderUpdateFailed"), {
-        description:
-          error instanceof Error ? error.message : dbText("tryAgain"),
+        description: message,
+      });
+    }
+  }
+
+  async function handleCancelPreparedBuilderUpdate(changeSetId: string) {
+    const session = builderReviewSessionRef.current;
+    if (
+      !session ||
+      !builderReviewSource ||
+      session.sourceId !== builderReviewSource.id
+    ) {
+      return;
+    }
+    setBuilderReviewError(null);
+    try {
+      const result = await cancelPreparedBuilderUpdate.mutateAsync({
+        documentId: document.id,
+        sourceId: session.sourceId,
+        changeSetId,
+      });
+      if (
+        !databaseBuilderReviewSessionIsCurrent(
+          builderReviewSessionRef.current,
+          session,
+        )
+      ) {
+        return;
+      }
+      toast.success(
+        result.cancellation.status === "already_cancelled"
+          ? dbText("preparedUpdateAlreadyCancelled")
+          : dbText("preparedUpdateCancelled"),
+      );
+      closeBuilderReview(true);
+    } catch (error) {
+      if (
+        !databaseBuilderReviewSessionIsCurrent(
+          builderReviewSessionRef.current,
+          session,
+        )
+      ) {
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : dbText("tryAgain");
+      setBuilderReviewError(message);
+      toast.error(dbText("cancelPreparedUpdateFailed"), {
+        description: message,
       });
     }
   }
@@ -1306,41 +2170,73 @@ function DatabaseTable({
     orderedProperties,
     visibleItems,
   ]);
-
   useEffect(() => {
     if (!data?.database.id) return;
-    const nextViewConfig = normalizeClientDatabaseViewConfig(
+    if (personalView.isLoading) return;
+    const nextSavedViewConfig = normalizeClientDatabaseViewConfig(
       data.database.viewConfig,
+    );
+    const nextViewConfig = applyPersonalDatabaseViewOverrides(
+      nextSavedViewConfig,
+      normalizePersonalDatabaseViewOverrides(personalView.data?.overrides),
     );
     const nextKey = databaseViewStateKey(data.database.id, nextViewConfig);
     if (hydratedViewRef.current === nextKey) return;
     hydratedViewRef.current = nextKey;
+    setSavedViewConfig(nextSavedViewConfig);
+    setPersonalQueryDirty(
+      databaseViewHasPersonalQueryChanges(nextViewConfig, nextSavedViewConfig),
+    );
     setViewConfig((current) =>
       databaseViewStateKey(data.database.id, current) === nextKey
         ? current
         : nextViewConfig,
     );
-  }, [data?.database.id, data?.database.viewConfig]);
+  }, [
+    data?.database.id,
+    data?.database.viewConfig,
+    personalView.data?.overrides,
+    personalView.isLoading,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (personalViewSaveTimerRef.current) {
+        clearTimeout(personalViewSaveTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!databaseId) return;
-    const nextKey = databaseViewStateKey(databaseId, viewConfig);
-    if (hydratedViewRef.current === nextKey) return;
+    const sharedViewConfig = personalQueryDirty
+      ? databaseViewConfigWithSavedQueryState(viewConfig, savedViewConfig)
+      : viewConfig;
+    const nextKey = databaseViewStateKey(databaseId, sharedViewConfig);
+    if (databaseViewStateKey(databaseId, savedViewConfig) === nextKey) return;
     if (!canEdit) return;
     if (saveViewTimerRef.current) {
       clearTimeout(saveViewTimerRef.current);
     }
     saveViewTimerRef.current = setTimeout(() => {
       updateView.mutate(
-        { databaseId, viewConfig },
+        { databaseId, viewConfig: sharedViewConfig },
         {
           onSuccess: (response) => {
             const nextViewConfig = normalizeClientDatabaseViewConfig(
               response.database.viewConfig,
             );
+            setSavedViewConfig(nextViewConfig);
             hydratedViewRef.current = databaseViewStateKey(
               response.database.id,
-              nextViewConfig,
+              personalQueryDirty
+                ? applyPersonalDatabaseViewOverrides(
+                    nextViewConfig,
+                    normalizePersonalDatabaseViewOverrides(
+                      personalView.data?.overrides,
+                    ),
+                  )
+                : nextViewConfig,
             );
           },
         },
@@ -1351,7 +2247,15 @@ function DatabaseTable({
         clearTimeout(saveViewTimerRef.current);
       }
     };
-  }, [canEdit, databaseId, updateView, viewConfig]);
+  }, [
+    canEdit,
+    databaseId,
+    personalQueryDirty,
+    personalView.data?.overrides,
+    savedViewConfig,
+    updateView,
+    viewConfig,
+  ]);
 
   function resizeColumn(
     key: ColumnKey,
@@ -1444,25 +2348,51 @@ function DatabaseTable({
             onSortsChange={setActiveSorts}
           />
           <FilterMenu
-            documentId={document.id}
+            filters={visibleFilters}
             properties={orderedProperties}
-            filters={filters}
-            filterMode={filterMode}
-            onFiltersChange={setActiveFilters}
-            onFilterModeChange={setFilterMode}
+            inlineOpen={inlineFilterControlsOpen}
+            open={toolbarFilterOpen}
+            onOpenChange={setToolbarFilterOpen}
+            onAddFilter={(key, label) => {
+              setActiveFilters([
+                ...filters,
+                createDatabaseFilterForField(key, label, orderedProperties),
+              ]);
+              setInlineFilterControlsOpen(true);
+              setInlineAddFilterOpen(false);
+              setInlineFilterOpenIndex(filters.length);
+              setToolbarFilterOpen(false);
+            }}
+            onAddAdvancedFilter={(key, label) => {
+              setActiveFilters([
+                ...filters,
+                createDatabaseFilterForField(
+                  key,
+                  label,
+                  orderedProperties,
+                  true,
+                ),
+              ]);
+              setInlineFilterControlsOpen(true);
+              setInlineAddFilterOpen(false);
+              setInlineAdvancedFilterOpen(true);
+              setToolbarFilterOpen(false);
+            }}
           />
           {renderMode === "inline" ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
+                  asChild
                   type="button"
                   variant="ghost"
                   size="sm"
                   aria-label={dbText("openAsFullPage")}
                   className={databaseToolbarIconButtonClass()}
-                  onClick={() => navigate(`/page/${databaseDocumentId}`)}
                 >
-                  <IconArrowsDiagonal className="size-3.5" />
+                  <Link to={`/page/${databaseDocumentId}`}>
+                    <IconArrowsDiagonal className="size-3.5" />
+                  </Link>
                 </Button>
               </TooltipTrigger>
               <TooltipContent>{dbText("openAsFullPage")}</TooltipContent>
@@ -1504,15 +2434,29 @@ function DatabaseTable({
               </span>
             ) : null}
           </Button>
-          {canEdit ? (
+          {canEdit && isWorkspaceCatalog ? (
+            <WorkspaceSourceMenu
+              align="end"
+              propertyValues={workspaceCreationPropertyValues}
+            >
+              <Button
+                type="button"
+                size="sm"
+                className="h-7 rounded-md bg-foreground px-2.5 text-xs font-medium text-background hover:bg-foreground/90"
+                disabled={!databaseId}
+              >
+                New
+              </Button>
+            </WorkspaceSourceMenu>
+          ) : canEdit ? (
             <Button
               type="button"
               size="sm"
               className="h-7 rounded-md bg-foreground px-2.5 text-xs font-medium text-background hover:bg-foreground/90"
-              disabled={addItem.isPending || !databaseId}
+              disabled={isCreatingDatabaseItem || !databaseId}
               onClick={() => void createRow()}
             >
-              {addItem.isPending ? (
+              {isCreatingDatabaseItem ? (
                 <Spinner className="mr-1.5 size-3.5" />
               ) : null}
               New
@@ -1522,68 +2466,105 @@ function DatabaseTable({
       </div>
 
       <DatabaseActiveConstraintsBar
+        documentId={document.id}
+        items={items}
         searchQuery={searchQuery}
         sorts={sorts}
         filters={filters}
+        filterMode={filterMode}
         properties={properties}
-        constraintCount={activeConstraintCount}
+        constraintCount={visibleConstraintCount}
+        forceShow={inlineFilterControlsOpen}
+        addFilterOpen={inlineAddFilterOpen}
+        openSortIndex={inlineSortOpenIndex}
+        openFilterIndex={inlineFilterOpenIndex}
+        advancedFilterOpen={inlineAdvancedFilterOpen}
+        hasPersonalQueryChanges={personalQueryDirty}
+        savePending={updateView.isPending}
+        onAddFilterOpenChange={(open) => {
+          setInlineAddFilterOpen(open);
+          if (open) setInlineFilterControlsOpen(true);
+        }}
+        onSortOpenIndexChange={setInlineSortOpenIndex}
+        onFilterOpenIndexChange={setInlineFilterOpenIndex}
+        onAdvancedFilterOpenChange={setInlineAdvancedFilterOpen}
         onClearSearch={() => {
           setSearchQuery("");
           setSearchOpen(false);
         }}
-        onRemoveSort={(index) =>
-          setActiveSorts(sorts.filter((_, sortIndex) => sortIndex !== index))
-        }
-        onRemoveFilter={(index) =>
+        onRemoveSort={(index) => {
+          setActiveSorts(sorts.filter((_, sortIndex) => sortIndex !== index));
+          setInlineSortOpenIndex(null);
+        }}
+        onRemoveFilter={(index) => {
           setActiveFilters(
             filters.filter((_, filterIndex) => filterIndex !== index),
-          )
-        }
+          );
+          setInlineFilterOpenIndex(null);
+        }}
+        onFiltersChange={setActiveFilters}
+        onSortsChange={setActiveSorts}
+        onFilterModeChange={setFilterMode}
         onClearAll={() => {
           setSearchQuery("");
           setSearchOpen(false);
           setActiveSorts([]);
           setActiveFilters([]);
+          setInlineFilterControlsOpen(false);
+          setInlineAddFilterOpen(false);
+          setInlineFilterOpenIndex(null);
+          setInlineAdvancedFilterOpen(false);
+          setInlineSortOpenIndex(null);
         }}
+        onResetPersonalChanges={resetPersonalQueryChanges}
+        onSaveForEveryone={() => void savePersonalQueryForEveryone()}
       />
 
-      <BuilderSourceContinuationBar
-        source={source}
-        canEdit={canEdit}
-        pending={refreshSource.isPending}
-        clientError={
-          source
-            ? builderContinuationClientErrorKey ===
-              builderSourceContinuationKey(source)
-            : false
-        }
-        progressHighWater={builderProgressHighWater}
-        onRetry={() => {
-          if (!source) return;
-          const continuationKey = builderSourceContinuationKey(source);
-          setBuilderContinuationClientErrorKey(null);
-          autoContinueBuilderSourceRef.current = null;
-          builderContinuationWatchdogRef.current = {
-            key: continuationKey,
-            refires: 0,
-          };
-          refreshSource.mutate(
-            {
-              documentId: document.id,
-              sourceId: source.id,
-            },
-            {
-              onError: () => {
-                if (continuationKey) {
-                  setBuilderContinuationClientErrorKey(continuationKey);
-                }
-              },
-            },
-          );
-        }}
-      />
+      {builderSources.map((builderSource) => {
+        const continuationKey = builderSourceContinuationKey(builderSource);
+        return (
+          <BuilderSourceContinuationBar
+            key={builderSource.id}
+            source={builderSource}
+            canEdit={canEdit}
+            pending={
+              sourcePendingOperations.refreshSourceId === builderSource.id
+            }
+            clientError={
+              !!continuationKey &&
+              builderContinuationClientErrorKeys.includes(continuationKey)
+            }
+            progressHighWater={builderProgressHighWater[builderSource.id]}
+            onRetry={() => {
+              if (!continuationKey) return;
+              setBuilderContinuationClientErrorKeys((current) =>
+                current.filter((key) => key !== continuationKey),
+              );
+              databaseRecordBuilderContinuationAttempt(
+                autoContinueBuilderSourceRef.current,
+                continuationKey,
+              );
+              builderContinuationWatchdogRef.current.set(continuationKey, 0);
+              runSourceRefresh(builderSource.id, () =>
+                setBuilderContinuationClientErrorKeys((current) =>
+                  addUniqueKey(current, continuationKey),
+                ),
+              );
+            }}
+          />
+        );
+      })}
 
-      {activeView.type === "board" ? (
+      {activeView.type === "form" ? (
+        <DatabaseFormView
+          databaseId={databaseId}
+          databaseDocumentId={document.id}
+          databaseTitle={data?.database.title ?? document.title}
+          view={activeView}
+          properties={orderedProperties}
+          canEdit={canEdit}
+        />
+      ) : activeView.type === "board" ? (
         <DatabaseBoardView
           activeView={activeView}
           properties={orderedProperties}
@@ -1591,8 +2572,9 @@ function DatabaseTable({
           groupProperty={boardGroupProperty}
           databaseDocumentId={document.id}
           canEdit={canEdit}
-          isLoading={isDatabaseInitialLoading}
-          isCreating={addItem.isPending || setProperty.isPending}
+          canCreateItems={!isWorkspaceCatalog}
+          isLoading={isDatabaseViewLoading}
+          isCreating={isCreatingDatabaseItem || setProperty.isPending}
           hasActiveConstraints={!!searchQuery || activeFilters.length > 0}
           isMoving={setProperty.isPending}
           collapsedGroupIds={activeView.collapsedGroupIds ?? []}
@@ -1619,8 +2601,9 @@ function DatabaseTable({
           items={visibleItems}
           databaseDocumentId={document.id}
           canEdit={canEdit}
-          isLoading={isDatabaseInitialLoading}
-          isCreating={addItem.isPending}
+          canCreateItems={!isWorkspaceCatalog}
+          isLoading={isDatabaseViewLoading}
+          isCreating={isCreatingDatabaseItem}
           activeFilters={activeFilters}
           hasSearch={!!searchQuery}
           rowsAreManuallyOrdered={rowsAreManuallyOrdered}
@@ -1642,8 +2625,9 @@ function DatabaseTable({
           items={visibleItems}
           databaseDocumentId={document.id}
           canEdit={canEdit}
-          isLoading={isDatabaseInitialLoading}
-          isCreating={addItem.isPending}
+          canCreateItems={!isWorkspaceCatalog}
+          isLoading={isDatabaseViewLoading}
+          isCreating={isCreatingDatabaseItem}
           activeFilters={activeFilters}
           hasSearch={!!searchQuery}
           rowsAreManuallyOrdered={rowsAreManuallyOrdered}
@@ -1665,8 +2649,9 @@ function DatabaseTable({
           items={visibleItems}
           databaseDocumentId={document.id}
           canEdit={canEdit}
-          isLoading={isDatabaseInitialLoading}
-          isCreating={addItem.isPending || setProperty.isPending}
+          canCreateItems={!isWorkspaceCatalog}
+          isLoading={isDatabaseViewLoading}
+          isCreating={isCreatingDatabaseItem || setProperty.isPending}
           activeFilters={activeFilters}
           hasSearch={!!searchQuery}
           dateProperty={dateViewProperty}
@@ -1691,8 +2676,9 @@ function DatabaseTable({
           items={visibleItems}
           databaseDocumentId={document.id}
           canEdit={canEdit}
-          isLoading={isDatabaseInitialLoading}
-          isCreating={addItem.isPending || setProperty.isPending}
+          canCreateItems={!isWorkspaceCatalog}
+          isLoading={isDatabaseViewLoading}
+          isCreating={isCreatingDatabaseItem || setProperty.isPending}
           activeFilters={activeFilters}
           hasSearch={!!searchQuery}
           dateProperty={dateViewProperty}
@@ -1718,6 +2704,7 @@ function DatabaseTable({
         />
       ) : (
         <DatabaseTableView
+          newRowLabel={newDatabaseRowLabel}
           properties={tableProperties}
           groupableProperties={orderedProperties}
           items={visibleItems}
@@ -1725,8 +2712,9 @@ function DatabaseTable({
           sources={sources}
           databaseDocumentId={document.id}
           canEdit={canEdit}
-          isLoading={isDatabaseInitialLoading}
-          isCreating={addItem.isPending}
+          workspaceCreationPropertyValues={workspaceCreationPropertyValues}
+          isLoading={isDatabaseViewLoading}
+          isCreating={isCreatingDatabaseItem}
           columnWidths={columnWidths}
           sorts={sorts}
           filters={filters}
@@ -1772,7 +2760,7 @@ function DatabaseTable({
         />
       )}
 
-      {hasMoreItems ? (
+      {hasMoreItems && !isClientQueryExpansionPending ? (
         <div className="flex items-center justify-center border-t border-border/45 py-3">
           <Button
             type="button"
@@ -1780,7 +2768,7 @@ function DatabaseTable({
             size="sm"
             disabled={isLoadingMoreItems}
             onClick={() =>
-              setDatabaseItemLimit((current) =>
+              setManualDatabaseItemLimit((current) =>
                 Math.min(
                   current + CONTENT_DATABASE_PAGE_SIZE,
                   totalItemCount,
@@ -1808,6 +2796,7 @@ function DatabaseTable({
           if (!open) {
             setPreviewDocumentId(null);
             setPreviewTitleFocusDocumentId(null);
+            setCreatedPreviewItem(null);
           }
         }}
         onPreviewItem={(item) => {
@@ -1823,8 +2812,11 @@ function DatabaseTable({
       <DatabaseSettingsPanelSheet
         open={settingsOpen}
         panel={settingsPanel}
+        databaseId={databaseId}
         documentId={document.id}
+        isFilesDatabase={document.database?.systemRole === "files"}
         canEdit={canEdit}
+        canManage={document.canManage === true}
         activeView={activeView}
         properties={orderedProperties}
         items={items}
@@ -1870,15 +2862,11 @@ function DatabaseTable({
         onDisconnectSecondary={(sourceId) =>
           disconnectSource.mutate({ documentId: document.id, sourceId })
         }
-        onRefreshSource={(sourceId) =>
-          refreshSource.mutate({
-            documentId: document.id,
-            sourceId,
-          })
-        }
-        onHydrateBuilderBodies={(sourceId) =>
-          processBuilderBodies.mutate({ sourceId })
-        }
+        onRefreshSource={(sourceId) => {
+          const targetSourceId = sourceId ?? source?.id;
+          if (targetSourceId) runSourceRefresh(targetSourceId);
+        }}
+        onHydrateBuilderBodies={(sourceId) => runBuilderHydration(sourceId)}
         onDisconnectSource={(sourceId) =>
           disconnectSource.mutate(
             {
@@ -1906,30 +2894,29 @@ function DatabaseTable({
             },
           )
         }
-        onReviewBuilderUpdate={() => {
-          setBuilderReviewResult(null);
-          setBuilderReviewCheckedAt(null);
-          setBuilderReviewOpen(true);
+        onReviewBuilderUpdate={(sourceId) => {
+          openBuilderReview(sourceId);
         }}
-        onSetBuilderLiveWrites={(enabled) =>
+        onSetBuilderLiveWrites={(settings) =>
           setSourceWriteMode.mutate(
             {
               documentId: document.id,
-              liveWritesEnabled: enabled,
-              allowedWriteModes: enabled ? ["autosave"] : [],
+              sourceId: settings.sourceId,
+              writeMode: settings.writeMode,
+              allowPublicationTransitions:
+                settings.writeMode === "publish_updates" &&
+                settings.allowPublicationTransitions === true,
             },
             {
               onSuccess: () => {
-                toast.success(
-                  enabled
-                    ? "Builder live writes enabled"
-                    : "Builder live writes disabled",
-                  {
-                    description: enabled
-                      ? "Only autosave writes to the Agent Native test collection can run."
-                      : "Push will return to local validation only.",
-                  },
-                );
+                toast.success(dbText("builderWriteModeUpdated"), {
+                  description:
+                    settings.writeMode === "publish_updates"
+                      ? "Approved updates can write through to Builder while preserving publication state."
+                      : settings.writeMode === "stage_only"
+                        ? "Approved updates will stage Builder autosave revisions."
+                        : "Builder writes are disabled for this source.",
+                });
               },
               onError: (error) => {
                 toast.error(dbText("builderWriteModeWasNotChanged"), {
@@ -1948,13 +2935,16 @@ function DatabaseTable({
           disconnectSource.isPending ||
           prepareBuilderReview.isPending ||
           executeBuilderExecution.isPending ||
+          cancelPreparedBuilderUpdate.isPending ||
           setSourceWriteMode.isPending
         }
+        sourcePendingOperations={sourcePendingOperations}
         onViewTypeChange={(type) =>
           setViewConfig(updateDatabaseViewType(viewConfig, activeView.id, type))
         }
         onWrapCellsChange={setWrapCells}
         onOpenPagesInChange={setOpenPagesIn}
+        onFormQuestionsChange={setFormQuestions}
         onPropertyHiddenChange={setPropertyHiddenInActiveView}
         onPropertiesHiddenChange={setPropertiesHiddenInActiveView}
         onGroupByChange={(propertyId) =>
@@ -1969,14 +2959,36 @@ function DatabaseTable({
       <BuilderSourceReviewDialog
         open={builderReviewOpen}
         review={activeBuilderReview}
-        source={source}
+        source={builderReviewSource}
         canEdit={canEdit}
         pending={
-          prepareBuilderReview.isPending || executeBuilderExecution.isPending
+          builderReviewPreviewQuery.isFetching ||
+          prepareBuilderReview.isPending ||
+          executeBuilderExecution.isPending ||
+          cancelPreparedBuilderUpdate.isPending
+        }
+        error={
+          builderReviewError ??
+          (builderReviewPreviewQuery.error instanceof Error
+            ? builderReviewPreviewQuery.error.message
+            : null)
         }
         checkedAt={builderReviewCheckedAt}
-        onClose={() => setBuilderReviewOpen(false)}
-        onValidate={(transitions) => void handleBuilderReviewPush(transitions)}
+        preparedForExecution={preparedBuilderReviewConfirmation !== null}
+        autoSelectReviewRows={selectedItemIds.length > 0}
+        selectionChangeSetIdMap={builderReviewSelectionRemap}
+        onClose={closeBuilderReview}
+        onValidate={(selection) => void handleBuilderReviewPush(selection)}
+        onCancelPrepared={(changeSetId) =>
+          void handleCancelPreparedBuilderUpdate(changeSetId)
+        }
+        onSelectionChange={() => {
+          setBuilderReviewResult(null);
+          setBuilderReviewCheckedAt(null);
+          setBuilderReviewError(null);
+          setPreparedBuilderReviewConfirmation(null);
+          setBuilderReviewSelectionRemap(null);
+        }}
       />
 
       {!isDatabaseInitialLoading ? (
@@ -2268,6 +3280,518 @@ export function databaseBuilderBulkUpdateSource(
   );
 }
 
+export function databaseAttachedSources(
+  sources: ContentDatabaseSource[] | undefined,
+  primarySource: ContentDatabaseSource | null,
+) {
+  const attached = sources ? [...sources] : [];
+  if (
+    primarySource &&
+    !attached.some((source) => source.id === primarySource.id)
+  ) {
+    attached.unshift(primarySource);
+  }
+  return attached;
+}
+
+export function databaseAttachedBuilderSources(
+  sources: ContentDatabaseSource[],
+  primarySource: ContentDatabaseSource | null,
+) {
+  return databaseAttachedSources(sources, primarySource).filter(
+    (source) => source.sourceType === "builder-cms",
+  );
+}
+
+export function databaseAttachedBuilderModelNames(
+  sources: ContentDatabaseSource[],
+  primarySource: ContentDatabaseSource | null,
+) {
+  return Array.from(
+    new Set(
+      databaseAttachedBuilderSources(sources, primarySource).map(
+        (source) => source.sourceTable,
+      ),
+    ),
+  );
+}
+
+export function databaseAttachedBuilderSource(
+  sources: ContentDatabaseSource[],
+  primarySource: ContentDatabaseSource | null,
+  selection: { sourceId?: string | null; modelName?: string | null },
+) {
+  const builderSources = databaseAttachedBuilderSources(sources, primarySource);
+  if (selection.sourceId) {
+    return (
+      builderSources.find((source) => source.id === selection.sourceId) ?? null
+    );
+  }
+  if (selection.modelName) {
+    return (
+      builderSources.find(
+        (source) => source.sourceTable === selection.modelName,
+      ) ?? null
+    );
+  }
+  return null;
+}
+
+export function databaseBuilderReviewSource(
+  sources: ContentDatabaseSource[],
+  primarySource: ContentDatabaseSource | null,
+  sourceId: string | null,
+) {
+  return sourceId
+    ? databaseAttachedBuilderSource(sources, primarySource, { sourceId })
+    : null;
+}
+
+export type BuilderReviewSession = {
+  sourceId: string;
+  generation: number;
+};
+
+export type PreparedBuilderReviewConfirmation = BuilderReviewSession & {
+  selectionFingerprint: string;
+};
+
+export type PreparedBuilderChangeSetMapping = {
+  requestedChangeSetId: string;
+  preparedChangeSetId: string;
+};
+
+export function builderReviewSelectionFingerprint(selection: {
+  changeSetIds: string[];
+  transitions: BuilderReviewPublicationTransitions;
+}) {
+  return JSON.stringify({
+    changeSetIds: [...selection.changeSetIds].sort(),
+    transitions: Object.entries(selection.transitions)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([changeSetId, transition]) => [changeSetId, transition]),
+  });
+}
+
+export function preparedBuilderReviewMatches(
+  confirmation: PreparedBuilderReviewConfirmation | null,
+  session: BuilderReviewSession,
+  selectionFingerprint: string,
+) {
+  return (
+    confirmation?.sourceId === session.sourceId &&
+    confirmation.generation === session.generation &&
+    confirmation.selectionFingerprint === selectionFingerprint
+  );
+}
+
+export function databaseBuilderReviewSessionIsCurrent(
+  current: BuilderReviewSession | null,
+  captured: BuilderReviewSession,
+) {
+  return (
+    current?.sourceId === captured.sourceId &&
+    current.generation === captured.generation
+  );
+}
+
+export function databaseBuilderExecutionRequiresReconciliation(
+  message: string,
+) {
+  return /reconciliation required|requires reconciliation|remote outcome is unknown|write timed out/i.test(
+    message,
+  );
+}
+
+export function databaseBuilderReviewAfterExecutionError(
+  review: ContentDatabaseSourceReviewPayload | null,
+  message: string,
+) {
+  if (!review) return null;
+  if (databaseBuilderExecutionRequiresReconciliation(message)) {
+    return {
+      ...review,
+      result: {
+        status: "reconciliation_required" as const,
+        message,
+      },
+    };
+  }
+  if (/execution is already running/i.test(message)) {
+    return {
+      ...review,
+      result: {
+        status: "running" as const,
+        message: dbText("builderPushAlreadyRunning"),
+      },
+    };
+  }
+  return null;
+}
+
+export function databaseBuilderReviewBelongsToSource(
+  review: ContentDatabaseSourceReviewPayload,
+  source: ContentDatabaseSource,
+  authoritativeChangeSetIds?: string[],
+) {
+  const sourceChangeSetIds = new Set(
+    authoritativeChangeSetIds ??
+      source.changeSets.map((changeSet) => changeSet.id),
+  );
+  return review.rows.every((row) => sourceChangeSetIds.has(row.changeSetId));
+}
+
+export function databaseBuilderReviewSelectionIsValid(
+  review: ContentDatabaseSourceReviewPayload,
+  source: ContentDatabaseSource,
+  changeSetIds: string[],
+  requireExactReviewRows = false,
+  authoritativeChangeSetIds?: string[],
+) {
+  if (changeSetIds.length === 0) return false;
+  const selectedIds = new Set(changeSetIds);
+  if (selectedIds.size !== changeSetIds.length) return false;
+  if (
+    !databaseBuilderReviewBelongsToSource(
+      review,
+      source,
+      authoritativeChangeSetIds,
+    )
+  ) {
+    return false;
+  }
+  const reviewIds = new Set(review.rows.map((row) => row.changeSetId));
+  if (reviewIds.size !== review.rows.length) return false;
+  if (!changeSetIds.every((changeSetId) => reviewIds.has(changeSetId))) {
+    return false;
+  }
+  return !requireExactReviewRows || reviewIds.size === selectedIds.size;
+}
+
+export function databaseBuilderReviewExactSelectionIsValid(
+  review: ContentDatabaseSourceReviewPayload,
+  changeSetIds: string[],
+) {
+  if (changeSetIds.length === 0) return false;
+  const selectedIds = new Set(changeSetIds);
+  const reviewIds = new Set(review.rows.map((row) => row.changeSetId));
+  return (
+    selectedIds.size === changeSetIds.length &&
+    reviewIds.size === review.rows.length &&
+    reviewIds.size === selectedIds.size &&
+    changeSetIds.every((changeSetId) => reviewIds.has(changeSetId))
+  );
+}
+
+export function databaseBuilderPreparedReviewSelection(
+  review: ContentDatabaseSourceReviewPayload,
+  source: ContentDatabaseSource,
+  requestedChangeSetIds: string[],
+  mappings: PreparedBuilderChangeSetMapping[],
+) {
+  if (review.sourceTable !== source.sourceTable) return null;
+  if (mappings.length !== requestedChangeSetIds.length) return null;
+  const requestedIds = new Set(requestedChangeSetIds);
+  const mappedRequestedIds = new Set(
+    mappings.map((mapping) => mapping.requestedChangeSetId),
+  );
+  const preparedChangeSetIds = mappings.map(
+    (mapping) => mapping.preparedChangeSetId,
+  );
+  if (
+    requestedIds.size !== requestedChangeSetIds.length ||
+    mappedRequestedIds.size !== mappings.length ||
+    !requestedChangeSetIds.every((id) => mappedRequestedIds.has(id)) ||
+    !databaseBuilderReviewExactSelectionIsValid(review, preparedChangeSetIds)
+  ) {
+    return null;
+  }
+  return {
+    preparedChangeSetIds,
+    changeSetIdMap: Object.fromEntries(
+      mappings.map((mapping) => [
+        mapping.requestedChangeSetId,
+        mapping.preparedChangeSetId,
+      ]),
+    ),
+  };
+}
+
+export function databaseBuilderReviewSelectedChangeSetIds(
+  review: ContentDatabaseSourceReviewPayload,
+  source: ContentDatabaseSource,
+  changeSetIds: string[],
+  authoritativeChangeSetIds?: string[],
+) {
+  return databaseBuilderReviewSelectionIsValid(
+    review,
+    source,
+    changeSetIds,
+    false,
+    authoritativeChangeSetIds,
+  )
+    ? [...changeSetIds]
+    : null;
+}
+
+export type BuilderSourceProgressHighWater = {
+  fetchedCount: number;
+  hydratedCount: number;
+  rowsComplete: boolean;
+  generation: number;
+  observedFetchedCount: number;
+  observedHydratedCount: number;
+  hydrationTotal: number;
+  lastRefreshedAt: string | null;
+  sourceFetchState: "idle" | "fetching" | "error" | null;
+};
+
+export function databaseBuilderProgressHighWater(
+  sources: ContentDatabaseSource[],
+  current: Record<string, BuilderSourceProgressHighWater>,
+) {
+  const next: Record<string, BuilderSourceProgressHighWater> = {};
+  for (const source of sources) {
+    const rawFetchedCount =
+      typeof source.metadata.lastReadFetchedEntryCount === "number"
+        ? source.metadata.lastReadFetchedEntryCount
+        : typeof source.metadata.lastReadEntryCount === "number"
+          ? source.metadata.lastReadEntryCount
+          : 0;
+    const fetchedCount =
+      source.metadata.lastReadHasMore === false
+        ? Math.max(rawFetchedCount, source.bodyHydration?.total ?? 0)
+        : rawFetchedCount;
+    const previous = current[source.id];
+    const observedHydratedCount = source.bodyHydration?.hydrated ?? 0;
+    const hydrationTotal = source.bodyHydration?.total ?? 0;
+    const sourceFetchState = source.metadata.sourceFetchState ?? null;
+    const lifecycleTimestampChanged =
+      !!previous &&
+      previous.lastRefreshedAt !== (source.lastRefreshedAt ?? null);
+    const fetchRestarted =
+      !!previous &&
+      previous.rowsComplete &&
+      source.metadata.lastReadHasMore !== false &&
+      (sourceFetchState === "fetching" || lifecycleTimestampChanged);
+    const countsRewound =
+      !!previous && rawFetchedCount < previous.observedFetchedCount;
+    const hydrationQueueRestarted =
+      !!previous &&
+      (observedHydratedCount < previous.observedHydratedCount ||
+        hydrationTotal < previous.hydrationTotal) &&
+      (source.bodyHydration?.pending ?? 0) > 0;
+    const resetLifecycle =
+      fetchRestarted || countsRewound || hydrationQueueRestarted;
+    const baseline = resetLifecycle ? undefined : previous;
+    next[source.id] = {
+      fetchedCount: Math.max(baseline?.fetchedCount ?? 0, fetchedCount),
+      hydratedCount: Math.max(
+        baseline?.hydratedCount ?? 0,
+        observedHydratedCount,
+      ),
+      rowsComplete:
+        baseline?.rowsComplete === true ||
+        source.metadata.lastReadHasMore === false,
+      generation: (previous?.generation ?? 0) + (resetLifecycle ? 1 : 0),
+      observedFetchedCount: rawFetchedCount,
+      observedHydratedCount,
+      hydrationTotal,
+      lastRefreshedAt: source.lastRefreshedAt ?? null,
+      sourceFetchState,
+    };
+  }
+  const currentIds = Object.keys(current);
+  const nextIds = Object.keys(next);
+  return currentIds.length === nextIds.length &&
+    nextIds.every(
+      (sourceId) =>
+        current[sourceId]?.fetchedCount === next[sourceId]?.fetchedCount &&
+        current[sourceId]?.hydratedCount === next[sourceId]?.hydratedCount &&
+        current[sourceId]?.rowsComplete === next[sourceId]?.rowsComplete &&
+        current[sourceId]?.generation === next[sourceId]?.generation &&
+        current[sourceId]?.observedFetchedCount ===
+          next[sourceId]?.observedFetchedCount &&
+        current[sourceId]?.observedHydratedCount ===
+          next[sourceId]?.observedHydratedCount &&
+        current[sourceId]?.hydrationTotal === next[sourceId]?.hydrationTotal &&
+        current[sourceId]?.lastRefreshedAt ===
+          next[sourceId]?.lastRefreshedAt &&
+        current[sourceId]?.sourceFetchState ===
+          next[sourceId]?.sourceFetchState,
+    )
+    ? current
+    : next;
+}
+
+type BuilderSourcePumpSelection = {
+  attemptedKeys: ReadonlySet<string>;
+  errorKeys: ReadonlySet<string>;
+};
+
+export function databaseRecordBuilderContinuationAttempt(
+  attemptedKeys: Set<string>,
+  continuationKey: string,
+) {
+  attemptedKeys.add(continuationKey);
+}
+
+export function databaseNextBuilderContinuationSource(
+  sources: ContentDatabaseSource[],
+  selection: BuilderSourcePumpSelection,
+) {
+  return (
+    sources.find((source) => {
+      const key = builderSourceContinuationKey(source);
+      return (
+        source.sourceType === "builder-cms" &&
+        !sourceAddsDetails(source) &&
+        builderSourceRowFetchStatus(source) === "fetching" &&
+        source.metadata.lastReadHasMore === true &&
+        !!key &&
+        !selection.attemptedKeys.has(key) &&
+        !selection.errorKeys.has(key)
+      );
+    }) ?? null
+  );
+}
+
+export function databaseNextBuilderContinuationWatchdogSource(
+  sources: ContentDatabaseSource[],
+  selection: BuilderSourcePumpSelection & {
+    refiresByKey: ReadonlyMap<string, number>;
+  },
+) {
+  return (
+    sources
+      .filter((source) => {
+        const key = builderSourceContinuationKey(source);
+        return (
+          source.sourceType === "builder-cms" &&
+          !sourceAddsDetails(source) &&
+          builderSourceRowFetchStatus(source) === "fetching" &&
+          source.metadata.lastReadHasMore === true &&
+          !!key &&
+          selection.attemptedKeys.has(key) &&
+          !selection.errorKeys.has(key)
+        );
+      })
+      .sort((left, right) => {
+        const leftKey = builderSourceContinuationKey(left) ?? "";
+        const rightKey = builderSourceContinuationKey(right) ?? "";
+        return (
+          (selection.refiresByKey.get(leftKey) ?? 0) -
+          (selection.refiresByKey.get(rightKey) ?? 0)
+        );
+      })[0] ?? null
+  );
+}
+
+export function databaseNextBuilderHydrationSource(
+  sources: ContentDatabaseSource[],
+  selection: BuilderSourcePumpSelection,
+) {
+  return (
+    sources.find((source) => {
+      const key = builderBodyHydrationPumpKey(source);
+      return (
+        !!key &&
+        !selection.attemptedKeys.has(key) &&
+        !selection.errorKeys.has(key) &&
+        shouldPumpBuilderBodyHydration(source, false, null)
+      );
+    }) ?? null
+  );
+}
+
+export type DatabaseSourcePendingOperation =
+  | "changeRole"
+  | "refresh"
+  | "hydration"
+  | "disconnect"
+  | "review"
+  | "execute"
+  | "writeMode";
+
+export type DatabaseSourcePendingOperations = {
+  attach: boolean;
+  changeRole: boolean;
+  refresh: boolean;
+  hydration: boolean;
+  disconnect: boolean;
+  review: boolean;
+  execute: boolean;
+  writeMode: boolean;
+  changeRoleSourceId: string | null;
+  refreshSourceId: string | null;
+  hydrationSourceId: string | null;
+  disconnectSourceId: string | null;
+  reviewSourceId: string | null;
+  executeSourceId: string | null;
+  writeModeSourceId: string | null;
+};
+
+export function acquireDatabaseSourceOperation(
+  lock: { current: string | null },
+  sourceId: string,
+) {
+  if (lock.current !== null) return false;
+  lock.current = sourceId;
+  return true;
+}
+
+export function releaseDatabaseSourceOperation(
+  lock: { current: string | null },
+  sourceId: string,
+) {
+  if (lock.current === sourceId) lock.current = null;
+}
+
+export function pendingMutationSourceId(
+  isPending: boolean,
+  variables: { sourceId?: string } | undefined,
+) {
+  return isPending ? (variables?.sourceId ?? null) : null;
+}
+
+export function databaseSourceOperationIsPending(
+  pending: DatabaseSourcePendingOperations,
+  sourceId: string,
+  operations: DatabaseSourcePendingOperation[],
+) {
+  const sourceIds: Record<DatabaseSourcePendingOperation, string | null> = {
+    changeRole: pending.changeRoleSourceId,
+    refresh: pending.refreshSourceId,
+    hydration: pending.hydrationSourceId,
+    disconnect: pending.disconnectSourceId,
+    review: pending.reviewSourceId,
+    execute: pending.executeSourceId,
+    writeMode: pending.writeModeSourceId,
+  };
+  return operations.some((operation) => sourceIds[operation] === sourceId);
+}
+
+export function databaseBuilderWriteModeOperationPending(
+  pending: DatabaseSourcePendingOperations,
+  sourceId: string,
+) {
+  return (
+    pending.writeMode ||
+    databaseSourceOperationIsPending(pending, sourceId, [
+      "changeRole",
+      "refresh",
+      "disconnect",
+      "review",
+      "execute",
+      "writeMode",
+    ])
+  );
+}
+
+function addUniqueKey(current: string[], key: string) {
+  return current.includes(key) ? current : [...current, key];
+}
+
 export function databaseBulkScalarInputState(
   type: DocumentPropertyType,
   input: string,
@@ -2522,23 +4046,50 @@ function DatabaseItemPreview({
   onOpenPage: () => void;
 }) {
   const queryClient = useQueryClient();
+  const contentSpaces = useContentSpaces();
   const updateDocument = useUpdateDocument();
   const deleteDocument = useDeleteDocument();
+  const deleteContentSpace = useDeleteContentSpace();
   const duplicateItem = useDuplicateDatabaseItem(databaseDocumentId);
   const { data: document, isLoading } = useDocument(item.document.id);
+  const { data: persistedPreviewDraft } = usePreviewDocumentDraft(
+    item.document.id,
+  );
+  const updatePreviewDraft = useUpdatePreviewDocumentDraft();
   const previewDocument = document ?? item.document;
   const previewTitle = databaseItemPreviewTitle(item);
+  const [bodyDraftConflict, setBodyDraftConflict] = useState<{
+    documentId: string;
+    serverPayload: {
+      title: string;
+      content: string;
+      loadedUpdatedAt?: string;
+      loadedContentWasEmpty?: boolean;
+    };
+  } | null>(null);
+  const activeBodyDraftConflict =
+    bodyDraftConflict?.documentId === item.document.id
+      ? bodyDraftConflict
+      : null;
   const canEdit = document?.canEdit ?? item.document.canEdit ?? true;
   const canManage = document?.canManage ?? item.document.canManage ?? false;
-  const bodyHydrationPending = previewBodyHydrationIsPending({
-    item,
-    document,
-  });
+  const sourceBackedPreview = Boolean(
+    item.bodyHydration ||
+    item.document.databaseMembership?.sourceId ||
+    document?.databaseMembership?.sourceId,
+  );
+  const bodyHydrationPending =
+    (sourceBackedPreview && (isLoading || !document)) ||
+    previewBodyHydrationIsPending({
+      item,
+      document,
+    });
   const bodyHydrationError = previewBodyHydrationIsTerminalError({
     item,
     document,
   });
-  const previewCanEdit = canEdit && !bodyHydrationPending;
+  const previewCanEdit =
+    canEdit && !bodyHydrationPending && !activeBodyDraftConflict;
   const location = useLocation();
   // Seed the displayed title/content from a RETAINED dirty controller's pending
   // edit if one exists for this doc (reopen-before-evict), so an unsaved peek
@@ -2565,6 +4116,15 @@ function DatabaseItemPreview({
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [openingFullPage, setOpeningFullPage] = useState(false);
   const titleInputRef = useRef<HTMLTextAreaElement>(null);
+  const removesFavoriteMembership =
+    contentSpaces.data?.favoritesDocumentId === databaseDocumentId;
+  const workspaceSpace = contentSpaces.data?.spaces.find(
+    (space) => space.catalogDocumentId === item.document.id,
+  );
+  const isWorkspaceCatalog =
+    contentSpaces.data?.catalogDocumentId === databaseDocumentId;
+  const canDeleteWorkspace =
+    isWorkspaceCatalog && workspaceSpace?.kind === "user";
 
   // The peek's primary title+body save runs through a flush-on-release controller
   // so a pending debounced edit is PERSISTED — not dropped — when the row
@@ -2579,20 +4139,186 @@ function DatabaseItemPreview({
   // ever touch its own row's state. See previewDocumentSaveRegistry.
   const updateDocumentRef = useRef(updateDocument);
   updateDocumentRef.current = updateDocument;
-  const queryClientRef = useRef(queryClient);
-  queryClientRef.current = queryClient;
   const bodyHydrationPendingRef = useRef(bodyHydrationPending);
   bodyHydrationPendingRef.current = bodyHydrationPending;
+  const draftVersionsRef = useRef<Map<string, number | null>>(new Map());
+  const draftWriteChainsRef = useRef<Map<string, Promise<void>>>(new Map());
+  const draftSaveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
+  const updatePreviewDraftRef = useRef(updatePreviewDraft);
+  updatePreviewDraftRef.current = updatePreviewDraft;
   // Doc ids that have been deleted in this peek's lifetime. A pending save must
   // never resurrect a deleted document, so dispatch is suppressed for these.
   const deletedIdsRef = useRef<Set<string>>(new Set());
 
   const documentId = item.document.id;
 
-  // Build the factory for THIS row's controller. It closes over the stable
-  // component-scoped refs (updateDocument, queryClient, deletedIds), so the
-  // freshest mutation impl is always used while the controller's save TARGET
-  // (`documentId`) is fixed by the registry key.
+  function enqueueDraftWrite(
+    controller: ReturnType<typeof createPreviewDocumentSaveController>,
+    operation: "upsert" | "delete",
+    expectedPayload?: { title: string; content: string },
+    allowCreateRetry = true,
+  ) {
+    const snapshot = controller.draftSnapshot();
+    const previous =
+      draftWriteChainsRef.current.get(documentId) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const expectedVersion =
+          draftVersionsRef.current.get(documentId) ?? null;
+        if (operation === "delete") {
+          if (expectedVersion === null) return;
+          if (!expectedPayload) return;
+          const result = await updatePreviewDraftRef.current.mutateAsync({
+            operation: "delete",
+            documentId,
+            expectedVersion,
+            expectedTitle: expectedPayload.title,
+            expectedContent: expectedPayload.content,
+          });
+          if (result.status === "deleted")
+            draftVersionsRef.current.set(documentId, null);
+          else if (result.draft) {
+            draftVersionsRef.current.set(documentId, result.draft.version);
+          } else {
+            // Another tab already removed the row. Treat the stale delete as
+            // converged instead of retaining a version that can never match.
+            draftVersionsRef.current.set(documentId, null);
+          }
+          return;
+        }
+        const result = await updatePreviewDraftRef.current.mutateAsync({
+          operation: "upsert",
+          documentId,
+          expectedVersion,
+          draft: {
+            title: snapshot.pending.title,
+            content: snapshot.pending.content,
+            baseDocumentUpdatedAt: snapshot.pending.loadedUpdatedAt ?? null,
+            loadedContentWasEmpty:
+              snapshot.pending.loadedContentWasEmpty === true,
+            deferredReason: snapshot.deferredReason,
+          },
+        });
+        if (result.status === "saved" && result.draft) {
+          draftVersionsRef.current.set(documentId, result.draft.version);
+        } else if (result.draft) {
+          draftVersionsRef.current.set(documentId, result.draft.version);
+        } else {
+          // A competing tab deleted the version we tried to update. Reset to
+          // create mode and enqueue the latest pending payload once; keeping
+          // the stale version would make every later upsert conflict forever.
+          draftVersionsRef.current.set(documentId, null);
+          const recovery = previewDraftMissingCasRecovery({
+            operation: "upsert",
+            allowCreateRetry,
+          });
+          if (recovery === "retry-create") {
+            enqueueDraftWrite(controller, "upsert", undefined, false);
+          } else {
+            toast.error(dbText("failedToSavePagePreview"), {
+              description: dbText("somethingWentWrong"),
+            });
+          }
+        }
+      });
+    draftWriteChainsRef.current.set(
+      documentId,
+      next.catch((error) => {
+        toast.error(dbText("failedToSavePagePreview"), {
+          description:
+            error instanceof Error
+              ? error.message
+              : dbText("somethingWentWrong"),
+        });
+      }),
+    );
+  }
+
+  function scheduleDraftWrite(
+    controller: ReturnType<typeof createPreviewDocumentSaveController>,
+  ) {
+    const existing = draftSaveTimersRef.current.get(documentId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      draftSaveTimersRef.current.delete(documentId);
+      enqueueDraftWrite(controller, "upsert");
+    }, 250);
+    draftSaveTimersRef.current.set(documentId, timer);
+  }
+
+  // Adapters are replaced whenever a document is acquired. A controller can
+  // outlive one preview mount while its final flush settles, but it must never
+  // retain that old mount's hydration refs, mutation callback, or conflict UI.
+  const makeSaveAdapter = (): PreviewDocumentSaveAdapter => ({
+    save: (id, payload, baseline) =>
+      new Promise((resolve, reject) => {
+        // A just-deleted doc must not be re-dispatched (resurrection guard).
+        if (deletedIdsRef.current.has(id)) {
+          resolve(undefined);
+          return;
+        }
+        const titleChanged = payload.title !== baseline?.title;
+        const contentChanged = payload.content !== baseline?.content;
+        if (bodyHydrationPendingRef.current && contentChanged) {
+          resolve(deferredPreviewDocumentSave());
+          return;
+        }
+        updateDocumentRef.current.mutate(
+          {
+            id,
+            ...(titleChanged ? { title: payload.title } : {}),
+            ...(contentChanged
+              ? {
+                  content: payload.content,
+                  loadedUpdatedAt: payload.loadedUpdatedAt,
+                  loadedContentWasEmpty: payload.loadedContentWasEmpty,
+                }
+              : {}),
+            ...(contentChanged && payload.loadedUpdatedAt
+              ? { baseUpdatedAt: payload.loadedUpdatedAt }
+              : {}),
+          },
+          {
+            onSuccess: (result) => {
+              resolve(
+                previewDocumentSaveResult({
+                  result,
+                  payload,
+                  baseline,
+                  contentChanged,
+                }),
+              );
+            },
+            onError: reject,
+          },
+        );
+      }),
+    onSaved: (persistedPayload) => {
+      const controller = peekPreviewDocumentSaveController(documentId);
+      if (controller) enqueueDraftWrite(controller, "delete", persistedPayload);
+    },
+    onError: (err) => {
+      toast.error(dbText("failedToSavePagePreview"), {
+        description:
+          err instanceof Error ? err.message : dbText("somethingWentWrong"),
+      });
+    },
+    onDraftConflict: (snapshot) => {
+      setBodyDraftConflict({
+        documentId,
+        serverPayload: {
+          title: snapshot.pending.title,
+          content: snapshot.pending.content,
+          loadedUpdatedAt: snapshot.pending.loadedUpdatedAt,
+          loadedContentWasEmpty: snapshot.pending.loadedContentWasEmpty,
+        },
+      });
+    },
+  });
+
   const makeController = () =>
     createPreviewDocumentSaveController({
       documentId,
@@ -2604,42 +4330,7 @@ function DatabaseItemPreview({
           item.document.content,
         ),
       },
-      save: (id, payload) =>
-        new Promise((resolve, reject) => {
-          // A just-deleted doc must not be re-dispatched (resurrection guard).
-          if (deletedIdsRef.current.has(id)) {
-            resolve(undefined);
-            return;
-          }
-          if (bodyHydrationPendingRef.current) {
-            resolve(skippedPreviewDocumentSave());
-            return;
-          }
-          updateDocumentRef.current.mutate(
-            {
-              id,
-              title: payload.title,
-              content: payload.content,
-              loadedUpdatedAt: payload.loadedUpdatedAt,
-              loadedContentWasEmpty: payload.loadedContentWasEmpty,
-            },
-            { onSuccess: () => resolve(undefined), onError: reject },
-          );
-        }),
-      onSaved: () => {
-        void queryClientRef.current.invalidateQueries({
-          queryKey: contentDatabaseQueryKey(databaseDocumentId),
-        });
-        void queryClientRef.current.invalidateQueries({
-          queryKey: ["action", "list-documents"],
-        });
-      },
-      onError: (err) => {
-        toast.error(dbText("failedToSavePagePreview"), {
-          description:
-            err instanceof Error ? err.message : dbText("somethingWentWrong"),
-        });
-      },
+      ...makeSaveAdapter(),
     });
 
   // Acquire the controller for the current row, and release it on row-switch /
@@ -2673,8 +4364,21 @@ function DatabaseItemPreview({
     saveControllerRef.current = acquirePreviewDocumentSaveController(
       documentId,
       makeController,
+      (controller) => controller.replaceSaveAdapter(makeSaveAdapter()),
     );
     return () => {
+      const controller = saveControllerRef.current;
+      const draftTimer = draftSaveTimersRef.current.get(documentId);
+      if (draftTimer) {
+        clearTimeout(draftTimer);
+        draftSaveTimersRef.current.delete(documentId);
+      }
+      if (
+        controller &&
+        !previewPayloadsEqual(controller.pending, controller.lastSaved)
+      ) {
+        enqueueDraftWrite(controller, "upsert");
+      }
       saveControllerRef.current = null;
       releasePreviewDocumentSaveController(documentId);
     };
@@ -2683,6 +4387,71 @@ function DatabaseItemPreview({
     // (the registry key) is the only thing that should drive re-acquire.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [documentId]);
+
+  useEffect(() => {
+    const draft = persistedPreviewDraft?.draft;
+    if (!draft) {
+      if (!draftVersionsRef.current.has(documentId)) {
+        draftVersionsRef.current.set(documentId, null);
+      }
+      return;
+    }
+    const previouslyExpectedVersion =
+      draftVersionsRef.current.get(documentId) ?? null;
+    draftVersionsRef.current.set(documentId, draft.version);
+    const controller = peekPreviewDocumentSaveController(documentId);
+    if (!controller) return;
+    const controllerDirty = !previewPayloadsEqual(
+      controller.pending,
+      controller.lastSaved,
+    );
+    const snapshot = {
+      lastSaved: controller.lastSaved,
+      pending: {
+        title: draft.title,
+        content: draft.content,
+        loadedUpdatedAt: draft.baseDocumentUpdatedAt ?? undefined,
+        loadedContentWasEmpty: draft.loadedContentWasEmpty === 1,
+      },
+      deferredReason:
+        draft.deferredReason === "hydration" ||
+        draft.deferredReason === "conflict"
+          ? draft.deferredReason
+          : null,
+    } as const;
+    // A poll tick simply confirming a version this client's own debounced
+    // write already advanced the ref to is not an external change — it is
+    // this client's typing racing ahead of its own last round trip. Comparing
+    // that echo against the still-live `pending` would flag a conflict on
+    // almost every keystroke. Only treat the draft as having moved out from
+    // under the user when its version is newer than what this client itself
+    // last recorded.
+    const draftAdvancedExternally =
+      previouslyExpectedVersion !== null &&
+      draft.version > previouslyExpectedVersion;
+    if (controllerDirty) {
+      if (
+        draftAdvancedExternally &&
+        previewDraftNeedsConflict({
+          returnedDraft: draft,
+          pending: controller.pending,
+        })
+      ) {
+        controller.notifyDraftConflict(snapshot);
+      } else {
+        setBodyDraftConflict((current) =>
+          current?.documentId === documentId ? null : current,
+        );
+      }
+      return;
+    }
+    controller.restoreDraft(snapshot);
+    setLocalTitle(snapshot.pending.title);
+    setLocalContent(snapshot.pending.content);
+    if (snapshot.deferredReason === "conflict") {
+      controller.notifyDraftConflict(snapshot);
+    }
+  }, [documentId, persistedPreviewDraft?.draft]);
 
   // Sync displayed state to the current row, and adopt fresh server content
   // (e.g. an agent edit) as the controller's new confirmed baseline. mark()
@@ -2717,12 +4486,31 @@ function DatabaseItemPreview({
       controller.lastSaved.loadedContentWasEmpty === true &&
       isEffectivelyEmptyDocumentContent(controller.pending.content) &&
       !isEffectivelyEmptyDocumentContent(nextContent);
+    const hydratedBodyConflictsWithDraft =
+      !!controller &&
+      dirty &&
+      (controller.deferredReason === "conflict" ||
+        previewDraftConflictsWithHydratedBody({
+          loadedContent: controller.lastSaved.content,
+          loadedUpdatedAt: controller.lastSaved.loadedUpdatedAt,
+          loadedContentWasEmpty: controller.lastSaved.loadedContentWasEmpty,
+          pendingContent: controller.pending.content,
+          hydratedContent: nextContent,
+          hydratedUpdatedAt: nextLoadedUpdatedAt,
+        }));
     // Only adopt the server's title/content — into BOTH the displayed editor
     // state and the controller baseline — when the user hasn't typed something
     // newer on this row. If a dirty in-progress edit exists, preserve it: don't
     // clobber the visible text (the controller already holds the unsaved edit,
     // so nothing is lost, but the editor must keep showing what the user typed).
-    if (staleEmptyPendingOverFreshServer || (!dirty && !savedAheadOfServer)) {
+    if (hydratedBodyConflictsWithDraft) {
+      setBodyDraftConflict({ documentId, serverPayload });
+      setLocalTitle(controller.pending.title);
+      setLocalContent(controller.pending.content);
+    } else if (
+      staleEmptyPendingOverFreshServer ||
+      (!dirty && !savedAheadOfServer)
+    ) {
       setLocalTitle(nextTitle);
       setLocalContent(nextContent);
       controller?.mark(serverPayload);
@@ -2745,6 +4533,36 @@ function DatabaseItemPreview({
     item.document.updatedAt,
   ]);
 
+  // If hydration began after a keystroke, the controller deferred that save
+  // without discarding it. Retry once the authoritative document is ready —
+  // unless a non-empty Builder body arrived over an empty baseline. In that
+  // conflict case the draft remains dirty in the registry instead of silently
+  // overwriting either side; the update action's CAS is a final fail-closed
+  // guard if the source changed between this check and the write.
+  useEffect(() => {
+    if (bodyHydrationPending || !document) return;
+    const controller = peekPreviewDocumentSaveController(documentId);
+    if (!controller || controller.deferredReason !== "hydration") return;
+    if (
+      previewDraftConflictsWithHydratedBody({
+        loadedContent: controller.lastSaved.content,
+        loadedUpdatedAt: controller.lastSaved.loadedUpdatedAt,
+        loadedContentWasEmpty: controller.lastSaved.loadedContentWasEmpty,
+        pendingContent: controller.pending.content,
+        hydratedContent: document.content,
+        hydratedUpdatedAt: document.updatedAt,
+      })
+    ) {
+      return;
+    }
+    void controller.flush();
+  }, [
+    bodyHydrationPending,
+    document?.content,
+    document?.updatedAt,
+    documentId,
+  ]);
+
   useEffect(() => {
     if (!focusTitle || !previewCanEdit || isLoading || !document) return;
 
@@ -2760,7 +4578,9 @@ function DatabaseItemPreview({
   function handleTitleChange(nextTitle: string) {
     setLocalTitle(nextTitle);
     if (!previewCanEdit || !document) return;
-    saveControllerRef.current?.changeTitle(nextTitle);
+    const controller = saveControllerRef.current;
+    controller?.changeTitle(nextTitle);
+    if (controller) scheduleDraftWrite(controller);
   }
 
   function handleContentChange(nextContent: string) {
@@ -2775,7 +4595,31 @@ function DatabaseItemPreview({
     }
     setLocalContent(nextContent);
     if (!previewCanEdit || !document) return;
-    saveControllerRef.current?.changeContent(nextContent);
+    const controller = saveControllerRef.current;
+    controller?.changeContent(nextContent);
+    if (controller) scheduleDraftWrite(controller);
+  }
+
+  function keepLocalBodyDraft() {
+    if (!activeBodyDraftConflict) return;
+    const controller = peekPreviewDocumentSaveController(documentId);
+    if (!controller) return;
+    controller.rebasePending(activeBodyDraftConflict.serverPayload);
+    setBodyDraftConflict(null);
+    void controller.flush();
+  }
+
+  function reloadBuilderBody() {
+    if (!activeBodyDraftConflict) return;
+    const controller = peekPreviewDocumentSaveController(documentId);
+    if (!controller) return;
+    const serverPayload = activeBodyDraftConflict.serverPayload;
+    const discardedPayload = controller.pending;
+    controller.mark(serverPayload);
+    enqueueDraftWrite(controller, "delete", discardedPayload);
+    setLocalTitle(serverPayload.title);
+    setLocalContent(serverPayload.content);
+    setBodyDraftConflict(null);
   }
 
   function handleIconChange(nextIcon: string | null) {
@@ -2843,7 +4687,14 @@ function DatabaseItemPreview({
     }
 
     try {
-      await deleteDocument.mutateAsync({ id: item.document.id });
+      if (canDeleteWorkspace && workspaceSpace) {
+        await deleteContentSpace.mutateAsync({ spaceId: workspaceSpace.id });
+      } else {
+        await deleteDocument.mutateAsync({
+          id: item.document.id,
+          databaseDocumentId,
+        });
+      }
       await queryClient.invalidateQueries({
         queryKey: [
           "action",
@@ -2928,8 +4779,9 @@ function DatabaseItemPreview({
               )}
               {openingFullPage ? dbText("opening") : dbText("openPage")}
             </Button>
-            {canEdit || canManage ? (
+            {canEdit || canManage || removesFavoriteMembership ? (
               <DropdownMenu
+                modal={false}
                 open={actionsMenuOpen}
                 onOpenChange={setActionsMenuOpen}
               >
@@ -2949,7 +4801,7 @@ function DatabaseItemPreview({
                   className="w-44"
                   data-database-preview-portal=""
                 >
-                  {canEdit ? (
+                  {canEdit && !isWorkspaceCatalog ? (
                     <DropdownMenuItem
                       disabled={duplicateItem.isPending}
                       onSelect={(event) => {
@@ -2961,8 +4813,24 @@ function DatabaseItemPreview({
                       {dbText("duplicateRow")}
                     </DropdownMenuItem>
                   ) : null}
-                  {canEdit && canManage ? <DropdownMenuSeparator /> : null}
-                  {canManage ? (
+                  {canEdit &&
+                  !isWorkspaceCatalog &&
+                  (canManage || removesFavoriteMembership) ? (
+                    <DropdownMenuSeparator />
+                  ) : null}
+                  {removesFavoriteMembership ? (
+                    <DropdownMenuItem
+                      onSelect={(event) => {
+                        event.preventDefault();
+                        setActionsMenuOpen(false);
+                        void deletePreviewRow();
+                      }}
+                    >
+                      <IconStarOff className="mr-2 size-4 text-muted-foreground" />
+                      {sidebarText("removeFromFavorites")}
+                    </DropdownMenuItem>
+                  ) : canManage &&
+                    (!isWorkspaceCatalog || canDeleteWorkspace) ? (
                     <DropdownMenuItem
                       className="text-destructive focus:bg-destructive/10 focus:text-destructive"
                       onSelect={(event) => {
@@ -2972,7 +4840,9 @@ function DatabaseItemPreview({
                       }}
                     >
                       <IconTrash className="mr-2 size-4" />
-                      {dbText("deleteRow")}
+                      {canDeleteWorkspace
+                        ? "Delete workspace"
+                        : dbText("deleteRow")}
                     </DropdownMenuItem>
                   ) : null}
                 </DropdownMenuContent>
@@ -3024,6 +4894,7 @@ function DatabaseItemPreview({
             {previewDocument.databaseMembership ? (
               <DocumentProperties
                 documentId={previewDocument.id}
+                databaseDocumentId={databaseDocumentId}
                 canEdit={previewCanEdit}
                 popoversPortalled={false}
               />
@@ -3061,6 +4932,7 @@ function DatabaseItemPreview({
                 const editor = previewDocument.databaseMembership ? (
                   <DocumentBlockFields
                     documentId={previewDocument.id}
+                    databaseDocumentId={databaseDocumentId}
                     canEdit={previewCanEdit}
                     primaryEditor={primaryEditor}
                   />
@@ -3070,6 +4942,37 @@ function DatabaseItemPreview({
 
                 return (
                   <div className="grid gap-4">
+                    {activeBodyDraftConflict ? (
+                      <div
+                        role="status"
+                        className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-4 py-4 text-sm"
+                      >
+                        <div className="flex items-center gap-2 font-medium text-foreground">
+                          <IconLock className="size-4 text-amber-600 dark:text-amber-400" />
+                          {dbText("builderDraftConflictTitle")}
+                        </div>
+                        <p className="mt-2 max-w-2xl leading-6 text-muted-foreground">
+                          {dbText("builderDraftConflictDescription")}
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={keepLocalBodyDraft}
+                          >
+                            {dbText("keepLocalDraft")}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={reloadBuilderBody}
+                          >
+                            {dbText("reloadBuilderBody")}
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
                     {bodyHydrationError ? (
                       <BuilderBodySyncingNotice
                         title={dbText("builderBodySyncFailedNotice")}
@@ -3084,23 +4987,45 @@ function DatabaseItemPreview({
           </div>
         </div>
       )}
-      <AlertDialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
+      <AlertDialog
+        open={
+          !removesFavoriteMembership &&
+          (!isWorkspaceCatalog || canDeleteWorkspace) &&
+          confirmDeleteOpen
+        }
+        onOpenChange={setConfirmDeleteOpen}
+      >
         <AlertDialogContent data-database-preview-portal="">
           <AlertDialogHeader>
-            <AlertDialogTitle>{dbText("deleteRow2")}</AlertDialogTitle>
+            <AlertDialogTitle>
+              {canDeleteWorkspace ? "Delete workspace?" : dbText("deleteRow2")}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              &ldquo;{previewTitle}&rdquo; and any sub-pages will be permanently
-              deleted. This cannot be undone.
+              {canDeleteWorkspace ? (
+                <>
+                  &ldquo;{previewTitle}&rdquo; and every page and database
+                  inside it will be permanently deleted. This cannot be undone.
+                </>
+              ) : (
+                <>
+                  &ldquo;{previewTitle}&rdquo; and any sub-pages will be
+                  permanently deleted. This cannot be undone.
+                </>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              disabled={deleteDocument.isPending}
+              disabled={
+                deleteDocument.isPending || deleteContentSpace.isPending
+              }
               onClick={() => void deletePreviewRow()}
             >
-              {deleteDocument.isPending ? "Deleting..." : "Delete"}
+              {deleteDocument.isPending || deleteContentSpace.isPending
+                ? "Deleting..."
+                : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -3110,6 +5035,7 @@ function DatabaseItemPreview({
 }
 
 function DatabaseTableView({
+  newRowLabel,
   properties,
   groupableProperties,
   items,
@@ -3117,6 +5043,7 @@ function DatabaseTableView({
   sources,
   databaseDocumentId,
   canEdit,
+  workspaceCreationPropertyValues,
   isLoading,
   isCreating,
   columnWidths,
@@ -3154,6 +5081,7 @@ function DatabaseTableView({
   onDeletedPreviewItems,
   onOpenPage,
 }: {
+  newRowLabel: string;
   properties: DocumentProperty[];
   groupableProperties: DocumentProperty[];
   items: ContentDatabaseItem[];
@@ -3161,6 +5089,7 @@ function DatabaseTableView({
   sources: ContentDatabaseSource[];
   databaseDocumentId: string;
   canEdit: boolean;
+  workspaceCreationPropertyValues?: Record<string, DocumentPropertyValue>;
   isLoading: boolean;
   isCreating: boolean;
   columnWidths: Record<string, number>;
@@ -3213,6 +5142,7 @@ function DatabaseTableView({
   onOpenPage: (item: ContentDatabaseItem) => void;
 }) {
   const queryClient = useQueryClient();
+  const contentSpaces = useContentSpaces();
   const moveItem = useMoveDatabaseItem(databaseDocumentId);
   const duplicateItems = useDuplicateDatabaseItems(databaseDocumentId);
   const setProperty = useSetDocumentProperty(databaseDocumentId);
@@ -3233,6 +5163,10 @@ function DatabaseTableView({
   const selectableCount = items.length;
   const selectedIdSet = new Set(selectedItemIds);
   const selectedItems = databaseSelectedItems(items, selectedItemIds);
+  const removesFavoriteMembership =
+    contentSpaces.data?.favoritesDocumentId === databaseDocumentId;
+  const isWorkspaceCatalog =
+    contentSpaces.data?.catalogDocumentId === databaseDocumentId;
   const bulkEditableProperties = databaseBulkEditableProperties(properties);
   const groups = databaseVisibleGroups(
     databaseViewItemGroups(items, groupableProperties, groupByPropertyId),
@@ -3525,7 +5459,7 @@ function DatabaseTableView({
 
   async function setSelectedPropertyValue(
     property: DocumentProperty,
-    value: DocumentPropertyValue,
+    operation: DatabaseBulkPropertyValueOperation,
   ) {
     if (selectedItems.length === 0) return;
     const selectedSnapshot = selectedItems;
@@ -3537,7 +5471,7 @@ function DatabaseTableView({
         await setProperty.mutateAsync({
           documentId: item.document.id,
           propertyId: property.definition.id,
-          value,
+          value: databaseBulkPropertyValueForItem(item, property, operation),
         });
         updatedCount += 1;
       } catch {
@@ -3575,21 +5509,29 @@ function DatabaseTableView({
             selectedCount={selectedCount}
             canEdit={canEdit}
             properties={bulkEditableProperties}
+            selectedItems={selectedItems}
             duplicateDisabled={
               isDuplicatingSelected ||
               duplicateItems.isPending ||
               deleteItems.isPending
             }
             deleteDisabled={deleteItems.isPending}
+            removesFavoriteMembership={removesFavoriteMembership}
             updateDisabled={setProperty.isPending}
             onClearSelection={onClearSelection}
             onSetPropertyValue={setSelectedPropertyValue}
             onDuplicateSelected={() => void duplicateSelectedRows()}
-            onDeleteSelected={() => setConfirmDeleteSelectedOpen(true)}
+            onDeleteSelected={() => {
+              if (removesFavoriteMembership) {
+                void deleteSelectedRows();
+                return;
+              }
+              setConfirmDeleteSelectedOpen(true);
+            }}
           />
         ) : null}
         <div
-          className="grid border-y border-border/45 text-xs font-medium text-muted-foreground/70"
+          className="grid border-y border-border/35 text-xs font-medium text-muted-foreground/80"
           style={{
             gridTemplateColumns: databaseGridColumns(
               properties,
@@ -3630,6 +5572,9 @@ function DatabaseTableView({
                 }
                 sorts={sorts}
                 filters={filters}
+                onSortsChange={onSortsChange}
+                onFiltersChange={onFiltersChange}
+                onPropertyHiddenChange={onPropertyHiddenChange}
                 onPointerDown={(event) =>
                   startPropertyPointerDrag(property, event)
                 }
@@ -3648,7 +5593,7 @@ function DatabaseTableView({
               className={cn(
                 "flex h-8 items-center",
                 cleanDefaultTable
-                  ? "justify-start border-r border-border/40 px-1"
+                  ? "justify-start border-r border-border/30 px-1"
                   : "justify-center",
               )}
             >
@@ -3689,11 +5634,16 @@ function DatabaseTableView({
                     properties={properties}
                     columnWidths={columnWidths}
                     databaseDocumentId={databaseDocumentId}
+                    workspaceCatalog={isWorkspaceCatalog}
+                    workspaceCreationPropertyValues={
+                      workspaceCreationPropertyValues
+                    }
                     canEdit={canEdit}
                     selectedIdSet={selectedIdSet}
                     wrapCells={wrapCells}
                     rowDensity={rowDensity}
                     isCreating={isCreating}
+                    newRowLabel={newRowLabel}
                     focusedTitleDocumentId={focusedTitleDocumentId}
                     collapsed={databaseGroupIsCollapsed(
                       collapsedGroupIds,
@@ -3716,6 +5666,7 @@ function DatabaseTableView({
                     key={item.id}
                     item={item}
                     databaseDocumentId={databaseDocumentId}
+                    workspaceCatalog={isWorkspaceCatalog}
                     properties={properties}
                     columnWidths={columnWidths}
                     canEdit={canEdit}
@@ -3753,15 +5704,27 @@ function DatabaseTableView({
                   />
                 ))}
             {canEdit && !grouped ? (
-              <NewDatabaseRow
-                properties={properties}
-                columnWidths={columnWidths}
-                rowDensity={rowDensity}
-                disabled={isCreating}
-                isPending={isCreating}
-                onCreate={onCreateRow}
-                actionColumnWidth={actionColumnWidth}
-              />
+              isWorkspaceCatalog ? (
+                <WorkspaceSourceMenuRow
+                  label={newRowLabel}
+                  properties={properties}
+                  columnWidths={columnWidths}
+                  rowDensity={rowDensity}
+                  propertyValues={workspaceCreationPropertyValues}
+                  actionColumnWidth={actionColumnWidth}
+                />
+              ) : (
+                <NewDatabaseRow
+                  label={newRowLabel}
+                  properties={properties}
+                  columnWidths={columnWidths}
+                  rowDensity={rowDensity}
+                  disabled={isCreating}
+                  isPending={isCreating}
+                  onCreate={onCreateRow}
+                  actionColumnWidth={actionColumnWidth}
+                />
+              )
             ) : null}
             {cleanDefaultTable ? (
               <DatabaseBlankDefaultRows
@@ -3784,7 +5747,7 @@ function DatabaseTableView({
         )}
       </div>
       <AlertDialog
-        open={confirmDeleteSelectedOpen}
+        open={!removesFavoriteMembership && confirmDeleteSelectedOpen}
         onOpenChange={setConfirmDeleteSelectedOpen}
       >
         <AlertDialogContent>
@@ -3812,36 +5775,161 @@ function DatabaseTableView({
 }
 
 function DatabaseActiveConstraintsBar({
+  documentId,
+  items,
   searchQuery,
   sorts,
   filters,
+  filterMode,
   properties,
   constraintCount,
+  forceShow,
+  addFilterOpen,
+  openSortIndex,
+  openFilterIndex,
+  advancedFilterOpen,
+  hasPersonalQueryChanges,
+  savePending,
+  onAddFilterOpenChange,
+  onSortOpenIndexChange,
+  onFilterOpenIndexChange,
+  onAdvancedFilterOpenChange,
   onClearSearch,
   onRemoveSort,
   onRemoveFilter,
+  onSortsChange,
+  onFiltersChange,
+  onFilterModeChange,
   onClearAll,
+  onResetPersonalChanges,
+  onSaveForEveryone,
 }: {
+  documentId: string;
+  items: ContentDatabaseItem[];
   searchQuery: string;
   sorts: DatabaseSort[];
   filters: DatabaseFilter[];
+  filterMode: DatabaseFilterMode;
   properties: DocumentProperty[];
   constraintCount: number;
+  forceShow: boolean;
+  addFilterOpen: boolean;
+  openSortIndex: number | null;
+  openFilterIndex: number | null;
+  advancedFilterOpen: boolean;
+  hasPersonalQueryChanges: boolean;
+  savePending: boolean;
+  onAddFilterOpenChange: (open: boolean) => void;
+  onSortOpenIndexChange: (index: number | null) => void;
+  onFilterOpenIndexChange: (index: number | null) => void;
+  onAdvancedFilterOpenChange: (open: boolean) => void;
   onClearSearch: () => void;
   onRemoveSort: (index: number) => void;
   onRemoveFilter: (index: number) => void;
+  onSortsChange: (sorts: DatabaseSort[]) => void;
+  onFiltersChange: (filters: DatabaseFilter[]) => void;
+  onFilterModeChange: (filterMode: DatabaseFilterMode) => void;
   onClearAll: () => void;
+  onResetPersonalChanges: () => void;
+  onSaveForEveryone: () => void;
 }) {
-  if (constraintCount === 0) return null;
-  const activeFilterEntries = filters
-    .map((filter, index) => ({ filter, index }))
-    .filter((entry) => isActiveFilter(entry.filter));
+  const filterEntries = filters.map((filter, index) => ({ filter, index }));
+  if (
+    !forceShow &&
+    constraintCount === 0 &&
+    filterEntries.length === 0 &&
+    !hasPersonalQueryChanges
+  )
+    return null;
+  const hasSearchOrSortConstraints =
+    searchQuery.trim().length > 0 || sorts.length > 0;
+  const showViewActionControls = hasPersonalQueryChanges;
+  const advancedFilterEntries = filterEntries.filter(({ filter }) =>
+    isAdvancedDatabaseFilter(filter),
+  );
+  const regularFilterEntries = filterEntries.filter(
+    ({ filter }) => !isAdvancedDatabaseFilter(filter),
+  );
+  const hasSortFilterDivider = sorts.length > 0 && filterEntries.length > 0;
 
   return (
-    <div className="mb-2 flex min-h-8 flex-wrap items-center gap-1 border-b border-border pb-2 text-xs text-muted-foreground">
-      <span className="px-1.5">
-        Showing {constraintCount} condition{constraintCount === 1 ? "" : "s"}
-      </span>
+    <div className="flex min-h-8 flex-wrap items-center gap-1 py-0.5 text-xs text-muted-foreground">
+      {sorts.map((sort, index) => (
+        <DatabaseInlineSortControl
+          key={`${sort.key}-${index}`}
+          sort={sort}
+          sortIndex={index}
+          sorts={sorts}
+          properties={properties}
+          open={openSortIndex === index}
+          showUnsavedIndicator={hasPersonalQueryChanges}
+          onOpenChange={(open) => onSortOpenIndexChange(open ? index : null)}
+          onSortsChange={onSortsChange}
+          onRemove={() => onRemoveSort(index)}
+        />
+      ))}
+      {hasSortFilterDivider ? (
+        <div aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-border" />
+      ) : null}
+      {advancedFilterEntries.length === 0 && regularFilterEntries.length > 1 ? (
+        <DatabaseFilterModeButton
+          filterMode={filterMode}
+          onFilterModeChange={onFilterModeChange}
+        />
+      ) : null}
+      {advancedFilterEntries.length > 0 ? (
+        <DatabaseAdvancedFilterGroupControl
+          documentId={documentId}
+          items={items}
+          filters={filters}
+          filterEntries={advancedFilterEntries}
+          filterMode={filterMode}
+          properties={properties}
+          open={advancedFilterOpen}
+          showUnsavedIndicator={hasPersonalQueryChanges}
+          onOpenChange={onAdvancedFilterOpenChange}
+          onFiltersChange={onFiltersChange}
+          onFilterModeChange={onFilterModeChange}
+        />
+      ) : null}
+      {regularFilterEntries.map(({ filter, index }) => (
+        <DatabaseInlineFilterControl
+          key={`${filter.key}-${index}`}
+          documentId={documentId}
+          filter={filter}
+          filterIndex={index}
+          filters={filters}
+          items={items}
+          properties={properties}
+          open={openFilterIndex === index}
+          showUnsavedIndicator={hasPersonalQueryChanges}
+          onOpenChange={(open) => onFilterOpenIndexChange(open ? index : null)}
+          onFiltersChange={onFiltersChange}
+          onRemove={() => onRemoveFilter(index)}
+        />
+      ))}
+      <DatabaseAddFilterButton
+        open={addFilterOpen}
+        filters={filterEntries.map(({ filter }) => filter)}
+        properties={properties}
+        onOpenChange={onAddFilterOpenChange}
+        onAddFilter={(key, label) => {
+          onFiltersChange([
+            ...filters,
+            createDatabaseFilterForField(key, label, properties),
+          ]);
+          onAddFilterOpenChange(false);
+          onFilterOpenIndexChange(filters.length);
+        }}
+        onAddAdvancedFilter={(key, label) => {
+          onFiltersChange([
+            ...filters,
+            createDatabaseFilterForField(key, label, properties, true),
+          ]);
+          onAddFilterOpenChange(false);
+          onAdvancedFilterOpenChange(true);
+        }}
+      />
       {searchQuery.trim() ? (
         <DatabaseConstraintChip
           icon={<IconSearch className="size-3.5" />}
@@ -3849,32 +5937,1133 @@ function DatabaseActiveConstraintsBar({
           onRemove={onClearSearch}
         />
       ) : null}
-      {sorts.map((sort, index) => (
-        <DatabaseConstraintChip
-          key={`${sort.key}-${index}`}
-          icon={<IconArrowsSort className="size-3.5" />}
-          label={`${sort.label} ${sort.direction === "asc" ? "ascending" : "descending"}`}
-          onRemove={() => onRemoveSort(index)}
-        />
-      ))}
-      {activeFilterEntries.map(({ filter, index }) => (
-        <DatabaseConstraintChip
-          key={`${filter.key}-${index}`}
-          icon={<IconFilter className="size-3.5" />}
-          label={databaseFilterChipLabel(filter, properties)}
-          onRemove={() => onRemoveFilter(index)}
-        />
-      ))}
-      <Button
-        type="button"
-        size="sm"
-        variant="ghost"
-        className="ml-auto h-7 px-2 text-xs"
-        onClick={onClearAll}
-      >
-        {dbText("clearAll")}
-      </Button>
+      <div className="ml-auto flex items-center gap-1 pl-2">
+        {hasSearchOrSortConstraints && !hasPersonalQueryChanges ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2 text-xs text-muted-foreground"
+            onClick={onClearAll}
+          >
+            {dbText("clearAll")}
+          </Button>
+        ) : null}
+        {showViewActionControls ? (
+          <>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+              disabled={savePending}
+              onClick={onResetPersonalChanges}
+            >
+              {dbText("reset")}
+            </Button>
+            <div className="flex h-7 overflow-hidden rounded">
+              <Button
+                type="button"
+                size="sm"
+                className="h-7 rounded-none bg-amber-100 px-2 text-xs font-medium text-amber-900 shadow-none hover:bg-amber-200 dark:bg-amber-500/20 dark:text-amber-100 dark:hover:bg-amber-500/30"
+                disabled={savePending}
+                onClick={onSaveForEveryone}
+              >
+                {savePending ? <Spinner className="mr-1 size-3" /> : null}
+                {dbText("saveForEveryone")}
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-7 w-7 rounded-none border-l border-amber-200 bg-amber-100 p-0 text-amber-900 shadow-none hover:bg-amber-200 dark:border-amber-500/20 dark:bg-amber-500/20 dark:text-amber-100 dark:hover:bg-amber-500/30"
+                    disabled={savePending}
+                    aria-label={dbText("saveForEveryone")}
+                  >
+                    <IconChevronDown className="size-3" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuItem
+                    onSelect={(event) => {
+                      event.preventDefault();
+                      onSaveForEveryone();
+                    }}
+                  >
+                    <IconCheck className="mr-2 size-4 text-muted-foreground" />
+                    {dbText("saveForEveryone")}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </>
+        ) : null}
+      </div>
     </div>
+  );
+}
+
+function DatabaseInlineSortControl({
+  sort,
+  sortIndex,
+  sorts,
+  properties,
+  open,
+  showUnsavedIndicator,
+  onOpenChange,
+  onSortsChange,
+  onRemove,
+}: {
+  sort: DatabaseSort;
+  sortIndex: number;
+  sorts: DatabaseSort[];
+  properties: DocumentProperty[];
+  open: boolean;
+  showUnsavedIndicator: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSortsChange: (sorts: DatabaseSort[]) => void;
+  onRemove: () => void;
+}) {
+  function updateSort(next: Partial<DatabaseSort>) {
+    const nextSorts = [...sorts];
+    nextSorts[sortIndex] = {
+      ...(nextSorts[sortIndex] ?? defaultDatabaseSort()),
+      ...next,
+    };
+    onSortsChange(nextSorts);
+  }
+
+  const existingSortKeys = useMemo(
+    () => new Set(sorts.map((candidate) => candidate.key)),
+    [sorts],
+  );
+
+  function addSortForField(key: "name" | string, label: string) {
+    onSortsChange([...sorts, { key, label, direction: "asc" }]);
+  }
+
+  return (
+    <DropdownMenu open={open} onOpenChange={onOpenChange}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className={cn(
+            "relative h-7 max-w-[16rem] rounded border border-[#2383e2]/30 bg-[#2383e2]/10 px-2 text-xs font-normal text-[#0f5ea8] shadow-none hover:bg-[#2383e2]/15 focus-visible:border-[#2383e2]/40 focus-visible:ring-[#2383e2]/25 dark:border-[#529cca]/35 dark:bg-[#529cca]/15 dark:text-[#8ec7ff] dark:hover:bg-[#529cca]/20",
+            open && "border-[#2383e2]/40 bg-[#2383e2]/15",
+          )}
+        >
+          {sort.direction === "asc" ? (
+            <IconArrowUp className="size-3.5 shrink-0" />
+          ) : (
+            <IconArrowDown className="size-3.5 shrink-0" />
+          )}
+          <span className="min-w-0 truncate">{sort.label}</span>
+          <IconChevronDown className="ml-1 size-3 shrink-0 text-muted-foreground" />
+          {showUnsavedIndicator ? (
+            <span
+              aria-hidden="true"
+              className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full border border-background bg-amber-500"
+            />
+          ) : null}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-[260px] p-0">
+        <div
+          className="grid gap-1 p-1"
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          <div className="flex items-center gap-0.5">
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger className="h-8 min-w-0 flex-1 rounded px-1.5 text-xs [&>svg:last-child]:hidden">
+                <SortFieldIcon sort={sort} properties={properties} />
+                <span className="min-w-0 flex-1 truncate">{sort.label}</span>
+                <IconChevronDown className="ml-1 size-3 shrink-0 text-muted-foreground" />
+              </DropdownMenuSubTrigger>
+              <DatabasePropertyPickerSubContent
+                properties={properties}
+                selectedKey={sort.key}
+                includeName
+                onSelect={(key, label) => updateSort({ key, label })}
+              />
+            </DropdownMenuSub>
+
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger className="h-8 min-w-0 flex-1 rounded px-1.5 text-xs [&>svg:last-child]:hidden">
+                <span className="min-w-0 flex-1 truncate">
+                  {databaseSortDirectionLabel(sort.direction)}
+                </span>
+                <IconChevronDown className="ml-1 size-3 shrink-0 text-muted-foreground" />
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-40">
+                {(["asc", "desc"] as const).map((direction) => (
+                  <DropdownMenuItem
+                    key={direction}
+                    onSelect={(event) => {
+                      event.preventDefault();
+                      updateSort({ direction });
+                    }}
+                  >
+                    <span className="flex-1">
+                      {databaseSortDirectionLabel(direction)}
+                    </span>
+                    {sort.direction === direction ? (
+                      <IconCheck className="size-4 text-muted-foreground" />
+                    ) : null}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+
+            <button
+              type="button"
+              aria-label={`Remove ${sort.label} sort`}
+              className="flex size-8 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+              onClick={onRemove}
+            >
+              <IconX className="size-4" />
+            </button>
+          </div>
+
+          <DropdownMenuSeparator />
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger className="[&>svg:last-child]:hidden">
+              <IconPlus className="mr-2 size-4 text-muted-foreground" />
+              <span className="flex-1">{dbText("addSort")}</span>
+            </DropdownMenuSubTrigger>
+            <DatabasePropertyPickerSubContent
+              properties={properties}
+              includeName
+              excludeKeys={existingSortKeys}
+              placeholder={dbText("searchForAProperty")}
+              onSelect={addSortForField}
+            />
+          </DropdownMenuSub>
+          <DropdownMenuItem
+            onSelect={(event) => {
+              event.preventDefault();
+              onRemove();
+            }}
+          >
+            <IconTrash className="mr-2 size-4 text-muted-foreground" />
+            {dbText("deleteSort")}
+          </DropdownMenuItem>
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function DatabaseAddFilterButton({
+  open,
+  filters,
+  properties,
+  onOpenChange,
+  onAddFilter,
+  onAddAdvancedFilter,
+}: {
+  open: boolean;
+  filters: DatabaseFilter[];
+  properties: DocumentProperty[];
+  onOpenChange: (open: boolean) => void;
+  onAddFilter: (key: "name" | string, label: string) => void;
+  onAddAdvancedFilter: (key: "name" | string, label: string) => void;
+}) {
+  const excludedFilterKeys = useMemo(
+    () => new Set(filters.filter(isActiveFilter).map((filter) => filter.key)),
+    [filters],
+  );
+  const advancedFilterCandidate =
+    databasePropertyPickerItems(properties, "", {
+      includeName: false,
+      excludeKeys: excludedFilterKeys,
+    })[0] ??
+    databasePropertyPickerItems(properties, "", {
+      includeName: true,
+      excludeKeys: excludedFilterKeys,
+    })[0];
+
+  return (
+    <DropdownMenu open={open} onOpenChange={onOpenChange}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-7 rounded px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <IconPlus className="mr-1 size-3.5" />
+          {dbText("filter")}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-64">
+        <div onKeyDown={(event) => event.stopPropagation()}>
+          <DatabasePropertyPickerMenuItems
+            properties={properties}
+            includeName
+            excludeKeys={excludedFilterKeys}
+            placeholder={dbText("filterBy")}
+            closeOnSelect
+            onSelect={onAddFilter}
+          />
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            disabled={!advancedFilterCandidate}
+            onSelect={(event) => {
+              event.preventDefault();
+              if (!advancedFilterCandidate) return;
+              onAddAdvancedFilter(
+                advancedFilterCandidate.key,
+                advancedFilterCandidate.label,
+              );
+            }}
+          >
+            <IconPlus className="mr-2 size-4 text-muted-foreground" />
+            {dbText("addAdvancedFilter")}
+          </DropdownMenuItem>
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function DatabaseFilterModeButton({
+  filterMode,
+  onFilterModeChange,
+}: {
+  filterMode: DatabaseFilterMode;
+  onFilterModeChange: (filterMode: DatabaseFilterMode) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-7 rounded border border-border/70 bg-background px-2 text-xs font-normal text-muted-foreground shadow-none hover:bg-muted hover:text-foreground"
+        >
+          {databaseFilterModeLabel(filterMode)}
+          <IconChevronDown className="ml-1 size-3" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-44">
+        {DATABASE_FILTER_MODES.map((mode) => (
+          <DropdownMenuItem
+            key={mode}
+            onSelect={(event) => {
+              event.preventDefault();
+              onFilterModeChange(mode);
+            }}
+          >
+            <span className="flex-1">{databaseFilterModeLabel(mode)}</span>
+            {filterMode === mode ? (
+              <IconCheck className="size-4 text-muted-foreground" />
+            ) : null}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+type DatabaseFilterEntry = {
+  filter: DatabaseFilter;
+  index: number;
+};
+
+type DatabaseNestedFilterGroupEntry = {
+  id: string;
+  entries: DatabaseFilterEntry[];
+};
+
+function DatabaseAdvancedFilterGroupControl({
+  documentId,
+  items,
+  filters,
+  filterEntries,
+  filterMode,
+  properties,
+  open,
+  showUnsavedIndicator,
+  onOpenChange,
+  onFiltersChange,
+  onFilterModeChange,
+}: {
+  documentId: string;
+  items: ContentDatabaseItem[];
+  filters: DatabaseFilter[];
+  filterEntries: DatabaseFilterEntry[];
+  filterMode: DatabaseFilterMode;
+  properties: DocumentProperty[];
+  open: boolean;
+  showUnsavedIndicator: boolean;
+  onOpenChange: (open: boolean) => void;
+  onFiltersChange: (filters: DatabaseFilter[]) => void;
+  onFilterModeChange: (filterMode: DatabaseFilterMode) => void;
+}) {
+  const advancedFilters = filterEntries.map((entry) => entry.filter);
+  const rootFilterEntries = filterEntries.filter(
+    ({ filter }) => !filter.parentFilterGroupId,
+  );
+  const nestedGroupEntries = advancedNestedFilterGroups(filterEntries);
+  const advancedKeys = useMemo(
+    () => new Set(advancedFilters.map((filter) => filter.key)),
+    [advancedFilters],
+  );
+  const addRuleCandidate =
+    databasePropertyPickerItems(properties, "", {
+      includeName: false,
+      excludeKeys: advancedKeys,
+    })[0] ??
+    databasePropertyPickerItems(properties, "", {
+      includeName: true,
+      excludeKeys: advancedKeys,
+    })[0];
+
+  function updateFilterAt(index: number, next: Partial<DatabaseFilter>) {
+    const nextFilters = [...filters];
+    const currentFilter = nextFilters[index] ?? defaultDatabaseFilter();
+    const nextOperator = next.operator ?? currentFilter.operator;
+    nextFilters[index] = {
+      ...currentFilter,
+      ...next,
+      filterGroupId: next.filterGroupId ?? currentFilter.filterGroupId,
+      parentFilterGroupId:
+        next.parentFilterGroupId ?? currentFilter.parentFilterGroupId,
+      value: filterOperatorNeedsValue(nextOperator)
+        ? (next.value ?? currentFilter.value)
+        : "",
+    };
+    onFiltersChange(nextFilters);
+  }
+
+  function addAdvancedRule(key: "name" | string, label: string) {
+    onFiltersChange([
+      ...filters,
+      createDatabaseFilterForField(key, label, properties, true),
+    ]);
+  }
+
+  function addNestedFilterGroup(key: "name" | string, label: string) {
+    onFiltersChange([
+      ...filters,
+      createDatabaseFilterForField(key, label, properties, {
+        filterGroupId: createAdvancedNestedFilterGroupId(),
+        parentFilterGroupId: DATABASE_ADVANCED_FILTER_GROUP_ID,
+      }),
+    ]);
+  }
+
+  function addNestedFilterRule(
+    groupId: string,
+    key: "name" | string,
+    label: string,
+  ) {
+    onFiltersChange([
+      ...filters,
+      createDatabaseFilterForField(key, label, properties, {
+        filterGroupId: groupId,
+        parentFilterGroupId: DATABASE_ADVANCED_FILTER_GROUP_ID,
+      }),
+    ]);
+  }
+
+  function removeFilterAt(index: number) {
+    onFiltersChange(filters.filter((_, filterIndex) => filterIndex !== index));
+    if (filterEntries.length <= 1) onOpenChange(false);
+  }
+
+  function removeNestedFilterGroup(groupId: string) {
+    onFiltersChange(
+      filters.filter((filter) => filter.filterGroupId !== groupId),
+    );
+  }
+
+  return (
+    <DropdownMenu open={open} onOpenChange={onOpenChange}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className={cn(
+            "relative h-7 rounded border border-[#2383e2]/30 bg-[#2383e2]/10 px-2 text-xs font-normal text-[#0f5ea8] shadow-none hover:bg-[#2383e2]/15 focus-visible:border-[#2383e2]/40 focus-visible:ring-[#2383e2]/25 dark:border-[#529cca]/35 dark:bg-[#529cca]/15 dark:text-[#8ec7ff] dark:hover:bg-[#529cca]/20",
+            open && "border-[#2383e2]/40 bg-[#2383e2]/15",
+          )}
+        >
+          <IconFilter className="size-3.5 shrink-0" />
+          <span>{advancedFilterGroupLabel(filterEntries.length)}</span>
+          <IconChevronDown className="ml-1 size-3 shrink-0 text-muted-foreground" />
+          {showUnsavedIndicator ? (
+            <span
+              aria-hidden="true"
+              className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full border border-background bg-amber-500"
+            />
+          ) : null}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        className="w-[640px] max-w-[calc(100vw-2rem)] p-0"
+      >
+        <div
+          className="grid gap-1 rounded-lg bg-background p-1.5"
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          {rootFilterEntries.map(({ filter, index }, ruleIndex) => (
+            <DatabaseAdvancedFilterRuleRow
+              key={`${filter.key}-${index}`}
+              documentId={documentId}
+              filter={filter}
+              filters={filters}
+              filterIndex={index}
+              ruleIndex={ruleIndex}
+              filterMode={filterMode}
+              items={items}
+              properties={properties}
+              onFilterModeChange={onFilterModeChange}
+              onUpdateFilter={(next) => updateFilterAt(index, next)}
+              onRemove={() => removeFilterAt(index)}
+            />
+          ))}
+          {nestedGroupEntries.map((group, groupIndex) => (
+            <DatabaseAdvancedNestedFilterGroup
+              key={group.id}
+              documentId={documentId}
+              items={items}
+              filters={filters}
+              group={group}
+              ruleIndex={rootFilterEntries.length + groupIndex}
+              filterMode={filterMode}
+              properties={properties}
+              onFilterModeChange={onFilterModeChange}
+              onUpdateFilter={updateFilterAt}
+              onAddNestedFilterRule={addNestedFilterRule}
+              onRemoveFilter={removeFilterAt}
+              onRemoveGroup={() => removeNestedFilterGroup(group.id)}
+            />
+          ))}
+
+          <DropdownMenuSeparator className="my-1" />
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger className="h-9 rounded px-2 text-xs text-muted-foreground [&>svg:last-child]:hidden">
+              <IconPlus className="mr-2 size-4 text-muted-foreground" />
+              <span className="flex-1">{dbText("addFilterRule")}</span>
+              <IconChevronDown className="ml-1 size-3 shrink-0 text-muted-foreground" />
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="w-56">
+              <DropdownMenuItem
+                disabled={!addRuleCandidate}
+                onSelect={(event) => {
+                  event.preventDefault();
+                  if (!addRuleCandidate) return;
+                  addAdvancedRule(addRuleCandidate.key, addRuleCandidate.label);
+                }}
+              >
+                <IconPlus className="mr-2 size-4 text-muted-foreground" />
+                {dbText("addFilterRule")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!addRuleCandidate}
+                onSelect={(event) => {
+                  event.preventDefault();
+                  if (!addRuleCandidate) return;
+                  addNestedFilterGroup(
+                    addRuleCandidate.key,
+                    addRuleCandidate.label,
+                  );
+                }}
+              >
+                <IconPlus className="mr-2 size-4 text-muted-foreground" />
+                {dbText("addFilterGroup")}
+              </DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+          <DropdownMenuItem
+            className="h-9 rounded px-2 text-xs text-muted-foreground"
+            onSelect={(event) => {
+              event.preventDefault();
+              onFiltersChange(
+                filters.filter((filter) => !isAdvancedDatabaseFilter(filter)),
+              );
+              onOpenChange(false);
+            }}
+          >
+            <IconTrash className="mr-2 size-4 text-muted-foreground" />
+            {dbText("deleteFilter")}
+          </DropdownMenuItem>
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function DatabaseAdvancedFilterRuleRow({
+  documentId,
+  filter,
+  filters,
+  filterIndex,
+  ruleIndex,
+  filterMode,
+  items,
+  properties,
+  onFilterModeChange,
+  onUpdateFilter,
+  onRemove,
+}: {
+  documentId: string;
+  filter: DatabaseFilter;
+  filters: DatabaseFilter[];
+  filterIndex: number;
+  ruleIndex: number;
+  filterMode: DatabaseFilterMode;
+  items: ContentDatabaseItem[];
+  properties: DocumentProperty[];
+  onFilterModeChange: (filterMode: DatabaseFilterMode) => void;
+  onUpdateFilter: (next: Partial<DatabaseFilter>) => void;
+  onRemove: () => void;
+}) {
+  function selectField(key: "name" | string, label: string) {
+    onUpdateFilter({
+      key,
+      label,
+      operator: defaultFilterOperatorForKey(key, properties),
+      value: "",
+    });
+  }
+
+  return (
+    <div className="flex items-start gap-2">
+      {ruleIndex === 0 ? (
+        <div className="flex h-9 w-16 shrink-0 items-center px-2 text-xs text-foreground">
+          {dbText("where")}
+        </div>
+      ) : (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="flex h-9 w-16 items-center rounded px-2 text-xs hover:bg-muted"
+            >
+              <span className="flex-1 text-left">
+                {databaseFilterModeConjunctionLabel(filterMode)}
+              </span>
+              <IconChevronDown className="ml-1 size-3 shrink-0 text-muted-foreground" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-32">
+            {DATABASE_FILTER_MODES.map((mode) => (
+              <DropdownMenuItem
+                key={mode}
+                onSelect={(event) => {
+                  event.preventDefault();
+                  onFilterModeChange(mode);
+                }}
+              >
+                <span className="flex-1">
+                  {databaseFilterModeConjunctionLabel(mode)}
+                </span>
+                {filterMode === mode ? (
+                  <IconCheck className="size-4 text-muted-foreground" />
+                ) : null}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+
+      <div className="grid min-w-0 flex-1 gap-1">
+        <div className="flex items-center gap-0.5">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="flex h-9 min-w-0 flex-1 items-center rounded border border-border bg-background px-2 text-left text-xs font-normal shadow-none hover:bg-muted/50 focus:bg-muted/50 data-[state=open]:bg-muted/50"
+              >
+                <FilterFieldIcon filter={filter} properties={properties} />
+                <span className="min-w-0 flex-1 truncate">{filter.label}</span>
+                <IconChevronDown className="ml-1 size-3 shrink-0 text-muted-foreground" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="start"
+              className="max-h-80 w-64 overflow-auto"
+            >
+              <DatabasePropertyPickerMenuItems
+                properties={properties}
+                selectedKey={filter.key}
+                includeName
+                closeOnSelect
+                onSelect={selectField}
+              />
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="flex h-9 min-w-0 flex-1 items-center rounded border border-border bg-background px-2 text-left text-xs font-normal shadow-none hover:bg-muted/50 focus:bg-muted/50 data-[state=open]:bg-muted/50"
+              >
+                <span className="min-w-0 flex-1 truncate">
+                  {databaseFilterOperatorInlineLabel(
+                    filter.operator,
+                    filter.key,
+                    properties,
+                  )}
+                </span>
+                <IconChevronDown className="ml-1 size-3 shrink-0 text-muted-foreground" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-44">
+              {filterOperatorsForKey(filter.key, properties).map((operator) => (
+                <DropdownMenuItem
+                  key={operator}
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    onUpdateFilter({ operator });
+                  }}
+                >
+                  <span className="flex-1">
+                    {databaseFilterOperatorLabel(
+                      operator,
+                      filter.key,
+                      properties,
+                    )}
+                  </span>
+                  {filter.operator === operator ? (
+                    <IconCheck className="size-4 text-muted-foreground" />
+                  ) : null}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {filterOperatorNeedsValue(filter.operator) ? (
+            <div className="min-w-0 flex-[1.35] [&>div>div:first-child]:px-0 [&>input]:h-9 [&>input]:text-xs">
+              <DatabaseFilterValueControl
+                documentId={documentId}
+                filter={filter}
+                items={items}
+                properties={properties}
+                hideOptionsUntilQuery
+                onValueChange={(value) => onUpdateFilter({ value })}
+              />
+            </div>
+          ) : null}
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded p-0 text-muted-foreground hover:bg-muted/50 data-[state=open]:bg-muted/50"
+              >
+                <IconDots className="size-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-36">
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  onRemove();
+                }}
+              >
+                <IconX className="mr-2 size-4 text-muted-foreground" />
+                Remove
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DatabaseAdvancedNestedFilterGroup({
+  documentId,
+  items,
+  filters,
+  group,
+  ruleIndex,
+  filterMode,
+  properties,
+  onFilterModeChange,
+  onUpdateFilter,
+  onAddNestedFilterRule,
+  onRemoveFilter,
+  onRemoveGroup,
+}: {
+  documentId: string;
+  items: ContentDatabaseItem[];
+  filters: DatabaseFilter[];
+  group: DatabaseNestedFilterGroupEntry;
+  ruleIndex: number;
+  filterMode: DatabaseFilterMode;
+  properties: DocumentProperty[];
+  onFilterModeChange: (filterMode: DatabaseFilterMode) => void;
+  onUpdateFilter: (index: number, next: Partial<DatabaseFilter>) => void;
+  onAddNestedFilterRule: (
+    groupId: string,
+    key: "name" | string,
+    label: string,
+  ) => void;
+  onRemoveFilter: (index: number) => void;
+  onRemoveGroup: () => void;
+}) {
+  const nestedKeys = useMemo(
+    () => new Set(group.entries.map(({ filter }) => filter.key)),
+    [group.entries],
+  );
+  const addRuleCandidate =
+    databasePropertyPickerItems(properties, "", {
+      includeName: false,
+      excludeKeys: nestedKeys,
+    })[0] ??
+    databasePropertyPickerItems(properties, "", {
+      includeName: true,
+      excludeKeys: nestedKeys,
+    })[0];
+
+  return (
+    <div className="flex items-start gap-2">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className="flex h-9 w-16 items-center rounded px-2 text-xs hover:bg-muted data-[state=open]:bg-muted"
+          >
+            <span className="flex-1 text-left">
+              {databaseFilterModeConjunctionLabel(filterMode)}
+            </span>
+            <IconChevronDown className="ml-1 size-3 shrink-0 text-muted-foreground" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-32">
+          {DATABASE_FILTER_MODES.map((mode) => (
+            <DropdownMenuItem
+              key={mode}
+              onSelect={(event) => {
+                event.preventDefault();
+                onFilterModeChange(mode);
+              }}
+            >
+              <span className="flex-1">
+                {databaseFilterModeConjunctionLabel(mode)}
+              </span>
+              {filterMode === mode ? (
+                <IconCheck className="size-4 text-muted-foreground" />
+              ) : null}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <div className="grid min-w-0 flex-1 gap-1 rounded border border-border/70 bg-muted/30 p-1.5">
+        {group.entries.map(({ filter, index }, nestedRuleIndex) => (
+          <DatabaseAdvancedFilterRuleRow
+            key={`${filter.key}-${index}`}
+            documentId={documentId}
+            filter={filter}
+            filters={filters}
+            filterIndex={index}
+            ruleIndex={nestedRuleIndex}
+            filterMode={filterMode}
+            items={items}
+            properties={properties}
+            onFilterModeChange={onFilterModeChange}
+            onUpdateFilter={(next) =>
+              onUpdateFilter(index, {
+                ...next,
+                filterGroupId: group.id,
+                parentFilterGroupId: DATABASE_ADVANCED_FILTER_GROUP_ID,
+              })
+            }
+            onRemove={() => {
+              if (group.entries.length <= 1) {
+                onRemoveGroup();
+              } else {
+                onRemoveFilter(index);
+              }
+            }}
+          />
+        ))}
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="flex h-9 items-center rounded px-2 text-left text-xs text-muted-foreground hover:bg-muted data-[state=open]:bg-muted"
+            >
+              <IconPlus className="mr-2 size-4 text-muted-foreground" />
+              <span className="flex-1">{dbText("addFilterRule")}</span>
+              <IconChevronDown className="ml-1 size-3 shrink-0 text-muted-foreground" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-56">
+            <DropdownMenuItem
+              disabled={!addRuleCandidate}
+              onSelect={(event) => {
+                event.preventDefault();
+                if (!addRuleCandidate) return;
+                onAddNestedFilterRule(
+                  group.id,
+                  addRuleCandidate.key,
+                  addRuleCandidate.label,
+                );
+              }}
+            >
+              <IconPlus className="mr-2 size-4 text-muted-foreground" />
+              {dbText("addFilterRule")}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded p-0 text-muted-foreground hover:bg-muted/50 data-[state=open]:bg-muted/50"
+          >
+            <IconDots className="size-3.5" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-36">
+          <DropdownMenuItem
+            onSelect={(event) => {
+              event.preventDefault();
+              onRemoveGroup();
+            }}
+          >
+            <IconX className="mr-2 size-4 text-muted-foreground" />
+            Remove
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
+function DatabaseInlineFilterControl({
+  documentId,
+  filter,
+  filterIndex,
+  filters,
+  items,
+  properties,
+  open,
+  showUnsavedIndicator,
+  onOpenChange,
+  onFiltersChange,
+  onRemove,
+}: {
+  documentId: string;
+  filter: DatabaseFilter;
+  filterIndex: number;
+  filters: DatabaseFilter[];
+  items: ContentDatabaseItem[];
+  properties: DocumentProperty[];
+  open: boolean;
+  showUnsavedIndicator: boolean;
+  onOpenChange: (open: boolean) => void;
+  onFiltersChange: (filters: DatabaseFilter[]) => void;
+  onRemove: () => void;
+}) {
+  function updateFilter(next: Partial<DatabaseFilter>) {
+    const nextFilters = [...filters];
+    const currentFilter = nextFilters[filterIndex] ?? defaultDatabaseFilter();
+    const nextOperator = next.operator ?? currentFilter.operator;
+    nextFilters[filterIndex] = {
+      ...currentFilter,
+      ...next,
+      value: filterOperatorNeedsValue(nextOperator)
+        ? (next.value ?? currentFilter.value)
+        : "",
+    };
+    onFiltersChange(nextFilters);
+  }
+
+  function selectField(key: "name" | string, label: string) {
+    updateFilter({
+      key,
+      label,
+      operator: defaultFilterOperatorForKey(key, properties),
+      value: "",
+    });
+  }
+
+  const filterIsComplete =
+    !filterOperatorNeedsValue(filter.operator) ||
+    filter.value.trim().length > 0;
+  return (
+    <DropdownMenu open={open} onOpenChange={onOpenChange}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className={cn(
+            "relative h-7 max-w-[16rem] rounded border border-border/70 bg-background px-2 text-xs font-normal text-foreground shadow-none hover:bg-muted focus-visible:border-[#2383e2]/40 focus-visible:ring-[#2383e2]/25",
+            filterIsComplete &&
+              "border-[#2383e2]/30 bg-[#2383e2]/10 text-[#0f5ea8] hover:bg-[#2383e2]/15 dark:border-[#529cca]/35 dark:bg-[#529cca]/15 dark:text-[#8ec7ff] dark:hover:bg-[#529cca]/20",
+            open && "border-[#2383e2]/40 bg-[#2383e2]/15",
+            !filterIsComplete && "text-muted-foreground",
+          )}
+        >
+          <FilterFieldIcon filter={filter} properties={properties} />
+          <span className="min-w-0 truncate">
+            {databaseInlineFilterLabel(filter, properties)}
+          </span>
+          <IconChevronDown className="ml-1 size-3 shrink-0 text-muted-foreground" />
+          {showUnsavedIndicator ? (
+            <span
+              aria-hidden="true"
+              className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full border border-background bg-amber-500"
+            />
+          ) : null}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-[260px] p-0">
+        <div
+          className="grid gap-1 p-1"
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          <div className="flex items-center gap-0.5">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="flex h-7 min-w-0 flex-1 items-center rounded px-1.5 text-left text-xs hover:bg-muted data-[state=open]:bg-muted"
+                >
+                  <FilterFieldIcon filter={filter} properties={properties} />
+                  <span className="min-w-0 flex-1 truncate">
+                    {filter.label}
+                  </span>
+                  <IconChevronDown className="ml-1 size-3 shrink-0 text-muted-foreground" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="start"
+                className="max-h-80 w-64 overflow-auto"
+              >
+                <DatabasePropertyPickerMenuItems
+                  properties={properties}
+                  selectedKey={filter.key}
+                  includeName
+                  closeOnSelect
+                  onSelect={selectField}
+                />
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="flex h-7 min-w-0 flex-1 items-center rounded px-1.5 text-left text-xs hover:bg-muted data-[state=open]:bg-muted"
+                >
+                  <span className="min-w-0 flex-1 truncate">
+                    {databaseFilterOperatorInlineLabel(
+                      filter.operator,
+                      filter.key,
+                      properties,
+                    )}
+                  </span>
+                  <IconChevronDown className="ml-1 size-3 shrink-0 text-muted-foreground" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-44">
+                {filterOperatorsForKey(filter.key, properties).map(
+                  (operator) => (
+                    <DropdownMenuItem
+                      key={operator}
+                      onSelect={(event) => {
+                        event.preventDefault();
+                        updateFilter({ operator });
+                      }}
+                    >
+                      <span className="flex-1">
+                        {databaseFilterOperatorLabel(
+                          operator,
+                          filter.key,
+                          properties,
+                        )}
+                      </span>
+                      {filter.operator === operator ? (
+                        <IconCheck className="size-4 text-muted-foreground" />
+                      ) : null}
+                    </DropdownMenuItem>
+                  ),
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="flex h-7 w-7 items-center justify-center rounded p-0 text-muted-foreground hover:bg-muted data-[state=open]:bg-muted"
+                >
+                  <IconDots className="size-3.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-36">
+                <DropdownMenuItem
+                  disabled={filters.length <= 1 || filterIndex === 0}
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    onFiltersChange(
+                      moveDatabaseFilter(filters, filterIndex, "up"),
+                    );
+                  }}
+                >
+                  <IconArrowUp className="mr-2 size-4 text-muted-foreground" />
+                  {dbText("moveFilterUp")}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={
+                    filters.length <= 1 || filterIndex >= filters.length - 1
+                  }
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    onFiltersChange(
+                      moveDatabaseFilter(filters, filterIndex, "down"),
+                    );
+                  }}
+                >
+                  <IconArrowDown className="mr-2 size-4 text-muted-foreground" />
+                  {dbText("moveFilterDown")}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    onRemove();
+                  }}
+                >
+                  <IconX className="mr-2 size-4 text-muted-foreground" />
+                  Remove
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+
+          {filterOperatorNeedsValue(filter.operator) ? (
+            <DatabaseFilterValueControl
+              autoFocus={!filter.value}
+              documentId={documentId}
+              filter={filter}
+              items={items}
+              properties={properties}
+              onValueChange={(value) => updateFilter({ value })}
+            />
+          ) : null}
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -3897,7 +7086,7 @@ type DatabaseSettingsPanel =
 // the leaf can attach without re-fetching.
 // A second source being added, awaiting the canonical-key confirm step.
 type PendingSourceCandidate = {
-  sourceType: "mock-local" | "builder-cms" | "local-table";
+  sourceType: "mock-local" | "builder-cms" | "local-table" | "notion-database";
   sourceName: string;
   sourceTable: string;
   displayName: string;
@@ -3907,7 +7096,12 @@ type PendingSourceCandidate = {
 type SourceNavStep =
   | { kind: "provider"; providerId: "builder" }
   | { kind: "space"; spaceId: string; spaceName: string }
-  | { kind: "model"; model: BuilderCmsModelSummary }
+  | {
+      kind: "model";
+      model?: BuilderCmsModelSummary;
+      sourceId?: string;
+      sourceName?: string;
+    }
   | { kind: "addSource" }
   | { kind: "secondarySource"; sourceId: string; sourceName: string }
   | { kind: "keyConfirm"; candidate: PendingSourceCandidate }
@@ -3922,7 +7116,7 @@ function sourceNavTitle(stack: SourceNavStep[]): string {
   if (top.kind === "secondarySource") return top.sourceName;
   if (top.kind === "keyConfirm") return dbText("matchExistingItemsToDetails");
   if (top.kind === "fieldPicker") return dbText("chooseFields");
-  return top.model.displayName;
+  return top.model?.displayName ?? top.sourceName ?? "Builder";
 }
 
 // The Builder "B" brand mark (first glyph of the wordmark), drawn with
@@ -3968,8 +7162,11 @@ function NotionLogoMark({ className }: { className?: string }) {
 function DatabaseSettingsPanelSheet({
   open,
   panel,
+  databaseId,
   documentId,
+  isFilesDatabase,
   canEdit,
+  canManage,
   activeView,
   properties,
   items,
@@ -3989,9 +7186,11 @@ function DatabaseSettingsPanelSheet({
   onReviewBuilderUpdate,
   onSetBuilderLiveWrites,
   sourceActionPending,
+  sourcePendingOperations,
   onViewTypeChange,
   onWrapCellsChange,
   onOpenPagesInChange,
+  onFormQuestionsChange,
   onPropertyHiddenChange,
   onPropertiesHiddenChange,
   onGroupByChange,
@@ -4000,8 +7199,11 @@ function DatabaseSettingsPanelSheet({
 }: {
   open: boolean;
   panel: DatabaseSettingsPanel;
+  databaseId: string;
   documentId: string;
+  isFilesDatabase: boolean;
   canEdit: boolean;
+  canManage: boolean;
   activeView: ContentDatabaseView;
   properties: DocumentProperty[];
   items: ContentDatabaseItem[];
@@ -4028,12 +7230,14 @@ function DatabaseSettingsPanelSheet({
   onRefreshSource: (sourceId?: string) => void;
   onHydrateBuilderBodies: (sourceId: string) => void;
   onDisconnectSource: (sourceId?: string) => void;
-  onReviewBuilderUpdate: () => void;
-  onSetBuilderLiveWrites: (enabled: boolean) => void;
+  onReviewBuilderUpdate: (sourceId: string) => void;
+  onSetBuilderLiveWrites: (settings: BuilderSourceWriteSettingsInput) => void;
   sourceActionPending: boolean;
+  sourcePendingOperations: DatabaseSourcePendingOperations;
   onViewTypeChange: (type: ContentDatabaseViewType) => void;
   onWrapCellsChange: (wrapCells: boolean) => void;
   onOpenPagesInChange: (openPagesIn: ContentDatabaseOpenPagesIn) => void;
+  onFormQuestionsChange: (formQuestions: ContentDatabaseFormQuestion[]) => void;
   onPropertyHiddenChange: (propertyId: string, hidden: boolean) => void;
   onPropertiesHiddenChange: (propertyIds: string[], hidden: boolean) => void;
   onGroupByChange: (propertyId: string | null) => void;
@@ -4110,9 +7314,12 @@ function DatabaseSettingsPanelSheet({
           <DatabaseSettingsSourcePanel
             source={source}
             sources={sources}
+            databaseId={databaseId}
             documentId={documentId}
+            isFilesDatabase={isFilesDatabase}
             itemCount={items.length}
             canEdit={canEdit}
+            canManage={canManage}
             nav={sourceNavStack}
             onNavPush={(step) => setSourceNavStack((stack) => [...stack, step])}
             onNavReplace={setSourceNavStack}
@@ -4129,13 +7336,16 @@ function DatabaseSettingsPanelSheet({
             onReviewBuilderUpdate={onReviewBuilderUpdate}
             onSetBuilderLiveWrites={onSetBuilderLiveWrites}
             sourceActionPending={sourceActionPending}
+            sourcePendingOperations={sourcePendingOperations}
           />
         ) : panel === "layout" ? (
           <DatabaseSettingsLayoutPanel
             activeView={activeView}
+            properties={properties}
             onViewTypeChange={onViewTypeChange}
             onWrapCellsChange={onWrapCellsChange}
             onOpenPagesInChange={onOpenPagesInChange}
+            onFormQuestionsChange={onFormQuestionsChange}
           />
         ) : panel === "property_visibility" ? (
           <DatabaseSettingsPropertyVisibilityPanel
@@ -4241,6 +7451,9 @@ export function builderReviewableChangeSets(
   return source.changeSets.filter(
     (changeSet) =>
       changeSet.direction === "outbound" &&
+      !changeSet.executions.some(
+        (execution) => execution.state === "succeeded",
+      ) &&
       (changeSet.state === "pending_push" ||
         changeSet.state === "staged_revision" ||
         changeSet.state === "approved"),
@@ -4266,12 +7479,33 @@ function maxSourceReviewRisk(
 
 export function builderReviewExecutableRows(
   review: ContentDatabaseSourceReviewPayload,
+  selectedChangeSetIds: ReadonlySet<string> = new Set(
+    review.rows.map((row) => row.changeSetId),
+  ),
 ) {
-  if (!review.liveWritesEnabled || review.result.status !== "validated") {
-    return [];
-  }
+  if (!review.liveWritesEnabled) return [];
   return review.rows.filter(
-    (row) => row.execution?.state === "ready" && row.execution.idempotencyKey,
+    (row) =>
+      selectedChangeSetIds.has(row.changeSetId) &&
+      row.execution?.idempotencyKey &&
+      (row.execution.state === "ready" ||
+        row.execution.state === "running" ||
+        row.execution.state === "response_received" ||
+        row.execution.state === "reconciliation_required" ||
+        (row.execution.state === "failed" &&
+          builderExecutionPayloadHasSuccessfulResponse(row.execution.payload))),
+  );
+}
+
+function builderExecutionPayloadHasSuccessfulResponse(
+  payload: Record<string, unknown>,
+) {
+  const response = payload.response;
+  return (
+    !!response &&
+    typeof response === "object" &&
+    !Array.isArray(response) &&
+    (response as Record<string, unknown>).ok === true
   );
 }
 
@@ -4279,22 +7513,65 @@ export function builderSourceLiveWriteControlState(
   source: ContentDatabaseSource | null,
 ) {
   const isBuilderSource = source?.sourceType === "builder-cms";
-  const safeTarget =
-    isBuilderSource && source?.sourceTable === BUILDER_CMS_SAFE_WRITE_MODEL;
-  const enabled = source?.capabilities.liveWritesEnabled === true;
+  const legacyAllowedWriteModes = source?.metadata.allowedWriteModes ?? [];
+  const writeMode =
+    source?.metadata.writeMode ??
+    (source?.capabilities.liveWritesEnabled === true
+      ? legacyAllowedWriteModes.some((mode) => mode !== "autosave")
+        ? "publish_updates"
+        : "stage_only"
+      : "read_only");
+  const enabled = writeMode !== "read_only";
   return {
-    safeTarget,
+    safeTarget: isBuilderSource,
     enabled,
-    showAction: safeTarget,
+    writeMode,
+    allowPublicationTransitions:
+      writeMode === "publish_updates" &&
+      source?.metadata.allowPublicationTransitions === true,
+    availableWriteModes: BUILDER_WRITE_MODE_OPTIONS.map(
+      (option) => option.mode,
+    ),
+    showPublicationTransitions: writeMode === "publish_updates",
+    showAction: isBuilderSource,
     actionLabel: enabled ? "Disable" : "Enable",
     description: enabled
-      ? "Enabled for autosave writes to the Agent Native test collection."
-      : safeTarget
-        ? "Off by default. Enable only when you are ready to send autosave writes to the Agent Native test collection."
-        : isBuilderSource
-          ? "Unavailable here; live writes are locked to the Agent Native test collection."
-          : "Live writes are not available for this source.",
+      ? writeMode === "publish_updates"
+        ? "Approved updates can write through to Builder while preserving publication state."
+        : "Approved updates can create Builder autosave revisions."
+      : isBuilderSource
+        ? "Off by default. An administrator can choose a guarded write tier for this source."
+        : "Live writes are not available for this source.",
   };
+}
+
+const BUILDER_WRITE_MODE_OPTIONS: Array<{
+  mode: ContentDatabaseSourceWriteMode;
+  labelKey: DatabaseMessageKey;
+  descriptionKey: DatabaseMessageKey;
+}> = [
+  {
+    mode: "read_only",
+    labelKey: "readOnly",
+    descriptionKey: "noBuilderWrites",
+  },
+  {
+    mode: "stage_only",
+    labelKey: "stageOnly",
+    descriptionKey: "savesDraftsNeverPublishes",
+  },
+  {
+    mode: "publish_updates",
+    labelKey: "publishUpdates",
+    descriptionKey: "writesUpdatesToLiveEntries",
+  },
+];
+
+function builderWriteModeSummary(mode: ContentDatabaseSourceWriteMode) {
+  return dbText(
+    BUILDER_WRITE_MODE_OPTIONS.find((option) => option.mode === mode)
+      ?.descriptionKey ?? "noBuilderWrites",
+  );
 }
 
 export function buildClientBuilderReviewPayload(
@@ -4322,6 +7599,7 @@ export function buildClientBuilderReviewPayload(
       (field) => field.localFieldKey === "title",
     );
     const proposedTitle = titleChange?.proposedValue;
+    const effect = resolveBuilderCmsWriteEffect({ source, changeSet });
 
     return {
       changeSetId: changeSet.id,
@@ -4331,12 +7609,14 @@ export function buildClientBuilderReviewPayload(
         typeof proposedTitle === "string" && proposedTitle.trim()
           ? proposedTitle
           : sourceRow?.sourceDisplayKey || "Untitled",
+      targetEntryId:
+        effect === "create_draft" ? null : (sourceRow?.sourceRowId ?? null),
       fieldChanges: changeSet.fieldChanges,
       bodyChange: changeSet.bodyChange,
       riskLevel: changeSet.riskLevel,
       riskReasons: changeSet.riskReasons,
       conflictState: changeSet.conflictState,
-      effect: resolveBuilderCmsWriteEffect({ source, changeSet }),
+      effect,
       execution: latestExecution,
     };
   });
@@ -4359,19 +7639,22 @@ export function buildClientBuilderReviewPayload(
     executionStates.length > 0 &&
     executionStates.every((state) => state === "succeeded")
       ? "succeeded"
-      : executionStates.includes("failed")
-        ? "failed"
-        : executionStates.includes("running")
-          ? "running"
-          : statuses.some((status) => status.status === "stale")
-            ? "stale"
-            : statuses.some((status) => status.status === "blocked")
-              ? "blocked"
-              : statuses.some((status) => status.status === "validated")
-                ? "validated"
-                : source.capabilities.liveWritesEnabled
+      : executionStates.includes("reconciliation_required") ||
+          executionStates.includes("response_received")
+        ? "reconciliation_required"
+        : executionStates.includes("failed")
+          ? "failed"
+          : executionStates.includes("running")
+            ? "running"
+            : statuses.some((status) => status.status === "stale")
+              ? "stale"
+              : statuses.some((status) => status.status === "blocked")
+                ? "blocked"
+                : statuses.some((status) => status.status === "validated")
                   ? "validated"
-                  : "write_disabled";
+                  : source.capabilities.liveWritesEnabled
+                    ? "validated"
+                    : "write_disabled";
 
   return {
     summary:
@@ -4393,19 +7676,21 @@ export function buildClientBuilderReviewPayload(
           ? "Pushed to Builder and reconciled locally."
           : resultStatus === "failed"
             ? "Builder push failed. The change remains retryable."
-            : resultStatus === "running"
-              ? "Builder push is running."
-              : resultStatus === "validated"
-                ? source.capabilities.liveWritesEnabled
-                  ? hasExecutionEvidence
-                    ? "Push checked successfully. Ready to send to Builder."
-                    : "Ready to send to Builder."
-                  : "Push checked successfully. Nothing was sent to Builder."
-                : resultStatus === "blocked"
-                  ? "Push needs attention before anything can be sent to Builder."
-                  : resultStatus === "stale"
-                    ? "Push needs a fresh review because the plan changed."
-                    : "Builder writes are off in this local build. Push will check the update only.",
+            : resultStatus === "reconciliation_required"
+              ? "Builder reconciliation is required. Do not retry this write."
+              : resultStatus === "running"
+                ? "Builder push is running."
+                : resultStatus === "validated"
+                  ? source.capabilities.liveWritesEnabled
+                    ? hasExecutionEvidence
+                      ? "Push checked successfully. Ready to send to Builder."
+                      : "Ready to send to Builder."
+                    : "Push checked successfully. Nothing was sent to Builder."
+                  : resultStatus === "blocked"
+                    ? "Push needs attention before anything can be sent to Builder."
+                    : resultStatus === "stale"
+                      ? "Push needs a fresh review because the plan changed."
+                      : "Builder writes are off in this local build. Push will check the update only.",
     },
   };
 }
@@ -4413,9 +7698,12 @@ export function buildClientBuilderReviewPayload(
 function DatabaseSettingsSourcePanel({
   source,
   sources,
+  databaseId,
   documentId,
+  isFilesDatabase,
   itemCount,
   canEdit,
+  canManage,
   nav,
   onNavPush,
   onNavReplace,
@@ -4429,12 +7717,16 @@ function DatabaseSettingsSourcePanel({
   onReviewBuilderUpdate,
   onSetBuilderLiveWrites,
   sourceActionPending,
+  sourcePendingOperations,
 }: {
   source: ContentDatabaseSource | null;
   sources: ContentDatabaseSource[];
+  databaseId: string;
   documentId: string;
+  isFilesDatabase: boolean;
   itemCount: number;
   canEdit: boolean;
+  canManage: boolean;
   nav: SourceNavStep[];
   onNavPush: (step: SourceNavStep) => void;
   onNavReplace: (stack: SourceNavStep[]) => void;
@@ -4455,26 +7747,14 @@ function DatabaseSettingsSourcePanel({
   onRefreshSource: (sourceId?: string) => void;
   onHydrateBuilderBodies: (sourceId: string) => void;
   onDisconnectSource: (sourceId?: string) => void;
-  onReviewBuilderUpdate: () => void;
-  onSetBuilderLiveWrites: (enabled: boolean) => void;
+  onReviewBuilderUpdate: (sourceId: string) => void;
+  onSetBuilderLiveWrites: (settings: BuilderSourceWriteSettingsInput) => void;
   sourceActionPending: boolean;
+  sourcePendingOperations: DatabaseSourcePendingOperations;
 }) {
-  const outboundChangeSets =
-    source?.changeSets.filter(
-      (changeSet) => changeSet.direction === "outbound",
-    ) ?? [];
-  const reviewableBuilderChangeSets = outboundChangeSets.filter(
-    (changeSet) =>
-      changeSet.state === "pending_push" ||
-      changeSet.state === "staged_revision" ||
-      changeSet.state === "approved",
-  );
-  const conflictChangeSets =
-    source?.changeSets.filter(
-      (changeSet) => changeSet.conflictState === "source_changed",
-    ) ?? [];
   const { isCodeMode } = useCodeMode();
-  const isBuilderSource = source?.sourceType === "builder-cms";
+  const navigate = useNavigate();
+  const builderSources = databaseAttachedBuilderSources(sources, source);
   const builderStatus = useBuilderStatus();
   const builderConfigured = builderStatus.status?.configured === true;
   const builderOrgName = builderStatus.status?.orgName ?? null;
@@ -4493,32 +7773,6 @@ function DatabaseSettingsSourcePanel({
       void builderStatus.refetch();
     },
   });
-  const builderSyncFailed =
-    isBuilderSource &&
-    (source?.syncState === "error" || Boolean(source?.lastError));
-
-  // Auto-sync: the manual Refresh button is gone, so pull the read-only
-  // snapshot when the panel opens and whenever the window regains focus.
-  // Throttled so rapid focus changes don't hammer Builder; the refresh
-  // mutation is silent (no toast), so this stays quiet in the background.
-  const refreshSourceRef = useRef(onRefreshSource);
-  refreshSourceRef.current = onRefreshSource;
-  const lastAutoSyncRef = useRef(0);
-  const autoSyncEnabled = Boolean(source) && isBuilderSource && canEdit;
-  useEffect(() => {
-    if (!autoSyncEnabled) return;
-    const maybeSync = () => {
-      const now = Date.now();
-      if (now - lastAutoSyncRef.current < 15_000) return;
-      lastAutoSyncRef.current = now;
-      refreshSourceRef.current();
-    };
-    maybeSync();
-    const onFocus = () => maybeSync();
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [autoSyncEnabled]);
-
   const top = nav[nav.length - 1];
 
   // ── Sources list (root) ───────────────────────────────────────────────
@@ -4529,10 +7783,27 @@ function DatabaseSettingsSourcePanel({
         sources={sources}
         builderConfigured={builderConfigured}
         builderSpaceLabel={builderSpaceLabel}
-        reviewableCount={reviewableBuilderChangeSets.length}
-        onOpenBuilder={() =>
-          onNavPush({ kind: "provider", providerId: "builder" })
+        reviewableCount={builderSources.reduce(
+          (total, candidate) =>
+            total + builderReviewableChangeSets(candidate).length,
+          0,
+        )}
+        onOpenBuilder={(builderSource) =>
+          onNavPush(
+            builderSource
+              ? {
+                  kind: "model",
+                  sourceId: builderSource.id,
+                  sourceName: builderSource.sourceName,
+                }
+              : { kind: "provider", providerId: "builder" },
+          )
         }
+        onOpenNotion={() => onNavPush({ kind: "addSource" })}
+        onOpenLocalFolder={() =>
+          navigate(`/local-files?databaseId=${databaseId}`)
+        }
+        showLocalFolder={isFilesDatabase}
         onOpenSecondary={(secondary) =>
           onNavPush({
             kind: "secondarySource",
@@ -4571,6 +7842,17 @@ function DatabaseSettingsSourcePanel({
             },
           })
         }
+        onPickNotionDatabase={(notionSource) =>
+          onNavPush({
+            kind: "keyConfirm",
+            candidate: {
+              sourceType: "notion-database",
+              sourceName: notionSource.name,
+              sourceTable: notionSource.id,
+              displayName: notionSource.name,
+            },
+          })
+        }
       />
     );
   }
@@ -4583,20 +7865,19 @@ function DatabaseSettingsSourcePanel({
         source={secondary}
         canEdit={canEdit}
         pending={sourceActionPending}
-        onAddDetails={() =>
-          secondary
-            ? onNavPush({
-                kind: "keyConfirm",
-                candidate: {
-                  sourceType: secondary.sourceType,
-                  sourceName: secondary.sourceName,
-                  sourceTable: secondary.sourceTable,
-                  displayName: secondary.sourceName,
-                  existingSourceId: secondary.id,
-                },
-              })
-            : undefined
-        }
+        onAddDetails={() => {
+          if (!secondary || secondary.sourceType === "local-folder") return;
+          onNavPush({
+            kind: "keyConfirm",
+            candidate: {
+              sourceType: secondary.sourceType,
+              sourceName: secondary.sourceName,
+              sourceTable: secondary.sourceTable,
+              displayName: secondary.sourceName,
+              existingSourceId: secondary.id,
+            },
+          });
+        }}
         onAddItems={async () => {
           if (!secondary) return;
           await onChangeSourceRole(secondary.id, "items");
@@ -4723,22 +8004,28 @@ function DatabaseSettingsSourcePanel({
   if (top.kind === "space") {
     return (
       <BuilderSpaceModelsView
-        attachedModelName={
-          isBuilderSource ? (source?.sourceTable ?? null) : null
-        }
-        onOpenModel={(model) => onNavPush({ kind: "model", model })}
+        attachedModelNames={databaseAttachedBuilderModelNames(sources, source)}
+        onOpenModel={(model) => {
+          const attached = databaseAttachedBuilderSource(sources, source, {
+            modelName: model.name,
+          });
+          onNavPush({ kind: "model", model, sourceId: attached?.id });
+        }}
       />
     );
   }
 
   // ── Model leaf ────────────────────────────────────────────────────────
   const model = top.model;
-  const isAttachedModel =
-    Boolean(source) && isBuilderSource && source?.sourceTable === model.name;
+  const selectedBuilderSource = databaseAttachedBuilderSource(sources, source, {
+    sourceId: top.sourceId,
+    modelName: model?.name,
+  });
 
   // Unattached model → the attach affordance (the model is already chosen by
   // drilling in, so there's no model picker here).
-  if (!isAttachedModel || !source) {
+  if (!selectedBuilderSource) {
+    if (!model) return null;
     return (
       <div className="grid min-w-0 gap-3">
         <div className="grid min-w-0 gap-1.5 rounded-lg border border-border bg-background p-3 text-sm">
@@ -4791,8 +8078,17 @@ function DatabaseSettingsSourcePanel({
               size="sm"
               disabled={!canEdit || sourceActionPending}
               onClick={async () => {
-                await onAttachBuilderSource(model);
-                onNavReplace([]);
+                try {
+                  await onAttachBuilderSource(model);
+                  onNavReplace([]);
+                } catch (err) {
+                  toast.error(dbText("failedToAttachSource"), {
+                    description:
+                      err instanceof Error
+                        ? err.message
+                        : dbText("somethingWentWrong"),
+                  });
+                }
               }}
             >
               {sourceActionPending ? (
@@ -4808,141 +8104,283 @@ function DatabaseSettingsSourcePanel({
     );
   }
 
-  // Attached model → the minimal read-only leaf panel.
+  const selectedSource = selectedBuilderSource;
+  const reviewableBuilderChangeSets =
+    builderReviewableChangeSets(selectedSource);
+  const outboundChangeSets = reviewableBuilderChangeSets;
+  const conflictChangeSets = selectedSource.changeSets.filter(
+    (changeSet) => changeSet.conflictState === "source_changed",
+  );
+  const builderSyncFailed =
+    selectedSource.syncState === "error" || Boolean(selectedSource.lastError);
+  const liveWriteControl = builderSourceLiveWriteControlState(selectedSource);
+  const builderWriteMode = liveWriteControl.writeMode;
+  const selectedSourceMutationPending = databaseSourceOperationIsPending(
+    sourcePendingOperations,
+    selectedSource.id,
+    [
+      "changeRole",
+      "refresh",
+      "hydration",
+      "disconnect",
+      "review",
+      "execute",
+      "writeMode",
+    ],
+  );
+  const selectedSourceReviewPending = databaseSourceOperationIsPending(
+    sourcePendingOperations,
+    selectedSource.id,
+    ["refresh", "disconnect", "review", "execute", "writeMode"],
+  );
+  const selectedSourceHydrationPending = databaseSourceOperationIsPending(
+    sourcePendingOperations,
+    selectedSource.id,
+    ["refresh", "hydration", "disconnect"],
+  );
+  const selectedSourceRefreshControlPending =
+    sourcePendingOperations.refresh || selectedSourceMutationPending;
+  const selectedSourceReviewControlPending =
+    sourcePendingOperations.review ||
+    sourcePendingOperations.execute ||
+    selectedSourceReviewPending;
+  const selectedSourceHydrationControlPending =
+    sourcePendingOperations.hydration || selectedSourceHydrationPending;
+  const selectedSourceRoleControlPending =
+    sourcePendingOperations.changeRole || selectedSourceMutationPending;
+  const selectedSourceDisconnectControlPending =
+    sourcePendingOperations.disconnect || selectedSourceMutationPending;
+  const builderWriteModeDisabled =
+    !canManage ||
+    databaseBuilderWriteModeOperationPending(
+      sourcePendingOperations,
+      selectedSource.id,
+    );
+
+  // Attached model → source details and guarded write policy.
   return (
     <div className="grid min-w-0 gap-4">
       <>
         <div className="grid min-w-0 gap-1.5 rounded-lg border border-border bg-background p-3 text-sm">
           <div className="flex min-w-0 items-center justify-between gap-2">
-            <span className="truncate font-medium" title={source.sourceName}>
-              {source.sourceName}
+            <span
+              className="truncate font-medium"
+              title={selectedSource.sourceName}
+            >
+              {selectedSource.sourceName}
             </span>
-            {isBuilderSource ? (
-              source.capabilities.liveWritesEnabled ? (
-                <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-foreground">
+            <div className="flex shrink-0 items-center gap-1">
+              {selectedSource.capabilities.liveWritesEnabled ? (
+                <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-foreground">
                   <IconPencil className="size-3" />
                   {dbText("liveWritesOn")}
                 </span>
               ) : (
-                <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
                   <IconLock className="size-3" />
                   {dbText("readOnly")}
                 </span>
-              )
-            ) : (
-              <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
-                {source.syncState}
-              </span>
-            )}
+              )}
+              {!builderSyncFailed ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 gap-1 px-2 text-xs"
+                  disabled={!canEdit || selectedSourceRefreshControlPending}
+                  onClick={() => onRefreshSource(selectedSource.id)}
+                >
+                  <IconRefresh className="size-3" />
+                  {dbText("refreshSource")}
+                </Button>
+              ) : null}
+            </div>
           </div>
           <div className="min-w-0 break-words text-xs text-muted-foreground">
             {builderSyncFailed ? (
               <button
                 type="button"
                 className="inline-flex items-center gap-1 text-destructive hover:underline disabled:opacity-60"
-                disabled={!canEdit || sourceActionPending}
-                onClick={() => onRefreshSource(source.id)}
+                disabled={!canEdit || selectedSourceRefreshControlPending}
+                onClick={() => onRefreshSource(selectedSource.id)}
               >
                 <IconRefresh className="size-3" />
                 {dbText("couldntSyncRetry")}
               </button>
-            ) : isBuilderSource ? (
+            ) : (
               [
                 builderConfigured ? (builderSpaceLabel ?? "Connected") : null,
-                source.lastRefreshedAt
+                selectedSource.lastRefreshedAt
                   ? `synced ${
-                      formatRelativeSyncTime(source.lastRefreshedAt) ??
-                      source.freshness
+                      formatRelativeSyncTime(selectedSource.lastRefreshedAt) ??
+                      selectedSource.freshness
                     }`
-                  : source.freshness,
-                typeof source.metadata.lastReadFetchedEntryCount === "number"
+                  : selectedSource.freshness,
+                typeof selectedSource.metadata.lastReadFetchedEntryCount ===
+                "number"
                   ? dbText("builderRowsFetched", {
-                      count: source.metadata.lastReadFetchedEntryCount,
+                      count: selectedSource.metadata.lastReadFetchedEntryCount,
                     })
                   : null,
-                builderSourceRowFetchStatus(source) === "error"
+                builderSourceRowFetchStatus(selectedSource) === "error"
                   ? dbText("builderRowsFetchFailed")
-                  : builderSourceRowFetchStatus(source) === "fetching"
+                  : builderSourceRowFetchStatus(selectedSource) === "fetching"
                     ? dbText("builderRowsFetchingMore")
                     : null,
               ]
                 .filter(Boolean)
                 .join(" · ")
-            ) : (
-              `Local snapshot · ${source.freshness}`
             )}
+          </div>
+          <div className="grid min-w-0 gap-2 border-t border-border pt-3 text-xs text-muted-foreground">
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-medium text-foreground">
+                {dbText("builderWriteMode")}
+              </span>
+              <span>{builderWriteModeSummary(builderWriteMode)}</span>
+            </div>
+            <div
+              className="grid grid-cols-3 gap-0.5 rounded-md border border-border bg-muted/35 p-0.5"
+              aria-label={dbText("builderWriteMode")}
+            >
+              {BUILDER_WRITE_MODE_OPTIONS.map((option) => {
+                const selected = builderWriteMode === option.mode;
+                return (
+                  <button
+                    key={option.mode}
+                    type="button"
+                    aria-pressed={selected}
+                    title={dbText(option.descriptionKey)}
+                    disabled={builderWriteModeDisabled}
+                    className={cn(
+                      "min-w-0 rounded px-2 py-1.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-60",
+                      selected
+                        ? "bg-[#2383e2] text-white shadow-sm"
+                        : "text-muted-foreground hover:bg-background hover:text-foreground",
+                    )}
+                    onClick={() =>
+                      onSetBuilderLiveWrites({
+                        sourceId: selectedSource.id,
+                        writeMode: option.mode,
+                        allowPublicationTransitions:
+                          option.mode === "publish_updates"
+                            ? liveWriteControl.allowPublicationTransitions
+                            : false,
+                      })
+                    }
+                  >
+                    <span className="block truncate">
+                      {dbText(option.labelKey)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            {liveWriteControl.showPublicationTransitions ? (
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={liveWriteControl.allowPublicationTransitions}
+                disabled={builderWriteModeDisabled}
+                className="flex min-w-0 items-start gap-2 rounded px-1 py-1 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-60"
+                onClick={() =>
+                  onSetBuilderLiveWrites({
+                    sourceId: selectedSource.id,
+                    writeMode: "publish_updates",
+                    allowPublicationTransitions:
+                      !liveWriteControl.allowPublicationTransitions,
+                  })
+                }
+              >
+                <span
+                  className={cn(
+                    "mt-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded border",
+                    liveWriteControl.allowPublicationTransitions
+                      ? "border-[#2383e2] bg-[#2383e2] text-white"
+                      : "border-muted-foreground/40 bg-background text-transparent",
+                  )}
+                >
+                  {liveWriteControl.allowPublicationTransitions ? (
+                    <IconCheck className="size-3" />
+                  ) : null}
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-foreground">
+                    {dbText("allowPublishUnpublishPerItem")}
+                  </span>
+                </span>
+              </button>
+            ) : null}
           </div>
         </div>
 
-        {reviewableBuilderChangeSets.length > 0 ||
-        conflictChangeSets.length > 0 ? (
-          <div className="grid min-w-0 gap-2 rounded-lg border border-border bg-muted/30 p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className="text-sm font-medium">
-                  {conflictChangeSets.length > 0
-                    ? `${conflictChangeSets.length} change${
-                        conflictChangeSets.length === 1 ? "" : "s"
-                      } need review`
-                    : `${reviewableBuilderChangeSets.length} change${
+        <div className="grid min-w-0 gap-2 rounded-lg border border-border bg-muted/30 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-medium">
+                {conflictChangeSets.length > 0
+                  ? `${conflictChangeSets.length} change${
+                      conflictChangeSets.length === 1 ? "" : "s"
+                    } need review`
+                  : reviewableBuilderChangeSets.length > 0
+                    ? `${reviewableBuilderChangeSets.length} change${
                         reviewableBuilderChangeSets.length === 1 ? "" : "s"
-                      } ready to push`}
-                </div>
-                <div className="mt-0.5 break-words text-xs text-muted-foreground">
-                  {dbText("reviewBeforeTheyReachBuilder")}
-                </div>
+                      } ready to push`
+                    : "Check for local content changes"}
               </div>
-              <Button
-                type="button"
-                size="sm"
-                className="shrink-0"
-                disabled={!canEdit || sourceActionPending}
-                onClick={onReviewBuilderUpdate}
-              >
-                <IconCheck className="mr-1.5 size-3.5" />
-                {dbText("reviewDiff")}
-              </Button>
+              <div className="mt-0.5 break-words text-xs text-muted-foreground">
+                {dbText("reviewDiffDescription")}
+              </div>
             </div>
+            <Button
+              type="button"
+              size="sm"
+              className="shrink-0"
+              disabled={!canEdit || selectedSourceReviewControlPending}
+              onClick={() => onReviewBuilderUpdate(selectedSource.id)}
+            >
+              <IconCheck className="mr-1.5 size-3.5" />
+              {dbText("reviewDiff")}
+            </Button>
           </div>
-        ) : null}
+        </div>
 
-        {isBuilderSource && source.bodyHydration ? (
+        {selectedSource.bodyHydration ? (
           <BuilderBodyHydrationCard
-            source={source}
+            source={selectedSource}
             canEdit={canEdit}
-            pending={sourceActionPending}
-            onHydrate={() => onHydrateBuilderBodies(source.id)}
+            pending={selectedSourceHydrationControlPending}
+            onHydrate={() => onHydrateBuilderBodies(selectedSource.id)}
           />
         ) : null}
+
+        <BuilderRequiredFieldsCard
+          documentId={documentId}
+          source={selectedSource}
+          canEdit={canEdit}
+          pending={selectedSourceMutationPending}
+        />
 
         {isCodeMode ? (
           <>
             <div className="grid min-w-0 gap-2 rounded-lg border border-border bg-background p-3 text-sm">
-              <div className="font-medium">
-                {source.sourceType === "builder-cms"
-                  ? "Local Builder changes"
-                  : "Local outbound changes"}
-              </div>
+              <div className="font-medium">{dbText("builderChanges")}</div>
               <div className="text-xs text-muted-foreground">
-                {source.sourceType === "builder-cms"
-                  ? source.capabilities.liveWritesEnabled
-                    ? "Local edits can be reviewed and sent through the guarded Builder autosave path."
-                    : "Local edits can be staged as a Builder save revision/autosave record. Live Builder writes are disabled."
-                  : "No local outbound push lane is active for this mock source."}
+                {selectedSource.capabilities.liveWritesEnabled
+                  ? "Local edits can be reviewed and sent through the guarded Builder autosave path."
+                  : "Local edits can be staged as a Builder save revision/autosave record. Live Builder writes are disabled."}
               </div>
               <div className="grid min-w-0 gap-2">
                 {outboundChangeSets.slice(0, 6).map((changeSet) => (
                   <SourceChangeSetReviewCard
                     key={changeSet.id}
                     changeSet={changeSet}
-                    source={source}
+                    source={selectedSource}
                   />
                 ))}
                 {outboundChangeSets.length === 0 ? (
                   <div className="text-xs text-muted-foreground">
-                    {source.sourceType === "builder-cms"
-                      ? "No pending local Builder changes yet. Rename a source-backed row to see a local outbound diff."
-                      : "No local outbound changes yet."}
+                    {dbText("noPendingChangesEditASourceBackedRow")}
                   </div>
                 ) : null}
               </div>
@@ -4951,33 +8389,38 @@ function DatabaseSettingsSourcePanel({
         ) : null}
 
         <SourceRoleCard
-          source={source}
-          canAddDetails={sources.some(
-            (item) => item.id !== source.id && !sourceAddsDetails(item),
-          )}
+          source={selectedSource}
+          canAddDetails={
+            selectedSource.sourceType !== "local-folder" &&
+            sources.some(
+              (item) =>
+                item.id !== selectedSource.id && !sourceAddsDetails(item),
+            )
+          }
           canEdit={canEdit}
-          pending={sourceActionPending}
-          onAddDetails={() =>
+          pending={selectedSourceRoleControlPending}
+          onAddDetails={() => {
+            if (selectedSource.sourceType === "local-folder") return;
             onNavPush({
               kind: "keyConfirm",
               candidate: {
-                sourceType: source.sourceType,
-                sourceName: source.sourceName,
-                sourceTable: source.sourceTable,
-                displayName: source.sourceName,
-                existingSourceId: source.id,
+                sourceType: selectedSource.sourceType,
+                sourceName: selectedSource.sourceName,
+                sourceTable: selectedSource.sourceTable,
+                displayName: selectedSource.sourceName,
+                existingSourceId: selectedSource.id,
               },
-            })
-          }
+            });
+          }}
           onAddItems={async () => {
-            await onChangeSourceRole(source.id, "items");
+            await onChangeSourceRole(selectedSource.id, "items");
             onNavReplace([]);
           }}
           onChooseFields={() =>
             onNavPush({
               kind: "fieldPicker",
-              sourceId: source.id,
-              sourceName: source.sourceName,
+              sourceId: selectedSource.id,
+              sourceName: selectedSource.sourceName,
             })
           }
         />
@@ -4994,10 +8437,10 @@ function DatabaseSettingsSourcePanel({
             size="sm"
             variant="outline"
             className="mt-2 h-8 text-xs text-destructive hover:text-destructive"
-            disabled={!canEdit || sourceActionPending}
-            onClick={() => onDisconnectSource(source.id)}
+            disabled={!canEdit || selectedSourceDisconnectControlPending}
+            onClick={() => onDisconnectSource(selectedSource.id)}
           >
-            {sourceActionPending ? (
+            {selectedSourceDisconnectControlPending ? (
               <Spinner className="mr-1 size-3.5" />
             ) : (
               <IconX className="mr-1 size-3.5" />
@@ -5019,6 +8462,9 @@ function SourcesListView({
   builderSpaceLabel,
   reviewableCount,
   onOpenBuilder,
+  onOpenNotion,
+  onOpenLocalFolder,
+  showLocalFolder,
   onOpenSecondary,
   onAddSource,
 }: {
@@ -5027,10 +8473,14 @@ function SourcesListView({
   builderConfigured: boolean;
   builderSpaceLabel: string | null;
   reviewableCount: number;
-  onOpenBuilder: () => void;
+  onOpenBuilder: (source?: ContentDatabaseSource) => void;
+  onOpenNotion: () => void;
+  onOpenLocalFolder: () => void;
+  showLocalFolder: boolean;
   onOpenSecondary: (source: ContentDatabaseSource) => void;
   onAddSource: () => void;
 }) {
+  const t = useT();
   const isBuilderSource = source?.sourceType === "builder-cms";
   const connectedSources =
     sources.length > 0 ? sources : source ? [source] : [];
@@ -5061,7 +8511,7 @@ function SourcesListView({
                 connected.metadata.federation?.role === "secondary"
                   ? () => onOpenSecondary(connected)
                   : connected.sourceType === "builder-cms"
-                    ? onOpenBuilder
+                    ? () => onOpenBuilder(connected)
                     : undefined
               }
               disabled={
@@ -5097,9 +8547,22 @@ function SourcesListView({
         <DatabaseSettingsRow
           icon={<NotionLogoMark className="size-4" />}
           label="Notion"
-          value="Coming soon"
-          disabled
+          value={
+            connectedSources.some(
+              (connected) => connected.sourceType === "notion-database",
+            )
+              ? dbText("connected")
+              : undefined
+          }
+          onClick={onOpenNotion}
         />
+        {showLocalFolder ? (
+          <DatabaseSettingsRow
+            icon={<IconFolder className="size-4" />}
+            label={t("sidebar.localFolder")}
+            onClick={onOpenLocalFolder}
+          />
+        ) : null}
       </div>
       <div className="grid min-w-0 gap-1.5">
         <div className="px-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -5311,6 +8774,7 @@ function AddSourceView({
   excludeDatabaseIds,
   canEdit,
   onPickLocalTable,
+  onPickNotionDatabase,
 }: {
   excludeDatabaseIds: string[];
   canEdit: boolean;
@@ -5319,8 +8783,10 @@ function AddSourceView({
     documentId: string;
     title: string;
   }) => void;
+  onPickNotionDatabase: (source: { id: string; name: string }) => void;
 }) {
   const query = useContentDatabases({ enabled: true, excludeDatabaseIds });
+  const notion = useNotionDatabaseSources(true);
   // Exclude this database (no self-reference) and any table already federated
   // onto it — those live in the "Connected sources" group above.
   const excluded = new Set(excludeDatabaseIds);
@@ -5361,9 +8827,28 @@ function AddSourceView({
         <DatabaseSettingsRow
           icon={<NotionLogoMark className="size-4" />}
           label="Notion"
-          value="Coming soon"
-          disabled
+          value={
+            notion.isLoading
+              ? dbText("loadingTables")
+              : notion.data?.connected
+                ? (notion.data.workspaceName ?? "Notion")
+                : dbText("connectNotionFirst")
+          }
+          disabled={!notion.data?.connected}
         />
+        {notion.data?.connected
+          ? notion.data.sources.map((source) => (
+              <DatabaseSettingsRow
+                key={source.id}
+                icon={<NotionLogoMark className="size-4" />}
+                label={source.name}
+                onClick={
+                  canEdit ? () => onPickNotionDatabase(source) : undefined
+                }
+                disabled={!canEdit}
+              />
+            ))
+          : null}
       </div>
     </div>
   );
@@ -5419,6 +8904,7 @@ function SecondarySourceLeaf({
       </div>
       <SourceRoleCard
         source={source}
+        canAddItems={source.sourceType === "builder-cms"}
         canEdit={canEdit}
         pending={pending}
         onAddDetails={onAddDetails}
@@ -5572,6 +9058,7 @@ function SourceRelationshipChoice({
 function SourceRoleCard({
   source,
   canAddDetails = true,
+  canAddItems = true,
   canEdit,
   pending,
   onAddDetails,
@@ -5580,6 +9067,7 @@ function SourceRoleCard({
 }: {
   source: ContentDatabaseSource;
   canAddDetails?: boolean;
+  canAddItems?: boolean;
   canEdit: boolean;
   pending: boolean;
   onAddDetails: () => void;
@@ -5614,16 +9102,18 @@ function SourceRoleCard({
             >
               {dbText("chooseFields")}
             </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-8 text-xs"
-              disabled={!canEdit || pending}
-              onClick={onAddItems}
-            >
-              {dbText("addAsItems")}
-            </Button>
+            {canAddItems ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs"
+                disabled={!canEdit || pending}
+                onClick={onAddItems}
+              >
+                {dbText("addAsItems")}
+              </Button>
+            ) : null}
           </>
         ) : canAddDetails ? (
           <Button
@@ -5658,12 +9148,7 @@ function BuilderSourceContinuationBar({
   canEdit: boolean;
   pending: boolean;
   clientError: boolean;
-  progressHighWater: {
-    sourceId: string | null;
-    fetchedCount: number;
-    hydratedCount: number;
-    rowsComplete: boolean;
-  };
+  progressHighWater?: BuilderSourceProgressHighWater;
   onRetry: () => void;
 }) {
   if (
@@ -5675,8 +9160,7 @@ function BuilderSourceContinuationBar({
   }
   const rowsComplete =
     source.metadata.lastReadHasMore === false ||
-    (progressHighWater.sourceId === source.id &&
-      progressHighWater.rowsComplete);
+    progressHighWater?.rowsComplete === true;
   const rawStatus = clientError ? "error" : builderSourceRowFetchStatus(source);
   const status = rowsComplete && rawStatus === "fetching" ? null : rawStatus;
   const bodyHydration = source.bodyHydration;
@@ -5689,10 +9173,7 @@ function BuilderSourceContinuationBar({
   const hydratedCount = bodyHydration
     ? builderBodyHydrationDisplayHydratedCount({
         summary: bodyHydration,
-        highWaterCount:
-          progressHighWater.sourceId === source.id
-            ? progressHighWater.hydratedCount
-            : 0,
+        highWaterCount: progressHighWater?.hydratedCount ?? 0,
       })
     : 0;
   const fetchedCount =
@@ -5700,12 +9181,15 @@ function BuilderSourceContinuationBar({
       ? Math.max(
           rawFetchedCount ?? 0,
           bodyHydration.total,
-          progressHighWater.sourceId === source.id
-            ? progressHighWater.fetchedCount
-            : 0,
+          progressHighWater?.fetchedCount ?? 0,
         )
       : rawFetchedCount;
   const hasMore = source.metadata.lastReadHasMore === true && !rowsComplete;
+  const fetchedCountDetail = builderSourceContinuationFetchedCountDetail(
+    source,
+    fetchedCount,
+    rowsComplete,
+  );
   const bodyHydrationActive =
     !hasMore &&
     !!bodyHydration &&
@@ -5759,7 +9243,9 @@ function BuilderSourceContinuationBar({
               failed: bodyHydration.error,
             },
           )
-        : dbText("builderRowsFetchedSoFar", { count: fetchedCount });
+        : dbText("builderRowsFetchedSoFar", {
+            count: fetchedCountDetail ?? fetchedCount,
+          });
 
   return (
     <div
@@ -5923,6 +9409,124 @@ function shouldPreselectDetailField(
   return DETAIL_FIELD_NAME_HINTS.some((hint) => key.includes(hint));
 }
 
+function sourceFieldIconType(
+  sourceFieldType: string,
+): DocumentPropertyType | "name" {
+  const normalized = sourceFieldType.trim().toLowerCase();
+  if (normalized === "number") return "number";
+  if (normalized === "datetime" || normalized === "date") return "date";
+  if (normalized === "url") return "url";
+  if (normalized === "boolean" || normalized === "checkbox") return "checkbox";
+  if (
+    normalized === "list" ||
+    normalized === "array" ||
+    normalized === "tags" ||
+    normalized === "multi_select"
+  ) {
+    return "multi_select";
+  }
+  return "text";
+}
+
+export function builderMissingRequiredFields(
+  source: ContentDatabaseSource | null | undefined,
+) {
+  if (
+    source?.sourceType !== "builder-cms" ||
+    source.sourceTable !== "agent-native-blog-article-test"
+  ) {
+    return [];
+  }
+
+  const requiredFieldKeys = new Set(
+    (source.metadata.builderModelFields ?? [])
+      .filter(
+        (field) =>
+          field.required &&
+          field.name !== "title" &&
+          field.name !== "blocks" &&
+          field.name !== "blocksString",
+      )
+      .map((field) => `data.${field.name}`),
+  );
+
+  return source.fields.filter(
+    (field) =>
+      !field.propertyId &&
+      field.mappingType !== "system" &&
+      field.mappingType !== "title" &&
+      requiredFieldKeys.has(field.sourceFieldKey),
+  );
+}
+
+export function BuilderRequiredFieldsCard({
+  documentId,
+  source,
+  canEdit,
+  pending,
+  onDone,
+}: {
+  documentId: string;
+  source: ContentDatabaseSource;
+  canEdit: boolean;
+  pending: boolean;
+  onDone?: () => void;
+}) {
+  const addRequiredFields = useMaterializeBuilderRequiredFields(documentId);
+  const missingRequiredFields = builderMissingRequiredFields(source);
+
+  if (missingRequiredFields.length === 0) return null;
+
+  const addRequired = async () => {
+    try {
+      await addRequiredFields.mutateAsync({
+        documentId,
+        sourceId: source.id,
+      });
+      toast.success(dbText("publishingFieldsAdded"), {
+        description: dbText("requiredBuilderFieldsReady", {
+          count: missingRequiredFields.length,
+        }),
+      });
+      onDone?.();
+    } catch (error) {
+      toast.error(dbText("fieldsWereNotAdded"), {
+        description:
+          error instanceof Error ? error.message : dbText("tryAgain"),
+      });
+    }
+  };
+
+  return (
+    <div className="grid gap-2 rounded-lg border border-border bg-muted/30 p-3">
+      <div className="text-sm font-medium">
+        {dbText("requiredPublishingFields")}
+      </div>
+      <div className="text-xs text-muted-foreground">
+        {dbText("requiredPublishingFieldsDescription", {
+          fields: missingRequiredFields
+            .map((field) => field.sourceFieldLabel)
+            .join(", "),
+        })}
+      </div>
+      <Button
+        type="button"
+        size="sm"
+        className="justify-self-start"
+        disabled={!canEdit || pending || addRequiredFields.isPending}
+        onClick={addRequired}
+      >
+        {addRequiredFields.isPending ? (
+          <Spinner className="mr-1.5 size-3.5" />
+        ) : (
+          <IconPlus className="mr-1.5 size-3.5" />
+        )}
+        {dbText("addRequiredFields")}
+      </Button>
+    </div>
+  );
+}
+
 function SourceDetailsFieldPicker({
   documentId,
   source,
@@ -6007,7 +9611,6 @@ function SourceDetailsFieldPicker({
       });
     }
   };
-
   return (
     <div className="grid min-w-0 gap-3">
       <div className="grid min-w-0 gap-1 rounded-lg border border-border bg-background p-3">
@@ -6018,37 +9621,50 @@ function SourceDetailsFieldPicker({
           {dbText("pickDetailsBecomeColumns")}
         </div>
       </div>
+      <BuilderRequiredFieldsCard
+        documentId={documentId}
+        source={source}
+        canEdit={canEdit}
+        pending={pending}
+        onDone={onDone}
+      />
       {fields.length === 0 ? (
         <div className="break-words text-xs text-muted-foreground">
           {dbText("allAvailableDetailFieldsAlreadyVisible")}
         </div>
       ) : (
         <div className="grid min-w-0 gap-1">
-          {fields.map((field) => (
-            <button
-              key={field.id}
-              type="button"
-              className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              onClick={() => toggleField(field.id)}
-            >
-              <span
-                className={cn(
-                  "flex size-4 shrink-0 items-center justify-center rounded border",
-                  selected.has(field.id)
-                    ? "border-[#2383e2] bg-[#2383e2] text-white"
-                    : "border-muted-foreground/40 text-transparent",
-                )}
+          {fields.map((field) => {
+            const iconType = sourceFieldIconType(field.sourceFieldType);
+            const Icon =
+              iconType === "name" ? IconFileText : TYPE_ICONS[iconType];
+            return (
+              <button
+                key={field.id}
+                type="button"
+                className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => toggleField(field.id)}
               >
-                <IconCheck className="size-3" />
-              </span>
-              <span className="min-w-0 flex-1 truncate">
-                {field.sourceFieldLabel}
-              </span>
-              <span className="shrink-0 text-[11px] text-muted-foreground">
-                {field.sourceFieldType}
-              </span>
-            </button>
-          ))}
+                <span
+                  className={cn(
+                    "flex size-4 shrink-0 items-center justify-center rounded border",
+                    selected.has(field.id)
+                      ? "border-[#2383e2] bg-[#2383e2] text-white"
+                      : "border-muted-foreground/40 text-transparent",
+                  )}
+                >
+                  <IconCheck className="size-3" />
+                </span>
+                <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate">
+                  {field.sourceFieldLabel}
+                </span>
+                <span className="shrink-0 text-[11px] text-muted-foreground">
+                  {field.sourceFieldType}
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
       <div className="flex justify-end gap-2">
@@ -6082,10 +9698,10 @@ function SourceDetailsFieldPicker({
 // A Builder space's data models, as drill-in rows. The attached model (if any)
 // is marked; selecting a row opens that model's leaf.
 function BuilderSpaceModelsView({
-  attachedModelName,
+  attachedModelNames,
   onOpenModel,
 }: {
-  attachedModelName: string | null;
+  attachedModelNames: string[];
   onOpenModel: (model: BuilderCmsModelSummary) => void;
 }) {
   const modelsQuery = useBuilderCmsModels(true);
@@ -6093,22 +9709,27 @@ function BuilderSpaceModelsView({
   const [query, setQuery] = useState("");
 
   if (modelsQuery.isLoading) {
-    if (attachedModelName) {
+    if (attachedModelNames.length > 0) {
       return (
         <div className="grid min-w-0 gap-2">
           <div className="grid min-w-0 gap-1.5">
             <div className="px-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
               {dbText("alreadyAttached")}
             </div>
-            <div className="flex min-w-0 items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm">
-              <span className="flex min-w-0 items-center gap-2">
-                <IconLayoutGrid className="size-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 truncate">{attachedModelName}</span>
-              </span>
-              <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                attached
-              </span>
-            </div>
+            {attachedModelNames.map((attachedModelName) => (
+              <div
+                key={attachedModelName}
+                className="flex min-w-0 items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm"
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <IconLayoutGrid className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 truncate">{attachedModelName}</span>
+                </span>
+                <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  attached
+                </span>
+              </div>
+            ))}
           </div>
           <div className="flex min-w-0 items-center gap-2 px-2 text-xs text-muted-foreground">
             <Spinner className="size-3.5" />
@@ -6182,15 +9803,16 @@ function BuilderSpaceModelsView({
     model.displayName.toLowerCase().includes(normalizedQuery) ||
     model.name.toLowerCase().includes(normalizedQuery);
   const filtered = models.filter(matchesQuery);
-  const attachedModels = filtered.filter(
-    (model) => attachedModelName === model.name,
+  const attachedModelNameSet = new Set(attachedModelNames);
+  const attachedModels = filtered.filter((model) =>
+    attachedModelNameSet.has(model.name),
   );
   const otherModels = filtered.filter(
-    (model) => attachedModelName !== model.name,
+    (model) => !attachedModelNameSet.has(model.name),
   );
 
   const renderRow = (model: BuilderCmsModelSummary) => {
-    const isAttached = attachedModelName === model.name;
+    const isAttached = attachedModelNameSet.has(model.name);
     return (
       <button
         key={model.id}
@@ -6552,6 +10174,24 @@ export function builderSourceContinuationProgressPercent(
     : rawPercent;
 }
 
+export function builderSourceContinuationFetchedCountDetail(
+  source: Pick<ContentDatabaseSource, "metadata">,
+  fetchedCount: number | null,
+  rowsComplete = false,
+) {
+  const knownFetchTotal =
+    !rowsComplete &&
+    source.metadata.lastReadHasMore === true &&
+    typeof source.metadata.lastReadLimit === "number"
+      ? source.metadata.lastReadLimit
+      : null;
+  return fetchedCount !== null &&
+    knownFetchTotal !== null &&
+    knownFetchTotal > fetchedCount
+    ? `${fetchedCount} of ${knownFetchTotal}`
+    : fetchedCount;
+}
+
 export function builderSourceContinuationWatchdogDecision(refires: number) {
   return "refire";
 }
@@ -6703,14 +10343,18 @@ function DatabaseSettingsSwitch({
 
 function DatabaseSettingsLayoutPanel({
   activeView,
+  properties,
   onViewTypeChange,
   onWrapCellsChange,
   onOpenPagesInChange,
+  onFormQuestionsChange,
 }: {
   activeView: ContentDatabaseView;
+  properties: DocumentProperty[];
   onViewTypeChange: (type: ContentDatabaseViewType) => void;
   onWrapCellsChange: (wrapCells: boolean) => void;
   onOpenPagesInChange: (openPagesIn: ContentDatabaseOpenPagesIn) => void;
+  onFormQuestionsChange: (formQuestions: ContentDatabaseFormQuestion[]) => void;
 }) {
   const wrapCells = activeView.wrapCells === true;
   const openPagesIn = activeView.openPagesIn ?? "preview";
@@ -6748,6 +10392,151 @@ function DatabaseSettingsLayoutPanel({
         value={openPagesIn}
         onChange={onOpenPagesInChange}
       />
+      {activeView.type === "form" ? (
+        <DatabaseFormQuestionsSetting
+          activeView={activeView}
+          properties={properties}
+          onChange={onFormQuestionsChange}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function DatabaseFormQuestionsSetting({
+  activeView,
+  properties,
+  onChange,
+}: {
+  activeView: ContentDatabaseView;
+  properties: DocumentProperty[];
+  onChange: (questions: ContentDatabaseFormQuestion[]) => void;
+}) {
+  const questions = contentDatabaseFormQuestions(activeView, properties);
+  const propertyById = new Map(
+    properties.map((property) => [property.definition.id, property]),
+  );
+
+  function updateQuestion(
+    key: string,
+    patch: Partial<ContentDatabaseFormQuestion>,
+  ) {
+    onChange(
+      questions.map((question) =>
+        question.key === key ? { ...question, ...patch } : question,
+      ),
+    );
+  }
+
+  function moveQuestion(index: number, direction: -1 | 1) {
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= questions.length) return;
+    const next = [...questions];
+    const target = next[targetIndex];
+    next[targetIndex] = next[index];
+    next[index] = target;
+    onChange(next);
+  }
+
+  return (
+    <div className="grid gap-2 border-t border-border pt-4">
+      <div className="grid gap-0.5">
+        <div className="text-sm font-medium text-foreground">
+          {dbText("formQuestions")}
+        </div>
+        <div className="text-xs text-muted-foreground">
+          {dbText("formQuestionsDescription")}
+        </div>
+      </div>
+      <div className="grid gap-1">
+        {questions.map((question, index) => {
+          const label =
+            question.key === "name"
+              ? dbText("formName")
+              : (propertyById.get(question.key)?.definition.name ??
+                question.key);
+          return (
+            <div
+              key={question.key}
+              className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-border px-2 py-2"
+            >
+              <div className="min-w-0 truncate text-sm text-foreground">
+                {label}
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  aria-label={dbText("formMoveQuestionUp", { name: label })}
+                  disabled={index === 0}
+                  className="flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-muted disabled:opacity-30"
+                  onClick={() => moveQuestion(index, -1)}
+                >
+                  <IconArrowUp className="size-3.5" />
+                </button>
+                <button
+                  type="button"
+                  aria-label={dbText("formMoveQuestionDown", { name: label })}
+                  disabled={index === questions.length - 1}
+                  className="flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-muted disabled:opacity-30"
+                  onClick={() => moveQuestion(index, 1)}
+                >
+                  <IconArrowDown className="size-3.5" />
+                </button>
+              </div>
+              <div className="col-span-2 flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  role="checkbox"
+                  aria-checked={question.enabled}
+                  className="flex items-center gap-2 text-xs text-muted-foreground"
+                  onClick={() =>
+                    updateQuestion(question.key, {
+                      enabled: !question.enabled,
+                      required: question.enabled ? false : question.required,
+                    })
+                  }
+                >
+                  <span
+                    className={cn(
+                      "flex size-4 items-center justify-center rounded border border-input",
+                      question.enabled &&
+                        "border-primary bg-primary text-primary-foreground",
+                    )}
+                  >
+                    {question.enabled ? <IconCheck className="size-3" /> : null}
+                  </span>
+                  {dbText("formShowQuestion")}
+                </button>
+                <button
+                  type="button"
+                  role="checkbox"
+                  aria-checked={question.required}
+                  disabled={!question.enabled}
+                  className="flex items-center gap-2 text-xs text-muted-foreground disabled:opacity-40"
+                  onClick={() =>
+                    updateQuestion(question.key, {
+                      required: !question.required,
+                    })
+                  }
+                >
+                  <span
+                    className={cn(
+                      "flex size-4 items-center justify-center rounded border border-input",
+                      question.required &&
+                        "border-primary bg-primary text-primary-foreground",
+                    )}
+                  >
+                    {question.required ? (
+                      <IconCheck className="size-3" />
+                    ) : null}
+                  </span>
+                  {dbText("formRequired")}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -7055,7 +10844,10 @@ type DatabasePropertyPickerOption = {
 export function databasePropertyPickerItems(
   properties: DocumentProperty[],
   query: string,
-  { includeName = true }: { includeName?: boolean } = {},
+  {
+    includeName = true,
+    excludeKeys,
+  }: { includeName?: boolean; excludeKeys?: ReadonlySet<string> } = {},
 ): DatabasePropertyPickerOption[] {
   const normalizedQuery = query.trim().toLowerCase();
   const items: DatabasePropertyPickerOption[] = [
@@ -7067,7 +10859,7 @@ export function databasePropertyPickerItems(
       label: property.definition.name,
       type: property.definition.type,
     })),
-  ];
+  ].filter((item) => !excludeKeys?.has(item.key));
 
   if (!normalizedQuery) return items;
   return items.filter((item) =>
@@ -7080,9 +10872,11 @@ export function databasePropertyPickerItems(
 function DatabasePropertyPickerSearch({
   value,
   onChange,
+  placeholder = dbText("searchProperties"),
 }: {
   value: string;
   onChange: (value: string) => void;
+  placeholder?: string;
 }) {
   return (
     <div className="border-b border-border/70 p-1">
@@ -7092,8 +10886,8 @@ function DatabasePropertyPickerSearch({
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => event.stopPropagation()}
-          placeholder={dbText("searchProperties")}
-          aria-label={dbText("searchProperties")}
+          placeholder={placeholder}
+          aria-label={placeholder}
           className="h-6 border-0 bg-transparent px-0 text-xs shadow-none focus-visible:ring-0"
         />
       </div>
@@ -7105,16 +10899,18 @@ function DatabasePropertyPickerItem({
   item,
   selected,
   onSelect,
+  closeOnSelect = false,
 }: {
   item: DatabasePropertyPickerOption;
   selected: boolean;
   onSelect: (key: string, label: string) => void;
+  closeOnSelect?: boolean;
 }) {
   const Icon = item.type === "name" ? IconFileText : TYPE_ICONS[item.type];
   return (
     <DropdownMenuItem
       onSelect={(event) => {
-        event.preventDefault();
+        if (!closeOnSelect) event.preventDefault();
         onSelect(item.key, item.label);
       }}
     >
@@ -7125,23 +10921,84 @@ function DatabasePropertyPickerItem({
   );
 }
 
+function DatabasePropertyPickerMenuItems({
+  properties,
+  selectedKey,
+  includeName,
+  excludeKeys,
+  placeholder,
+  closeOnSelect,
+  onSelect,
+}: {
+  properties: DocumentProperty[];
+  selectedKey?: string;
+  includeName?: boolean;
+  excludeKeys?: ReadonlySet<string>;
+  placeholder?: string;
+  closeOnSelect?: boolean;
+  onSelect: (key: string, label: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const items = databasePropertyPickerItems(properties, query, {
+    includeName,
+    excludeKeys,
+  });
+
+  return (
+    <>
+      <DatabasePropertyPickerSearch
+        value={query}
+        onChange={setQuery}
+        placeholder={placeholder}
+      />
+      <div className="max-h-72 overflow-auto p-1">
+        {items.map((item) => (
+          <DatabasePropertyPickerItem
+            key={item.key}
+            item={item}
+            selected={selectedKey === item.key}
+            closeOnSelect={closeOnSelect}
+            onSelect={onSelect}
+          />
+        ))}
+        {items.length === 0 ? (
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">
+            {dbText("noPropertiesFound")}
+          </div>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
 function DatabasePropertyPickerSubContent({
   properties,
   selectedKey,
   includeName,
+  excludeKeys,
+  placeholder,
   onSelect,
 }: {
   properties: DocumentProperty[];
-  selectedKey: string;
+  selectedKey?: string;
   includeName?: boolean;
+  excludeKeys?: ReadonlySet<string>;
+  placeholder?: string;
   onSelect: (key: string, label: string) => void;
 }) {
   const [query, setQuery] = useState("");
-  const items = databasePropertyPickerItems(properties, query, { includeName });
+  const items = databasePropertyPickerItems(properties, query, {
+    includeName,
+    excludeKeys,
+  });
 
   return (
     <DropdownMenuSubContent className="max-h-80 w-64 overflow-auto">
-      <DatabasePropertyPickerSearch value={query} onChange={setQuery} />
+      <DatabasePropertyPickerSearch
+        value={query}
+        onChange={setQuery}
+        placeholder={placeholder}
+      />
       {items.map((item) => (
         <DatabasePropertyPickerItem
           key={item.key}
@@ -7306,8 +11163,8 @@ function databaseFilterModeLabel(filterMode: DatabaseFilterMode) {
   return filterMode === "or" ? "Any" : "All";
 }
 
-function databaseFilterModePhrase(filterMode: DatabaseFilterMode) {
-  return filterMode === "or" ? "any filter" : "all filters";
+function databaseFilterModeConjunctionLabel(filterMode: DatabaseFilterMode) {
+  return filterMode === "or" ? "Or" : "And";
 }
 
 function DatabaseResultCountFooter({
@@ -7669,7 +11526,7 @@ export function databaseViewHasNoMatchingPages(
   return visibleCount === 0 && (hasSearch || activeFilterCount > 0);
 }
 
-function DatabaseNoMatchingPages({
+export function DatabaseNoMatchingPages({
   label = "No pages match this view",
   className,
   onClear,
@@ -7724,203 +11581,7 @@ function DatabaseConstraintChip({
   );
 }
 
-function DatabaseListView({
-  properties,
-  groupableProperties,
-  items,
-  databaseDocumentId,
-  canEdit,
-  isLoading,
-  isCreating,
-  activeFilters,
-  hasSearch,
-  rowsAreManuallyOrdered,
-  groupByPropertyId,
-  collapsedGroupIds,
-  hideEmptyGroups,
-  onClearResultConstraints,
-  onCreateRow,
-  onCreateGroupedRow,
-  onGroupCollapsedChange,
-  onPreview,
-  onDeletedPreviewItem,
-  onOpenPage,
-}: {
-  properties: DocumentProperty[];
-  groupableProperties: DocumentProperty[];
-  items: ContentDatabaseItem[];
-  databaseDocumentId: string;
-  canEdit: boolean;
-  isLoading: boolean;
-  isCreating: boolean;
-  activeFilters: DatabaseFilter[];
-  hasSearch: boolean;
-  rowsAreManuallyOrdered: boolean;
-  groupByPropertyId: string | null;
-  collapsedGroupIds: string[];
-  hideEmptyGroups: boolean;
-  onClearResultConstraints: () => void;
-  onCreateRow: CreateDatabaseRowHandler;
-  onCreateGroupedRow: (
-    group: DatabaseBoardGroup,
-    title?: string,
-  ) => Promise<ContentDatabaseItem | null>;
-  onGroupCollapsedChange: (groupId: string, collapsed: boolean) => void;
-  onPreview: (item: ContentDatabaseItem) => void;
-  onDeletedPreviewItem: (item: ContentDatabaseItem) => boolean;
-  onOpenPage: (item: ContentDatabaseItem) => void;
-}) {
-  const groups = databaseVisibleGroups(
-    databaseViewItemGroups(items, groupableProperties, groupByPropertyId),
-    hideEmptyGroups,
-  );
-  const grouped = !!databaseViewGroupingProperty(
-    { type: "list", groupByPropertyId },
-    groupableProperties,
-  );
-
-  return (
-    <div className="border-b border-border">
-      <div className="flex min-h-9 items-center gap-2 border-t border-border px-1 text-xs text-muted-foreground">
-        <IconList className="size-4 shrink-0" />
-        <span>List</span>
-      </div>
-      {isLoading ? (
-        <div className="flex h-16 items-center gap-2 px-2 text-sm text-muted-foreground">
-          <Spinner className="size-4" />
-          {dbText("loadingList")}
-        </div>
-      ) : (
-        <div className="grid">
-          {databaseViewHasNoMatchingPages(
-            items.length,
-            hasSearch,
-            activeFilters.length,
-          ) ? (
-            <DatabaseNoMatchingPages onClear={onClearResultConstraints} />
-          ) : null}
-          {grouped
-            ? groups.map((group) => (
-                <DatabaseGroupedListSection
-                  key={group.id}
-                  group={group}
-                  properties={properties}
-                  databaseDocumentId={databaseDocumentId}
-                  canEdit={canEdit}
-                  isCreating={isCreating}
-                  collapsed={databaseGroupIsCollapsed(
-                    collapsedGroupIds,
-                    group.id,
-                  )}
-                  onCreateRow={onCreateGroupedRow}
-                  onCollapsedChange={(collapsed) =>
-                    onGroupCollapsedChange(group.id, collapsed)
-                  }
-                  onPreview={onPreview}
-                  onDeletedPreviewItem={onDeletedPreviewItem}
-                  onOpenPage={onOpenPage}
-                />
-              ))
-            : items.map((item, index) => (
-                <DatabaseListRow
-                  key={item.id}
-                  item={item}
-                  properties={properties}
-                  databaseDocumentId={databaseDocumentId}
-                  canEdit={canEdit}
-                  rowIndex={index}
-                  canReorder={rowsAreManuallyOrdered}
-                  canMoveUp={rowsAreManuallyOrdered && index > 0}
-                  canMoveDown={
-                    rowsAreManuallyOrdered && index < items.length - 1
-                  }
-                  onPreviewItem={onPreview}
-                  onDeletedPreviewItem={onDeletedPreviewItem}
-                  onPreview={() => onPreview(item)}
-                  onOpenPage={() => onOpenPage(item)}
-                />
-              ))}
-          {canEdit && !grouped ? (
-            <NewListRow
-              disabled={isCreating}
-              isPending={isCreating}
-              onCreate={onCreateRow}
-            />
-          ) : null}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function DatabaseGroupedListSection({
-  group,
-  properties,
-  databaseDocumentId,
-  canEdit,
-  isCreating,
-  collapsed,
-  onCreateRow,
-  onCollapsedChange,
-  onPreview,
-  onDeletedPreviewItem,
-  onOpenPage,
-}: {
-  group: DatabaseBoardGroup;
-  properties: DocumentProperty[];
-  databaseDocumentId: string;
-  canEdit: boolean;
-  isCreating: boolean;
-  collapsed: boolean;
-  onCreateRow: (
-    group: DatabaseBoardGroup,
-    title?: string,
-  ) => Promise<ContentDatabaseItem | null>;
-  onCollapsedChange: (collapsed: boolean) => void;
-  onPreview: (item: ContentDatabaseItem) => void;
-  onDeletedPreviewItem: (item: ContentDatabaseItem) => boolean;
-  onOpenPage: (item: ContentDatabaseItem) => void;
-}) {
-  return (
-    <section>
-      <DatabaseGroupHeader
-        group={group}
-        collapsed={collapsed}
-        onCollapsedChange={onCollapsedChange}
-      />
-      {!collapsed ? (
-        <>
-          {group.items.map((item, index) => (
-            <DatabaseListRow
-              key={`${group.id}-${item.id}`}
-              item={item}
-              properties={properties}
-              databaseDocumentId={databaseDocumentId}
-              canEdit={canEdit}
-              rowIndex={index}
-              canReorder={false}
-              canMoveUp={false}
-              canMoveDown={false}
-              onPreviewItem={onPreview}
-              onDeletedPreviewItem={onDeletedPreviewItem}
-              onPreview={() => onPreview(item)}
-              onOpenPage={() => onOpenPage(item)}
-            />
-          ))}
-          {canEdit ? (
-            <NewListRow
-              disabled={isCreating}
-              isPending={isCreating}
-              onCreate={(title) => onCreateRow(group, title)}
-            />
-          ) : null}
-        </>
-      ) : null}
-    </section>
-  );
-}
-
-function DatabaseGroupHeader({
+export function DatabaseGroupHeader({
   group,
   collapsed,
   onCollapsedChange,
@@ -7952,495 +11613,13 @@ function DatabaseGroupHeader({
   );
 }
 
-function DatabaseListRow({
-  item,
-  properties,
-  databaseDocumentId,
-  canEdit,
-  rowIndex,
-  canReorder,
-  canMoveUp,
-  canMoveDown,
-  onPreviewItem,
-  onDeletedPreviewItem,
-  onPreview,
-  onOpenPage,
-}: {
-  item: ContentDatabaseItem;
-  properties: DocumentProperty[];
-  databaseDocumentId: string;
-  canEdit: boolean;
-  rowIndex: number;
-  canReorder: boolean;
-  canMoveUp: boolean;
-  canMoveDown: boolean;
-  onPreviewItem: (item: ContentDatabaseItem) => void;
-  onDeletedPreviewItem: (item: ContentDatabaseItem) => boolean;
-  onPreview: () => void;
-  onOpenPage: () => void;
-}) {
-  const visibleProperties = properties.slice(0, 4);
-
-  return (
-    <div className="group flex min-h-10 items-center gap-2 border-t border-border px-1 py-1 hover:bg-muted/40">
-      <button
-        type="button"
-        className="flex min-w-0 flex-1 items-center gap-2 rounded px-1.5 py-1 text-left hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        onClick={onPreview}
-      >
-        <DatabaseItemPageIcon
-          document={item.document}
-          className="size-4 text-sm"
-          fallbackClassName="size-4"
-        />
-        <span className="min-w-0 truncate text-sm font-medium">
-          {item.document.title || "Untitled"}
-        </span>
-        {visibleProperties.length > 0 ? (
-          <span className="ml-2 hidden min-w-0 flex-wrap items-center gap-1 md:flex">
-            {visibleProperties.map((property) => {
-              const itemProperty =
-                item.properties.find(
-                  (candidate) =>
-                    candidate.definition.id === property.definition.id,
-                ) ?? property;
-              return (
-                <span
-                  key={property.definition.id}
-                  className="max-w-36 truncate rounded bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground"
-                >
-                  {displayValue(itemProperty)}
-                </span>
-              );
-            })}
-          </span>
-        ) : null}
-      </button>
-      {canEdit ? (
-        <RowActionsCell
-          item={item}
-          databaseDocumentId={databaseDocumentId}
-          rowIndex={rowIndex}
-          canReorder={canReorder}
-          canMoveUp={canMoveUp}
-          canMoveDown={canMoveDown}
-          onPreviewItem={onPreviewItem}
-          onDeletedPreviewItem={onDeletedPreviewItem}
-          onOpenPage={onOpenPage}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-function NewListRow({
-  disabled,
-  isPending,
-  onCreate,
-}: {
-  disabled: boolean;
-  isPending: boolean;
-  onCreate: CreateDatabaseRowHandler;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [title, setTitle] = useState("");
-
-  async function submitNewRow() {
-    if (disabled) return;
-    const createdItem = await onCreate(title.trim());
-    setTitle("");
-    if (!createdItem) inputRef.current?.focus();
-  }
-
-  return (
-    <form
-      className="flex h-10 items-center gap-2 border-t border-border px-2 text-sm text-muted-foreground hover:bg-muted/40 focus-within:bg-muted/40 focus-within:text-foreground"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void submitNewRow();
-      }}
-    >
-      {isPending ? (
-        <Spinner className="size-4 shrink-0" />
-      ) : (
-        <IconPlus className="size-4 shrink-0" />
-      )}
-      <input
-        ref={inputRef}
-        value={title}
-        disabled={disabled}
-        aria-label={dbText("newDatabaseListItemTitle")}
-        placeholder={dbText("newPage")}
-        onChange={(event) => setTitle(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            void submitNewRow();
-          }
-          if (event.key === "Escape") {
-            setTitle("");
-            event.currentTarget.blur();
-          }
-        }}
-        className="h-7 min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground focus:placeholder:text-muted-foreground/70"
-      />
-    </form>
-  );
-}
-
-function DatabaseGalleryView({
-  properties,
-  groupableProperties,
-  items,
-  databaseDocumentId,
-  canEdit,
-  isLoading,
-  isCreating,
-  activeFilters,
-  hasSearch,
-  rowsAreManuallyOrdered,
-  groupByPropertyId,
-  collapsedGroupIds,
-  hideEmptyGroups,
-  onClearResultConstraints,
-  onCreateRow,
-  onCreateGroupedRow,
-  onGroupCollapsedChange,
-  onPreview,
-  onDeletedPreviewItem,
-  onOpenPage,
-}: {
-  properties: DocumentProperty[];
-  groupableProperties: DocumentProperty[];
-  items: ContentDatabaseItem[];
-  databaseDocumentId: string;
-  canEdit: boolean;
-  isLoading: boolean;
-  isCreating: boolean;
-  activeFilters: DatabaseFilter[];
-  hasSearch: boolean;
-  rowsAreManuallyOrdered: boolean;
-  groupByPropertyId: string | null;
-  collapsedGroupIds: string[];
-  hideEmptyGroups: boolean;
-  onClearResultConstraints: () => void;
-  onCreateRow: CreateDatabaseRowHandler;
-  onCreateGroupedRow: (
-    group: DatabaseBoardGroup,
-    title?: string,
-  ) => Promise<ContentDatabaseItem | null>;
-  onGroupCollapsedChange: (groupId: string, collapsed: boolean) => void;
-  onPreview: (item: ContentDatabaseItem) => void;
-  onDeletedPreviewItem: (item: ContentDatabaseItem) => boolean;
-  onOpenPage: (item: ContentDatabaseItem) => void;
-}) {
-  const groups = databaseVisibleGroups(
-    databaseViewItemGroups(items, groupableProperties, groupByPropertyId),
-    hideEmptyGroups,
-  );
-  const grouped = !!databaseViewGroupingProperty(
-    { type: "gallery", groupByPropertyId },
-    groupableProperties,
-  );
-
-  return (
-    <div className="border-b border-border">
-      <div className="flex min-h-9 items-center gap-2 border-t border-border px-1 text-xs text-muted-foreground">
-        <IconLayoutGrid className="size-4 shrink-0" />
-        <span>Gallery</span>
-      </div>
-      {isLoading ? (
-        <div className="flex h-16 items-center gap-2 px-2 text-sm text-muted-foreground">
-          <Spinner className="size-4" />
-          {dbText("loadingGallery")}
-        </div>
-      ) : (
-        <div className="content-database-gallery-grid grid gap-3 px-1 py-3">
-          {databaseViewHasNoMatchingPages(
-            items.length,
-            hasSearch,
-            activeFilters.length,
-          ) ? (
-            <DatabaseNoMatchingPages
-              className="col-span-full"
-              onClear={onClearResultConstraints}
-            />
-          ) : null}
-          {grouped
-            ? groups.map((group) => (
-                <DatabaseGroupedGallerySection
-                  key={group.id}
-                  group={group}
-                  properties={properties}
-                  databaseDocumentId={databaseDocumentId}
-                  canEdit={canEdit}
-                  isCreating={isCreating}
-                  collapsed={databaseGroupIsCollapsed(
-                    collapsedGroupIds,
-                    group.id,
-                  )}
-                  onCreateRow={onCreateGroupedRow}
-                  onCollapsedChange={(collapsed) =>
-                    onGroupCollapsedChange(group.id, collapsed)
-                  }
-                  onPreview={onPreview}
-                  onDeletedPreviewItem={onDeletedPreviewItem}
-                  onOpenPage={onOpenPage}
-                />
-              ))
-            : items.map((item, index) => (
-                <DatabaseGalleryCard
-                  key={item.id}
-                  item={item}
-                  properties={properties}
-                  databaseDocumentId={databaseDocumentId}
-                  canEdit={canEdit}
-                  rowIndex={index}
-                  canReorder={rowsAreManuallyOrdered}
-                  canMoveUp={rowsAreManuallyOrdered && index > 0}
-                  canMoveDown={
-                    rowsAreManuallyOrdered && index < items.length - 1
-                  }
-                  onPreviewItem={onPreview}
-                  onDeletedPreviewItem={onDeletedPreviewItem}
-                  onPreview={() => onPreview(item)}
-                  onOpenPage={() => onOpenPage(item)}
-                />
-              ))}
-          {canEdit && !grouped ? (
-            <NewGalleryCard
-              disabled={isCreating}
-              isPending={isCreating}
-              onCreate={onCreateRow}
-            />
-          ) : null}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function DatabaseGroupedGallerySection({
-  group,
-  properties,
-  databaseDocumentId,
-  canEdit,
-  isCreating,
-  collapsed,
-  onCreateRow,
-  onCollapsedChange,
-  onPreview,
-  onDeletedPreviewItem,
-  onOpenPage,
-}: {
-  group: DatabaseBoardGroup;
-  properties: DocumentProperty[];
-  databaseDocumentId: string;
-  canEdit: boolean;
-  isCreating: boolean;
-  collapsed: boolean;
-  onCreateRow: (
-    group: DatabaseBoardGroup,
-    title?: string,
-  ) => Promise<ContentDatabaseItem | null>;
-  onCollapsedChange: (collapsed: boolean) => void;
-  onPreview: (item: ContentDatabaseItem) => void;
-  onDeletedPreviewItem: (item: ContentDatabaseItem) => boolean;
-  onOpenPage: (item: ContentDatabaseItem) => void;
-}) {
-  return (
-    <section className="col-span-full grid gap-3">
-      <DatabaseGroupHeader
-        group={group}
-        collapsed={collapsed}
-        onCollapsedChange={onCollapsedChange}
-      />
-      {!collapsed ? (
-        <div className="content-database-gallery-grid grid gap-3">
-          {group.items.map((item, index) => (
-            <DatabaseGalleryCard
-              key={`${group.id}-${item.id}`}
-              item={item}
-              properties={properties}
-              databaseDocumentId={databaseDocumentId}
-              canEdit={canEdit}
-              rowIndex={index}
-              canReorder={false}
-              canMoveUp={false}
-              canMoveDown={false}
-              onPreviewItem={onPreview}
-              onDeletedPreviewItem={onDeletedPreviewItem}
-              onPreview={() => onPreview(item)}
-              onOpenPage={() => onOpenPage(item)}
-            />
-          ))}
-          {canEdit ? (
-            <NewGalleryCard
-              disabled={isCreating}
-              isPending={isCreating}
-              onCreate={(title) => onCreateRow(group, title)}
-            />
-          ) : null}
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-function DatabaseGalleryCard({
-  item,
-  properties,
-  databaseDocumentId,
-  canEdit,
-  rowIndex,
-  canReorder,
-  canMoveUp,
-  canMoveDown,
-  onPreviewItem,
-  onDeletedPreviewItem,
-  onPreview,
-  onOpenPage,
-}: {
-  item: ContentDatabaseItem;
-  properties: DocumentProperty[];
-  databaseDocumentId: string;
-  canEdit: boolean;
-  rowIndex: number;
-  canReorder: boolean;
-  canMoveUp: boolean;
-  canMoveDown: boolean;
-  onPreviewItem: (item: ContentDatabaseItem) => void;
-  onDeletedPreviewItem: (item: ContentDatabaseItem) => boolean;
-  onPreview: () => void;
-  onOpenPage: () => void;
-}) {
-  const visibleProperties = properties.slice(0, 4);
-
-  return (
-    <div className="group overflow-hidden rounded-md border border-border bg-background shadow-sm transition-colors hover:bg-accent/40">
-      <button
-        type="button"
-        className="block w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        onClick={onPreview}
-      >
-        <div className="flex aspect-[5/3] items-center justify-center border-b border-border bg-muted/45">
-          <DatabaseItemPageIcon
-            document={item.document}
-            className="size-10 text-4xl"
-            fallbackClassName="size-8 text-muted-foreground/70"
-          />
-        </div>
-        <div className="grid gap-2 p-3">
-          <span className="min-w-0 truncate text-sm font-medium">
-            {item.document.title || "Untitled"}
-          </span>
-          {visibleProperties.length > 0 ? (
-            <span className="grid gap-1">
-              {visibleProperties.map((property) => {
-                const itemProperty =
-                  item.properties.find(
-                    (candidate) =>
-                      candidate.definition.id === property.definition.id,
-                  ) ?? property;
-                const Icon = TYPE_ICONS[property.definition.type];
-                return (
-                  <span
-                    key={property.definition.id}
-                    className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
-                  >
-                    <Icon className="size-3.5 shrink-0" />
-                    <span className="truncate">
-                      {displayValue(itemProperty)}
-                    </span>
-                  </span>
-                );
-              })}
-            </span>
-          ) : null}
-        </div>
-      </button>
-      {canEdit ? (
-        <div className="flex justify-end border-t border-border/70 px-2 py-1">
-          <RowActionsCell
-            item={item}
-            databaseDocumentId={databaseDocumentId}
-            rowIndex={rowIndex}
-            canReorder={canReorder}
-            canMoveUp={canMoveUp}
-            canMoveDown={canMoveDown}
-            onPreviewItem={onPreviewItem}
-            onDeletedPreviewItem={onDeletedPreviewItem}
-            onOpenPage={onOpenPage}
-          />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function NewGalleryCard({
-  disabled,
-  isPending,
-  onCreate,
-}: {
-  disabled: boolean;
-  isPending: boolean;
-  onCreate: CreateDatabaseRowHandler;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [title, setTitle] = useState("");
-
-  async function submitNewCard() {
-    if (disabled) return;
-    const createdItem = await onCreate(title.trim());
-    setTitle("");
-    if (!createdItem) inputRef.current?.focus();
-  }
-
-  return (
-    <form
-      className="flex min-h-40 flex-col justify-between rounded-md border border-dashed border-border bg-muted/20 p-3 text-sm text-muted-foreground hover:bg-muted/35 focus-within:bg-muted/35"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void submitNewCard();
-      }}
-    >
-      <div className="flex items-center gap-2">
-        {isPending ? (
-          <Spinner className="size-4 shrink-0" />
-        ) : (
-          <IconPlus className="size-4 shrink-0" />
-        )}
-        <input
-          ref={inputRef}
-          value={title}
-          disabled={disabled}
-          aria-label={dbText("newDatabaseGalleryCardTitle")}
-          placeholder={dbText("newPage")}
-          onChange={(event) => setTitle(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              void submitNewCard();
-            }
-            if (event.key === "Escape") {
-              setTitle("");
-              event.currentTarget.blur();
-            }
-          }}
-          className="h-7 min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground focus:placeholder:text-muted-foreground/70"
-        />
-      </div>
-    </form>
-  );
-}
-
 function DatabaseCalendarView({
   activeView,
   properties,
   items,
   databaseDocumentId,
   canEdit,
+  canCreateItems,
   isLoading,
   isCreating,
   activeFilters,
@@ -8460,6 +11639,7 @@ function DatabaseCalendarView({
   items: ContentDatabaseItem[];
   databaseDocumentId: string;
   canEdit: boolean;
+  canCreateItems: boolean;
   isLoading: boolean;
   isCreating: boolean;
   activeFilters: DatabaseFilter[];
@@ -8498,6 +11678,7 @@ function DatabaseCalendarView({
     );
   const canCreateOnDay =
     canEdit &&
+    canCreateItems &&
     dateProperty?.editable &&
     dateProperty.definition.type === "date";
   const monthLabel = month.toLocaleDateString(undefined, {
@@ -8707,7 +11888,7 @@ function DatabaseCalendarView({
   );
 }
 
-function DatabaseDateViewNoDateSection({
+export function DatabaseDateViewNoDateSection({
   items,
   databaseDocumentId,
   properties,
@@ -8873,540 +12054,6 @@ function NewCalendarCard({
   );
 }
 
-function DatabaseTimelineView({
-  activeView,
-  properties,
-  items,
-  databaseDocumentId,
-  canEdit,
-  isLoading,
-  isCreating,
-  activeFilters,
-  hasSearch,
-  dateProperty,
-  month,
-  onClearResultConstraints,
-  onMonthChange,
-  onDatePropertyChange,
-  onEndDatePropertyChange,
-  onCreateCard,
-  onPreview,
-  onDeletedPreviewItem,
-  onOpenPage,
-}: {
-  activeView: ContentDatabaseView;
-  properties: DocumentProperty[];
-  items: ContentDatabaseItem[];
-  databaseDocumentId: string;
-  canEdit: boolean;
-  isLoading: boolean;
-  isCreating: boolean;
-  activeFilters: DatabaseFilter[];
-  hasSearch: boolean;
-  dateProperty: DocumentProperty | null;
-  month: Date;
-  onClearResultConstraints: () => void;
-  onMonthChange: (month: Date) => void;
-  onDatePropertyChange: (propertyId: string | null) => void;
-  onEndDatePropertyChange: (propertyId: string | null) => void;
-  onCreateCard: (
-    dateKey: string,
-    title?: string,
-  ) => Promise<ContentDatabaseItem | null>;
-  onPreview: (item: ContentDatabaseItem) => void;
-  onDeletedPreviewItem: (item: ContentDatabaseItem) => boolean;
-  onOpenPage: (item: ContentDatabaseItem) => void;
-}) {
-  const dateProperties = databaseCalendarDateProperties(properties);
-  const timelineDays = databaseTimelineDays(month);
-  const endDateProperty = databaseTimelineEndDateProperty(
-    activeView,
-    properties,
-    dateProperty?.definition.id ?? null,
-  );
-  const timelineSpans = databaseTimelineItemSpans(
-    items,
-    properties,
-    dateProperty?.definition.id ?? null,
-    endDateProperty?.definition.id ?? null,
-    timelineDays,
-  );
-  const noDateItems = databaseItemsWithoutDateValue(
-    items,
-    properties,
-    dateProperty?.definition.id ?? null,
-  );
-  const visibleProperties = properties
-    .filter((property) =>
-      isDatabasePropertyVisibleInView(property, items, activeView),
-    )
-    .filter(
-      (property) =>
-        property.definition.id !== dateProperty?.definition.id &&
-        property.definition.id !== endDateProperty?.definition.id,
-    );
-  const canCreateOnDay =
-    canEdit &&
-    dateProperty?.editable &&
-    dateProperty.definition.type === "date";
-  const rangeLabel = databaseTimelineRangeLabel(timelineDays);
-
-  function changeMonth(offset: number) {
-    onMonthChange(
-      startOfMonth(new Date(month.getFullYear(), month.getMonth() + offset)),
-    );
-  }
-
-  return (
-    <div className="border-b border-border">
-      <div className="flex min-h-9 flex-wrap items-center justify-between gap-2 border-t border-border px-1 py-1">
-        <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-          <IconTimeline className="size-4 shrink-0" />
-          <span className="truncate">{rangeLabel}</span>
-        </div>
-        <div className="flex min-w-0 items-center gap-1">
-          {dateProperties.length > 0 ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 max-w-48 gap-1.5 px-2 text-xs text-muted-foreground"
-                >
-                  <IconCalendarDue className="size-3.5 shrink-0" />
-                  <span className="truncate">
-                    {dateProperty?.definition.name ?? "Date"}
-                  </span>
-                  <IconChevronDown className="size-3.5 shrink-0" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuLabel className="text-xs text-muted-foreground">
-                  {dbText("startDate")}
-                </DropdownMenuLabel>
-                {dateProperties.map((property) => {
-                  const Icon = TYPE_ICONS[property.definition.type];
-                  return (
-                    <DropdownMenuItem
-                      key={property.definition.id}
-                      onSelect={(event) => {
-                        event.preventDefault();
-                        onDatePropertyChange(property.definition.id);
-                      }}
-                    >
-                      <Icon className="mr-2 size-4 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate">
-                        {property.definition.name}
-                      </span>
-                      {dateProperty?.definition.id ===
-                      property.definition.id ? (
-                        <IconCheck className="size-4 text-muted-foreground" />
-                      ) : null}
-                    </DropdownMenuItem>
-                  );
-                })}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : null}
-          {dateProperties.length > 0 ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 max-w-48 gap-1.5 px-2 text-xs text-muted-foreground"
-                >
-                  <IconTimeline className="size-3.5 shrink-0" />
-                  <span className="truncate">
-                    End: {endDateProperty?.definition.name ?? "None"}
-                  </span>
-                  <IconChevronDown className="size-3.5 shrink-0" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuLabel className="text-xs text-muted-foreground">
-                  {dbText("endDate")}
-                </DropdownMenuLabel>
-                <DropdownMenuItem
-                  onSelect={(event) => {
-                    event.preventDefault();
-                    onEndDatePropertyChange(null);
-                  }}
-                >
-                  <span className="min-w-0 flex-1 truncate">
-                    {dbText("noEndDate")}
-                  </span>
-                  {!endDateProperty ? (
-                    <IconCheck className="size-4 text-muted-foreground" />
-                  ) : null}
-                </DropdownMenuItem>
-                {dateProperties
-                  .filter(
-                    (property) =>
-                      property.definition.id !== dateProperty?.definition.id,
-                  )
-                  .map((property) => {
-                    const Icon = TYPE_ICONS[property.definition.type];
-                    return (
-                      <DropdownMenuItem
-                        key={property.definition.id}
-                        onSelect={(event) => {
-                          event.preventDefault();
-                          onEndDatePropertyChange(property.definition.id);
-                        }}
-                      >
-                        <Icon className="mr-2 size-4 text-muted-foreground" />
-                        <span className="min-w-0 flex-1 truncate">
-                          {property.definition.name}
-                        </span>
-                        {endDateProperty?.definition.id ===
-                        property.definition.id ? (
-                          <IconCheck className="size-4 text-muted-foreground" />
-                        ) : null}
-                      </DropdownMenuItem>
-                    );
-                  })}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : null}
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-7 px-2 text-xs text-muted-foreground"
-            onClick={() => onMonthChange(startOfMonth(new Date()))}
-          >
-            <IconCalendarEvent className="mr-1 size-3.5" />
-            Today
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-7 text-muted-foreground"
-            aria-label={dbText("previousTimelineRange")}
-            onClick={() => changeMonth(-1)}
-          >
-            <IconArrowUp className="size-3.5 -rotate-90" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-7 text-muted-foreground"
-            aria-label={dbText("nextTimelineRange")}
-            onClick={() => changeMonth(1)}
-          >
-            <IconArrowUp className="size-3.5 rotate-90" />
-          </Button>
-        </div>
-      </div>
-
-      {isLoading ? (
-        <div className="flex h-16 items-center gap-2 px-2 text-sm text-muted-foreground">
-          <Spinner className="size-4" />
-          {dbText("loadingTimeline")}
-        </div>
-      ) : dateProperties.length === 0 ? (
-        <div className="flex min-h-24 items-center justify-between gap-3 px-2 py-4 text-sm text-muted-foreground">
-          <span>{dbText("addADatePropertyToUseTimelineView")}</span>
-          {canEdit ? <AddProperty documentId={databaseDocumentId} /> : null}
-        </div>
-      ) : (
-        <>
-          <div className="overflow-x-auto border-t border-border">
-            <div
-              className="grid min-w-max"
-              style={{
-                gridTemplateColumns: `repeat(${timelineDays.length}, minmax(8rem, 1fr))`,
-                gridTemplateRows: `auto repeat(${Math.max(timelineSpans.length, 1)}, minmax(3.25rem, auto)) auto minmax(0.75rem, auto)`,
-              }}
-            >
-              {timelineDays.map((day, index) => {
-                const dateKey = calendarDateKey(day);
-                const inMonth = day.getMonth() === month.getMonth();
-                return (
-                  <div
-                    key={dateKey}
-                    className={cn(
-                      "border-r border-border bg-background last:border-r-0",
-                      !inMonth && "bg-muted/25",
-                    )}
-                    style={{
-                      gridColumn: index + 1,
-                      gridRow: `1 / ${Math.max(timelineSpans.length, 1) + 4}`,
-                    }}
-                    aria-label={`${dateKey} timeline day`}
-                  />
-                );
-              })}
-              {timelineDays.map((day, index) => {
-                const dateKey = calendarDateKey(day);
-                const inMonth = day.getMonth() === month.getMonth();
-                return (
-                  <div
-                    key={`${dateKey}-header`}
-                    className={cn(
-                      "sticky top-0 z-10 grid gap-0.5 border-r border-b border-border bg-background px-2 py-2 last:border-r-0",
-                      !inMonth && "bg-muted/70",
-                    )}
-                    style={{ gridColumn: index + 1, gridRow: 1 }}
-                  >
-                    <span className="text-[11px] uppercase text-muted-foreground">
-                      {day.toLocaleDateString(undefined, { weekday: "short" })}
-                    </span>
-                    <span
-                      className={cn(
-                        "w-fit rounded px-1.5 py-0.5 text-sm font-medium",
-                        dateKey === calendarDateKey(new Date()) &&
-                          "bg-foreground text-background",
-                      )}
-                    >
-                      {day.toLocaleDateString(undefined, {
-                        month: "short",
-                        day: "numeric",
-                      })}
-                    </span>
-                  </div>
-                );
-              })}
-              {timelineSpans.map((span, index) => (
-                <div
-                  key={span.item.id}
-                  className="z-[1] p-1.5"
-                  style={{
-                    gridColumn: `${span.startIndex + 1} / ${span.endIndex + 2}`,
-                    gridRow: index + 2,
-                  }}
-                >
-                  <DatabaseTimelineCard
-                    item={span.item}
-                    databaseDocumentId={databaseDocumentId}
-                    dateLabel={span.label}
-                    properties={visibleProperties}
-                    canEdit={canEdit}
-                    onPreviewItem={onPreview}
-                    onDeletedPreviewItem={onDeletedPreviewItem}
-                    onPreview={() => onPreview(span.item)}
-                    onOpenPage={() => onOpenPage(span.item)}
-                  />
-                </div>
-              ))}
-              {databaseViewHasNoMatchingPages(
-                items.length,
-                hasSearch,
-                activeFilters.length,
-              ) ? (
-                <div
-                  className="z-[1] m-1.5"
-                  style={{
-                    gridColumn: `1 / ${timelineDays.length + 1}`,
-                    gridRow: 2,
-                  }}
-                >
-                  <DatabaseNoMatchingPages
-                    className="rounded border border-dashed border-border/70 bg-background/80"
-                    onClear={onClearResultConstraints}
-                  />
-                </div>
-              ) : null}
-              {canCreateOnDay
-                ? timelineDays.map((day, index) => {
-                    const dateKey = calendarDateKey(day);
-                    return (
-                      <div
-                        key={`${dateKey}-new`}
-                        className="z-[1] p-1.5"
-                        style={{
-                          gridColumn: index + 1,
-                          gridRow: Math.max(timelineSpans.length, 1) + 2,
-                        }}
-                      >
-                        <NewTimelineCard
-                          dateKey={dateKey}
-                          disabled={isCreating}
-                          isPending={isCreating}
-                          onCreate={onCreateCard}
-                        />
-                      </div>
-                    );
-                  })
-                : null}
-              <div
-                className="min-h-3"
-                style={{
-                  gridColumn: `1 / ${timelineDays.length + 1}`,
-                  gridRow: Math.max(timelineSpans.length, 1) + 3,
-                }}
-              />
-            </div>
-          </div>
-          <DatabaseDateViewNoDateSection
-            items={noDateItems}
-            databaseDocumentId={databaseDocumentId}
-            properties={visibleProperties}
-            canEdit={canEdit}
-            onPreview={onPreview}
-            onDeletedPreviewItem={onDeletedPreviewItem}
-            onOpenPage={onOpenPage}
-          />
-        </>
-      )}
-    </div>
-  );
-}
-
-function DatabaseTimelineCard({
-  item,
-  databaseDocumentId,
-  dateLabel,
-  properties,
-  canEdit,
-  onPreviewItem,
-  onDeletedPreviewItem,
-  onPreview,
-  onOpenPage,
-}: {
-  item: ContentDatabaseItem;
-  databaseDocumentId: string;
-  dateLabel: string;
-  properties: DocumentProperty[];
-  canEdit: boolean;
-  onPreviewItem: (item: ContentDatabaseItem) => void;
-  onDeletedPreviewItem: (item: ContentDatabaseItem) => boolean;
-  onPreview: () => void;
-  onOpenPage: () => void;
-}) {
-  const visibleProperties = properties.slice(0, 2);
-
-  return (
-    <div className="group/card rounded-md border border-border bg-background px-2 py-2 text-xs shadow-sm transition-colors hover:bg-accent/60">
-      <div className="flex min-w-0 items-start gap-1">
-        <button
-          type="button"
-          className="grid min-w-0 flex-1 gap-1 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={onPreview}
-        >
-          <span className="flex min-w-0 items-center gap-1.5 font-medium">
-            <DatabaseItemPageIcon
-              document={item.document}
-              className="size-3.5 text-xs"
-              fallbackClassName="size-3.5"
-            />
-            <span className="truncate">
-              {item.document.title || "Untitled"}
-            </span>
-          </span>
-          <span className="truncate text-[11px] text-muted-foreground">
-            {dateLabel}
-          </span>
-          {visibleProperties.length > 0 ? (
-            <span className="grid gap-0.5">
-              {visibleProperties.map((property) => {
-                const itemProperty =
-                  item.properties.find(
-                    (candidate) =>
-                      candidate.definition.id === property.definition.id,
-                  ) ?? property;
-                const Icon = TYPE_ICONS[property.definition.type];
-                return (
-                  <span
-                    key={property.definition.id}
-                    className="flex min-w-0 items-center gap-1 text-muted-foreground"
-                  >
-                    <Icon className="size-3 shrink-0" />
-                    <span className="truncate">
-                      {displayValue(itemProperty)}
-                    </span>
-                  </span>
-                );
-              })}
-            </span>
-          ) : null}
-        </button>
-        {canEdit ? (
-          <RowActionsCell
-            item={item}
-            databaseDocumentId={databaseDocumentId}
-            rowIndex={0}
-            canReorder={false}
-            canMoveUp={false}
-            canMoveDown={false}
-            showReorderActions={false}
-            onPreviewItem={onPreviewItem}
-            onDeletedPreviewItem={onDeletedPreviewItem}
-            onOpenPage={onOpenPage}
-          />
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function NewTimelineCard({
-  dateKey,
-  disabled,
-  isPending,
-  onCreate,
-}: {
-  dateKey: string;
-  disabled: boolean;
-  isPending: boolean;
-  onCreate: (
-    dateKey: string,
-    title?: string,
-  ) => Promise<ContentDatabaseItem | null>;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [title, setTitle] = useState("");
-
-  async function submitNewCard() {
-    if (disabled) return;
-    const createdItem = await onCreate(dateKey, title.trim());
-    setTitle("");
-    if (!createdItem) inputRef.current?.focus();
-  }
-
-  return (
-    <form
-      className="rounded border border-dashed border-transparent bg-transparent transition-colors focus-within:border-border focus-within:bg-background/80 hover:bg-background/60"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void submitNewCard();
-      }}
-    >
-      <label className="flex h-7 min-w-0 items-center gap-1.5 px-1 text-xs text-muted-foreground">
-        {isPending ? (
-          <Spinner className="size-3.5 shrink-0" />
-        ) : (
-          <IconPlus className="size-3.5 shrink-0" />
-        )}
-        <input
-          ref={inputRef}
-          value={title}
-          disabled={disabled}
-          aria-label={`New ${dateKey} timeline card title`}
-          placeholder={dbText("newPage")}
-          onChange={(event) => setTitle(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              void submitNewCard();
-            }
-            if (event.key === "Escape") {
-              setTitle("");
-              event.currentTarget.blur();
-            }
-          }}
-          className="h-6 min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground focus:placeholder:text-muted-foreground/70"
-        />
-      </label>
-    </form>
-  );
-}
-
 const BOARD_UNGROUPED_VALUE = "__ungrouped__";
 
 export interface DatabaseBoardGroup {
@@ -9424,6 +12071,7 @@ function DatabaseBoardView({
   groupProperty,
   databaseDocumentId,
   canEdit,
+  canCreateItems,
   isLoading,
   isCreating,
   isMoving,
@@ -9447,6 +12095,7 @@ function DatabaseBoardView({
   groupProperty: DocumentProperty | null;
   databaseDocumentId: string;
   canEdit: boolean;
+  canCreateItems: boolean;
   isLoading: boolean;
   isCreating: boolean;
   isMoving: boolean;
@@ -9753,7 +12402,7 @@ function DatabaseBoardView({
                           {dbText("noMatchingPages")}
                         </div>
                       ) : null}
-                      {canEdit ? (
+                      {canEdit && canCreateItems ? (
                         <NewBoardCard
                           group={group}
                           disabled={isCreating}
@@ -10185,7 +12834,62 @@ function NewBoardCard({
   );
 }
 
+function WorkspaceSourceMenuRow({
+  label,
+  properties,
+  columnWidths,
+  rowDensity,
+  actionColumnWidth = ACTION_COLUMN_WIDTH,
+  propertyValues,
+}: {
+  label: string;
+  properties: DocumentProperty[];
+  columnWidths: Record<string, number>;
+  rowDensity: DatabaseRowDensity;
+  actionColumnWidth?: number;
+  propertyValues?: Record<string, DocumentPropertyValue>;
+}) {
+  return (
+    <WorkspaceSourceMenu propertyValues={propertyValues}>
+      <button
+        type="button"
+        aria-label={label}
+        className={cn(
+          "grid w-full border-t border-border/35 text-left text-sm text-muted-foreground transition-colors hover:bg-muted/35 hover:text-foreground focus-visible:bg-muted/35 focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+          databaseTableRowDensityClass(rowDensity),
+        )}
+        style={{
+          gridTemplateColumns: databaseGridColumns(
+            properties,
+            true,
+            columnWidths,
+            actionColumnWidth,
+          ),
+        }}
+      >
+        <span
+          className={cn(
+            "flex min-w-0 items-center gap-2 border-r border-border/35",
+            databaseTableCellDensityClass(rowDensity),
+          )}
+        >
+          <IconPlus className="size-4 shrink-0" />
+          <span className="h-7 min-w-0 flex-1 truncate leading-7">{label}</span>
+        </span>
+        {properties.map((property) => (
+          <span
+            key={property.definition.id}
+            className="border-r border-border/35 last:border-r-0"
+          />
+        ))}
+        <span />
+      </button>
+    </WorkspaceSourceMenu>
+  );
+}
+
 function NewDatabaseRow({
+  label,
   properties,
   columnWidths,
   rowDensity,
@@ -10194,6 +12898,7 @@ function NewDatabaseRow({
   onCreate,
   actionColumnWidth = ACTION_COLUMN_WIDTH,
 }: {
+  label: string;
   properties: DocumentProperty[];
   columnWidths: Record<string, number>;
   rowDensity: DatabaseRowDensity;
@@ -10210,10 +12915,10 @@ function NewDatabaseRow({
   return (
     <button
       type="button"
-      aria-label={dbText("newDatabaseRow")}
+      aria-label={label}
       disabled={disabled}
       className={cn(
-        "grid w-full border-t border-border/45 text-left text-sm text-muted-foreground transition-colors hover:bg-muted/35 hover:text-foreground focus-visible:bg-muted/35 focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60",
+        "grid w-full border-t border-border/35 text-left text-sm text-muted-foreground transition-colors hover:bg-muted/35 hover:text-foreground focus-visible:bg-muted/35 focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60",
         databaseTableRowDensityClass(rowDensity),
       )}
       style={{
@@ -10228,7 +12933,7 @@ function NewDatabaseRow({
     >
       <span
         className={cn(
-          "flex min-w-0 items-center gap-2 border-r border-border/45",
+          "flex min-w-0 items-center gap-2 border-r border-border/35",
           databaseTableCellDensityClass(rowDensity),
         )}
       >
@@ -10237,14 +12942,12 @@ function NewDatabaseRow({
         ) : (
           <IconPlus className="size-4 shrink-0" />
         )}
-        <span className="h-7 min-w-0 flex-1 truncate leading-7">
-          {dbText("newPage")}
-        </span>
+        <span className="h-7 min-w-0 flex-1 truncate leading-7">{label}</span>
       </span>
       {properties.map((property) => (
         <span
           key={property.definition.id}
-          className="border-r border-border/45 last:border-r-0"
+          className="border-r border-border/35 last:border-r-0"
         />
       ))}
       <span />
@@ -10264,7 +12967,7 @@ function DatabaseBlankDefaultRows({
       {Array.from({ length: rowCount }).map((_, index) => (
         <div
           key={index}
-          className="grid h-9 border-t border-border/35"
+          className="grid h-8 border-t border-border/30"
           style={{
             gridTemplateColumns: databaseGridColumns(
               [],
@@ -10351,6 +13054,7 @@ export function createDatabaseView(
     wrapCells: values.wrapCells === true,
     rowDensity: normalizeClientDatabaseRowDensity(values.rowDensity),
     openPagesIn: normalizeClientDatabaseOpenPagesIn(values.openPagesIn),
+    formQuestions: normalizeClientDatabaseFormQuestions(values.formQuestions),
   };
 }
 
@@ -10505,6 +13209,7 @@ export function duplicateDatabaseView(
       wrapCells: view.wrapCells,
       rowDensity: view.rowDensity,
       openPagesIn: view.openPagesIn,
+      formQuestions: view.formQuestions,
     },
     view.type,
   );
@@ -10592,16 +13297,22 @@ function normalizeClientDatabaseView(
   value: Partial<ContentDatabaseView> | null | undefined,
 ) {
   if (!value || typeof value.id !== "string" || !value.id.trim()) return null;
+  const retiredSidebar = value.type === "sidebar";
   const type =
     value.type === "board" ||
     value.type === "list" ||
     value.type === "gallery" ||
     value.type === "calendar" ||
-    value.type === "timeline"
+    value.type === "timeline" ||
+    value.type === "form"
       ? value.type
       : "table";
   return createDatabaseView(
-    typeof value.name === "string" ? value.name : databaseViewDefaultName(type),
+    typeof value.name === "string"
+      ? retiredSidebar && value.name.trim() === "Sidebar"
+        ? "Table"
+        : value.name
+      : databaseViewDefaultName(type),
     value.id,
     {
       sorts: Array.isArray(value.sorts)
@@ -10632,9 +13343,29 @@ function normalizeClientDatabaseView(
       wrapCells: value.wrapCells === true,
       rowDensity: normalizeClientDatabaseRowDensity(value.rowDensity),
       openPagesIn: normalizeClientDatabaseOpenPagesIn(value.openPagesIn),
+      formQuestions: normalizeClientDatabaseFormQuestions(value.formQuestions),
     },
     type,
   );
+}
+
+function normalizeClientDatabaseFormQuestions(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const question = candidate as Partial<ContentDatabaseFormQuestion>;
+    const key = typeof question.key === "string" ? question.key.trim() : "";
+    if (!key || seen.has(key)) return [];
+    seen.add(key);
+    return [
+      {
+        key,
+        enabled: question.enabled !== false,
+        required: question.required === true,
+      },
+    ];
+  });
 }
 
 function normalizeClientCalculations(value: unknown) {
@@ -10727,6 +13458,143 @@ function databaseViewStateKey(
   return JSON.stringify({ databaseId, viewConfig });
 }
 
+function normalizePersonalDatabaseViewOverrides(
+  value: ContentDatabasePersonalViewOverrides | null | undefined,
+): PersonalDatabaseViewOverrides | null {
+  try {
+    if (!value) return null;
+    const parsed = value as Partial<PersonalDatabaseViewOverrides>;
+    if (
+      parsed.version !== PERSONAL_DATABASE_VIEW_OVERRIDES_VERSION ||
+      !Array.isArray(parsed.views)
+    ) {
+      return null;
+    }
+
+    return {
+      version: PERSONAL_DATABASE_VIEW_OVERRIDES_VERSION,
+      activeViewId:
+        typeof parsed.activeViewId === "string"
+          ? parsed.activeViewId
+          : undefined,
+      views: parsed.views
+        .filter((view) => typeof view?.id === "string")
+        .map((view) => ({
+          id: view.id,
+          sorts: Array.isArray(view.sorts)
+            ? view.sorts.filter(isDatabaseSort)
+            : [],
+          filters: Array.isArray(view.filters)
+            ? view.filters.filter(isDatabaseFilter)
+            : [],
+          filterMode: normalizeClientDatabaseFilterMode(view.filterMode),
+        })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function personalDatabaseViewOverridesFromConfig(
+  viewConfig: ContentDatabaseViewConfig,
+): PersonalDatabaseViewOverrides {
+  const normalized = normalizeClientDatabaseViewConfig(viewConfig);
+  return {
+    version: PERSONAL_DATABASE_VIEW_OVERRIDES_VERSION,
+    activeViewId: normalized.activeViewId,
+    views: normalized.views.map((view) => ({
+      id: view.id,
+      sorts: view.sorts,
+      filters: view.filters,
+      filterMode: view.filterMode ?? "and",
+    })),
+  };
+}
+
+export function applyPersonalDatabaseViewOverrides(
+  savedViewConfig: ContentDatabaseViewConfig,
+  overrides: PersonalDatabaseViewOverrides | null,
+) {
+  const saved = normalizeClientDatabaseViewConfig(savedViewConfig);
+  if (!overrides) return saved;
+
+  const overridesByViewId = new Map(
+    overrides.views.map((view) => [view.id, view]),
+  );
+  return normalizeClientDatabaseViewConfig({
+    ...saved,
+    activeViewId: saved.views.some((view) => view.id === overrides.activeViewId)
+      ? overrides.activeViewId
+      : saved.activeViewId,
+    views: saved.views.map((view) => {
+      const override = overridesByViewId.get(view.id);
+      if (!override) return view;
+      return {
+        ...view,
+        sorts: override.sorts,
+        filters: override.filters,
+        filterMode: override.filterMode,
+      };
+    }),
+  });
+}
+
+export function databaseViewConfigWithSavedQueryState(
+  currentViewConfig: ContentDatabaseViewConfig,
+  savedViewConfig: ContentDatabaseViewConfig,
+) {
+  const current = normalizeClientDatabaseViewConfig(currentViewConfig);
+  const saved = normalizeClientDatabaseViewConfig(savedViewConfig);
+  const savedViewsById = new Map(saved.views.map((view) => [view.id, view]));
+
+  return normalizeClientDatabaseViewConfig({
+    ...current,
+    activeViewId: saved.activeViewId,
+    views: current.views.map((view) => {
+      const savedView = savedViewsById.get(view.id);
+      if (!savedView) return view;
+      return {
+        ...view,
+        sorts: savedView.sorts,
+        filters: savedView.filters,
+        filterMode: savedView.filterMode,
+      };
+    }),
+  });
+}
+
+export function databaseViewConfigWithClearedActiveFilters(
+  viewConfig: ContentDatabaseViewConfig,
+) {
+  return updateActiveDatabaseView(
+    normalizeClientDatabaseViewConfig(viewConfig),
+    (view) => ({ ...view, filters: [], filterMode: "and" }),
+  );
+}
+
+export function databaseViewHasPersonalQueryChanges(
+  currentViewConfig: ContentDatabaseViewConfig,
+  savedViewConfig: ContentDatabaseViewConfig,
+) {
+  return (
+    databaseViewQueryStateKey(currentViewConfig) !==
+    databaseViewQueryStateKey(savedViewConfig)
+  );
+}
+
+function databaseViewQueryStateKey(viewConfig: ContentDatabaseViewConfig) {
+  const normalized = normalizeClientDatabaseViewConfig(viewConfig);
+  return JSON.stringify({
+    activeViewId: normalized.activeViewId,
+    views: normalized.views.map((view) => ({
+      id: view.id,
+      sorts: view.sorts,
+      filters: view.filters,
+      filterMode: view.filterMode ?? "and",
+    })),
+  });
+}
+
 function isTablePropertyVisible(
   property: DocumentProperty,
   items: ContentDatabaseItem[],
@@ -10744,12 +13612,24 @@ function isTablePropertyVisible(
   });
 }
 
-function databaseTableCellDisplayValue(property: DocumentProperty) {
+function databaseTableCellDisplayValue(
+  property: DocumentProperty,
+  item?: Pick<ContentDatabaseItem, "bodyHydration" | "document">,
+) {
   // Blocks columns show a word count, never the dumped body content.
   if (property.definition.type === "blocks") {
     const content = typeof property.value === "string" ? property.value : "";
     const words = countWords(content);
-    if (words === 0) return <span aria-hidden="true">&nbsp;</span>;
+    if (words === 0) {
+      if (item && databaseItemBodyHydrationIsPending(item)) {
+        return (
+          <span className="text-muted-foreground">
+            {dbText("builderBodySyncing")}
+          </span>
+        );
+      }
+      return <span aria-hidden="true">&nbsp;</span>;
+    }
     return (
       <span className="text-muted-foreground">{formatWordCount(content)}</span>
     );
@@ -10963,6 +13843,7 @@ function databaseViewIcon(type: ContentDatabaseViewType) {
   if (type === "gallery") return IconLayoutGrid;
   if (type === "calendar") return IconCalendar;
   if (type === "timeline") return IconTimeline;
+  if (type === "form") return IconForms;
   return IconTable;
 }
 
@@ -10972,6 +13853,7 @@ function databaseViewDefaultName(type: ContentDatabaseViewType) {
   if (type === "gallery") return "Gallery";
   if (type === "calendar") return "Calendar";
   if (type === "timeline") return "Timeline";
+  if (type === "form") return "Form";
   return "Table";
 }
 
@@ -11015,14 +13897,15 @@ function databaseBoardGroupingProperty(
   );
 }
 
-function databaseViewGroupingProperty(
+export function databaseViewGroupingProperty(
   view: Pick<ContentDatabaseView, "groupByPropertyId" | "type">,
   properties: DocumentProperty[],
 ) {
   if (
     view.type !== "table" &&
     view.type !== "list" &&
-    view.type !== "gallery"
+    view.type !== "gallery" &&
+    view.type !== "sidebar"
   ) {
     return null;
   }
@@ -11130,7 +14013,7 @@ export function databaseTimelineDays(anchorDate: Date) {
   return databaseCalendarMonthDays(anchorDate);
 }
 
-function databaseTimelineEndDateProperty(
+export function databaseTimelineEndDateProperty(
   view: Pick<ContentDatabaseView, "endDatePropertyId">,
   properties: DocumentProperty[],
   startPropertyId?: string | null,
@@ -11220,7 +14103,159 @@ function databaseItemPropertyById(
   );
 }
 
-function databaseTimelineRangeLabel(days: Date[]) {
+export type DatabaseBulkMultiSelectOperation =
+  | { kind: "multi_select_add"; optionIds: string[] }
+  | { kind: "multi_select_remove"; optionIds: string[] }
+  | {
+      kind: "multi_select_batch";
+      addOptionIds: string[];
+      removeOptionIds: string[];
+    };
+
+export type DatabaseBulkPropertyValueOperation =
+  | { kind: "set"; value: DocumentPropertyValue }
+  | DatabaseBulkMultiSelectOperation;
+
+export function databaseBulkPropertyValueForItem(
+  item: ContentDatabaseItem,
+  property: DocumentProperty,
+  operation: DatabaseBulkPropertyValueOperation,
+): DocumentPropertyValue {
+  if (operation.kind === "set") return operation.value;
+  const itemProperty = databaseItemPropertyById(
+    item,
+    [property],
+    property.definition.id,
+  );
+  return databaseBulkMultiSelectValueAfterOperation(
+    itemProperty?.value ?? null,
+    operation,
+  );
+}
+
+function databaseBulkMultiSelectValue(value: DocumentPropertyValue) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+export function databaseBulkMultiSelectValueAfterOperation(
+  value: DocumentPropertyValue,
+  operation: DatabaseBulkMultiSelectOperation,
+) {
+  const current = databaseBulkMultiSelectValue(value);
+  const addOptionIds =
+    operation.kind === "multi_select_batch"
+      ? operation.addOptionIds
+      : operation.kind === "multi_select_add"
+        ? operation.optionIds
+        : [];
+  const removeOptionIds =
+    operation.kind === "multi_select_batch"
+      ? operation.removeOptionIds
+      : operation.kind === "multi_select_remove"
+        ? operation.optionIds
+        : [];
+  const removedIds = new Set(removeOptionIds);
+  const kept = current.filter((optionId) => !removedIds.has(optionId));
+  const keptIds = new Set(kept);
+  return [
+    ...kept,
+    ...Array.from(new Set(addOptionIds)).filter(
+      (optionId) => !keptIds.has(optionId),
+    ),
+  ];
+}
+
+export function databaseBulkMultiSelectOptionPresence(
+  items: ContentDatabaseItem[],
+  property: DocumentProperty,
+  optionId: string,
+  operation?: DatabaseBulkMultiSelectOperation,
+) {
+  const values = items.map((item) =>
+    operation
+      ? databaseBulkMultiSelectValueAfterOperation(
+          databaseItemPropertyById(item, [property], property.definition.id)
+            ?.value ?? null,
+          operation,
+        )
+      : databaseBulkMultiSelectValue(
+          databaseItemPropertyById(item, [property], property.definition.id)
+            ?.value ?? null,
+        ),
+  );
+  return {
+    presentInAny: values.some((value) => value.includes(optionId)),
+    presentInAll:
+      values.length > 0 && values.every((value) => value.includes(optionId)),
+  };
+}
+
+export function databaseBulkMultiSelectToggleOperation(
+  items: ContentDatabaseItem[],
+  property: DocumentProperty,
+  optionId: string,
+  operation: DatabaseBulkMultiSelectOperation = {
+    kind: "multi_select_batch",
+    addOptionIds: [],
+    removeOptionIds: [],
+  },
+): DatabaseBulkMultiSelectOperation {
+  const presence = databaseBulkMultiSelectOptionPresence(
+    items,
+    property,
+    optionId,
+    operation,
+  );
+  const addOptionIds =
+    operation.kind === "multi_select_batch"
+      ? new Set(operation.addOptionIds)
+      : operation.kind === "multi_select_add"
+        ? new Set(operation.optionIds)
+        : new Set<string>();
+  const removeOptionIds =
+    operation.kind === "multi_select_batch"
+      ? new Set(operation.removeOptionIds)
+      : operation.kind === "multi_select_remove"
+        ? new Set(operation.optionIds)
+        : new Set<string>();
+  if (presence.presentInAll) {
+    addOptionIds.delete(optionId);
+    removeOptionIds.add(optionId);
+  } else {
+    removeOptionIds.delete(optionId);
+    addOptionIds.add(optionId);
+  }
+  return {
+    kind: "multi_select_batch",
+    addOptionIds: Array.from(addOptionIds),
+    removeOptionIds: Array.from(removeOptionIds),
+  };
+}
+
+function databaseBulkMultiSelectOperationHasChanges(
+  operation: DatabaseBulkMultiSelectOperation,
+) {
+  return operation.kind === "multi_select_batch"
+    ? operation.addOptionIds.length > 0 || operation.removeOptionIds.length > 0
+    : operation.optionIds.length > 0;
+}
+
+export function databaseBulkMultiSelectFilteredOptions(
+  options: DocumentPropertyOption[],
+  query: string,
+) {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return options;
+  return options.filter(
+    (option) =>
+      option.name.trim().toLowerCase().includes(normalizedQuery) ||
+      option.description?.trim().toLowerCase().includes(normalizedQuery),
+  );
+}
+
+export function databaseTimelineRangeLabel(days: Date[]) {
   const first = days[0] ?? new Date();
   const last = days[days.length - 1] ?? first;
   const sameYear = first.getFullYear() === last.getFullYear();
@@ -11353,7 +14388,7 @@ export function databaseItemsWithoutDateValue(
   });
 }
 
-function startOfMonth(date: Date) {
+export function startOfMonth(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), 1);
 }
 
@@ -11969,7 +15004,7 @@ function DatabaseNameHeader({
   const partiallySelected = selectedCount > 0 && !allSelected;
 
   return (
-    <div className="group flex h-8 min-w-0 items-center border-r border-border/45 px-1">
+    <div className="group flex h-8 min-w-0 items-center border-r border-border/35 px-1">
       <DatabaseRowSelectionControl
         checked={allSelected}
         indeterminate={partiallySelected}
@@ -12022,8 +15057,10 @@ function DatabaseSelectionBar({
   selectedCount,
   canEdit,
   properties,
+  selectedItems,
   duplicateDisabled,
   deleteDisabled,
+  removesFavoriteMembership,
   updateDisabled,
   onClearSelection,
   onSetPropertyValue,
@@ -12033,13 +15070,15 @@ function DatabaseSelectionBar({
   selectedCount: number;
   canEdit: boolean;
   properties: DocumentProperty[];
+  selectedItems: ContentDatabaseItem[];
   duplicateDisabled: boolean;
   deleteDisabled: boolean;
+  removesFavoriteMembership: boolean;
   updateDisabled: boolean;
   onClearSelection: () => void;
   onSetPropertyValue: (
     property: DocumentProperty,
-    value: DocumentPropertyValue,
+    operation: DatabaseBulkPropertyValueOperation,
   ) => Promise<void>;
   onDuplicateSelected: () => void;
   onDeleteSelected: () => void;
@@ -12055,6 +15094,7 @@ function DatabaseSelectionBar({
             <DatabaseBulkEditPopover
               properties={properties}
               selectedCount={selectedCount}
+              selectedItems={selectedItems}
               disabled={updateDisabled || properties.length === 0}
               onSetPropertyValue={onSetPropertyValue}
             />
@@ -12073,12 +15113,20 @@ function DatabaseSelectionBar({
               type="button"
               variant="ghost"
               size="sm"
-              className="h-7 gap-1.5 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+              className={cn(
+                "h-7 gap-1.5 px-2 text-xs",
+                !removesFavoriteMembership &&
+                  "text-destructive hover:bg-destructive/10 hover:text-destructive",
+              )}
               disabled={deleteDisabled}
               onClick={onDeleteSelected}
             >
-              <IconTrash className="size-3.5" />
-              Delete
+              {removesFavoriteMembership ? (
+                <IconStarOff className="size-3.5" />
+              ) : (
+                <IconTrash className="size-3.5" />
+              )}
+              {removesFavoriteMembership ? "Remove" : "Delete"}
             </Button>
           </>
         ) : null}
@@ -12099,15 +15147,17 @@ function DatabaseSelectionBar({
 function DatabaseBulkEditPopover({
   properties,
   selectedCount,
+  selectedItems,
   disabled,
   onSetPropertyValue,
 }: {
   properties: DocumentProperty[];
   selectedCount: number;
+  selectedItems: ContentDatabaseItem[];
   disabled: boolean;
   onSetPropertyValue: (
     property: DocumentProperty,
-    value: DocumentPropertyValue,
+    operation: DatabaseBulkPropertyValueOperation,
   ) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
@@ -12128,9 +15178,9 @@ function DatabaseBulkEditPopover({
 
   async function applyValue(
     property: DocumentProperty,
-    value: DocumentPropertyValue,
+    operation: DatabaseBulkPropertyValueOperation,
   ) {
-    await onSetPropertyValue(property, value);
+    await onSetPropertyValue(property, operation);
     setOpen(false);
   }
 
@@ -12181,6 +15231,7 @@ function DatabaseBulkEditPopover({
               {selectedProperty ? (
                 <DatabaseBulkPropertyValueEditor
                   property={selectedProperty}
+                  selectedItems={selectedItems}
                   disabled={disabled}
                   onApply={(value) => applyValue(selectedProperty, value)}
                   onCancel={() => setOpen(false)}
@@ -12200,13 +15251,15 @@ function DatabaseBulkEditPopover({
 
 function DatabaseBulkPropertyValueEditor({
   property,
+  selectedItems,
   disabled,
   onApply,
   onCancel,
 }: {
   property: DocumentProperty;
+  selectedItems: ContentDatabaseItem[];
   disabled: boolean;
-  onApply: (value: DocumentPropertyValue) => Promise<void>;
+  onApply: (operation: DatabaseBulkPropertyValueOperation) => Promise<void>;
   onCancel: () => void;
 }) {
   const type = property.definition.type;
@@ -12220,7 +15273,7 @@ function DatabaseBulkPropertyValueEditor({
           variant="secondary"
           className="justify-start"
           disabled={disabled}
-          onClick={() => void onApply(true)}
+          onClick={() => void onApply({ kind: "set", value: true })}
         >
           <IconCheck className="mr-1.5 size-3.5" />
           Checked
@@ -12231,7 +15284,7 @@ function DatabaseBulkPropertyValueEditor({
           variant="secondary"
           className="justify-start"
           disabled={disabled}
-          onClick={() => void onApply(false)}
+          onClick={() => void onApply({ kind: "set", value: false })}
         >
           <IconMinus className="mr-1.5 size-3.5" />
           Unchecked
@@ -12242,7 +15295,7 @@ function DatabaseBulkPropertyValueEditor({
           variant="ghost"
           className="justify-start"
           disabled={disabled}
-          onClick={() => void onApply(null)}
+          onClick={() => void onApply({ kind: "set", value: null })}
         >
           {dbText("clearValue")}
         </Button>
@@ -12254,6 +15307,7 @@ function DatabaseBulkPropertyValueEditor({
     return (
       <DatabaseBulkOptionValueEditor
         property={property}
+        selectedItems={selectedItems}
         disabled={disabled}
         onApply={onApply}
         onCancel={onCancel}
@@ -12289,7 +15343,7 @@ function DatabaseBulkScalarValueEditor({
 }: {
   property: DocumentProperty;
   disabled: boolean;
-  onApply: (value: DocumentPropertyValue) => Promise<void>;
+  onApply: (operation: DatabaseBulkPropertyValueOperation) => Promise<void>;
   onCancel: () => void;
 }) {
   const type = property.definition.type;
@@ -12314,7 +15368,7 @@ function DatabaseBulkScalarValueEditor({
       onSubmit={(event) => {
         event.preventDefault();
         if (!valueState.isValid) return;
-        void onApply(valueState.value);
+        void onApply({ kind: "set", value: valueState.value });
       }}
     >
       {type === "date" ? (
@@ -12327,8 +15381,11 @@ function DatabaseBulkScalarValueEditor({
             disabled={disabled}
             onClick={() =>
               void onApply({
-                start: dateInputValueForOffset(new Date(), 0),
-                includeTime: false,
+                kind: "set",
+                value: {
+                  start: dateInputValueForOffset(new Date(), 0),
+                  includeTime: false,
+                },
               })
             }
           >
@@ -12343,8 +15400,11 @@ function DatabaseBulkScalarValueEditor({
             disabled={disabled}
             onClick={() =>
               void onApply({
-                start: dateInputValueForOffset(new Date(), 1),
-                includeTime: false,
+                kind: "set",
+                value: {
+                  start: dateInputValueForOffset(new Date(), 1),
+                  includeTime: false,
+                },
               })
             }
           >
@@ -12378,7 +15438,7 @@ function DatabaseBulkScalarValueEditor({
           variant="ghost"
           size="sm"
           disabled={disabled}
-          onClick={() => void onApply(null)}
+          onClick={() => void onApply({ kind: "set", value: null })}
         >
           Clear
         </Button>
@@ -12403,7 +15463,7 @@ function DatabaseBulkFilesValueEditor({
   onCancel,
 }: {
   disabled: boolean;
-  onApply: (value: DocumentPropertyValue) => Promise<void>;
+  onApply: (operation: DatabaseBulkPropertyValueOperation) => Promise<void>;
   onCancel: () => void;
 }) {
   const [value, setValue] = useState("");
@@ -12414,7 +15474,7 @@ function DatabaseBulkFilesValueEditor({
       onSubmit={(event) => {
         event.preventDefault();
         const items = filesMediaItems(value);
-        void onApply(items.length > 0 ? items : null);
+        void onApply({ kind: "set", value: items.length > 0 ? items : null });
       }}
     >
       <textarea
@@ -12438,7 +15498,7 @@ function DatabaseBulkFilesValueEditor({
           variant="ghost"
           size="sm"
           disabled={disabled}
-          onClick={() => void onApply(null)}
+          onClick={() => void onApply({ kind: "set", value: null })}
         >
           Clear
         </Button>
@@ -12455,18 +15515,35 @@ function DatabaseBulkFilesValueEditor({
 
 function DatabaseBulkOptionValueEditor({
   property,
+  selectedItems,
   disabled,
   onApply,
   onCancel,
 }: {
   property: DocumentProperty;
+  selectedItems: ContentDatabaseItem[];
   disabled: boolean;
-  onApply: (value: DocumentPropertyValue) => Promise<void>;
+  onApply: (operation: DatabaseBulkPropertyValueOperation) => Promise<void>;
   onCancel: () => void;
 }) {
   const options = property.definition.options.options ?? [];
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const multi = property.definition.type === "multi_select";
+  const selectedItemsKey = selectedItems.map((item) => item.id).join("|");
+  const [pendingMultiSelectOperation, setPendingMultiSelectOperation] =
+    useState<DatabaseBulkMultiSelectOperation>({
+      kind: "multi_select_batch",
+      addOptionIds: [],
+      removeOptionIds: [],
+    });
+  const [optionSearchQuery, setOptionSearchQuery] = useState("");
+
+  useEffect(() => {
+    setPendingMultiSelectOperation({
+      kind: "multi_select_batch",
+      addOptionIds: [],
+      removeOptionIds: [],
+    });
+  }, [property.definition.id, selectedItemsKey]);
 
   if (options.length === 0) {
     return (
@@ -12474,68 +15551,137 @@ function DatabaseBulkOptionValueEditor({
         <div className="rounded bg-muted/40 px-2 py-3 text-sm text-muted-foreground">
           {dbText("thisPropertyHasNoOptionsYet")}
         </div>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          className="justify-start"
-          disabled={disabled}
-          onClick={() => void onApply(multi ? [] : null)}
-        >
-          {dbText("clearValue")}
-        </Button>
+        {multi ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="justify-start"
+            onClick={onCancel}
+          >
+            Cancel
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="justify-start"
+            disabled={disabled}
+            onClick={() => void onApply({ kind: "set", value: null })}
+          >
+            {dbText("clearValue")}
+          </Button>
+        )}
       </div>
     );
   }
 
   if (multi) {
+    const hasPendingChanges = databaseBulkMultiSelectOperationHasChanges(
+      pendingMultiSelectOperation,
+    );
+    const filteredOptions = databaseBulkMultiSelectFilteredOptions(
+      options,
+      optionSearchQuery,
+    );
     return (
       <div className="grid gap-2">
+        <div className="flex h-8 items-center gap-1 rounded border border-border bg-background px-2">
+          <IconSearch className="size-3.5 shrink-0 text-muted-foreground" />
+          <Input
+            autoFocus
+            value={optionSearchQuery}
+            placeholder={dbText("searchOptions")}
+            aria-label={`Search ${property.definition.name} options`}
+            className="h-7 border-0 bg-transparent px-0 text-xs shadow-none focus-visible:ring-0"
+            onChange={(event) => setOptionSearchQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                if (optionSearchQuery) {
+                  setOptionSearchQuery("");
+                } else {
+                  onCancel();
+                }
+              }
+            }}
+          />
+        </div>
         <div className="max-h-52 overflow-auto">
-          {options.map((option) => {
-            const checked = selectedIds.includes(option.id);
+          {filteredOptions.length === 0 ? (
+            <div className="rounded px-2 py-3 text-sm text-muted-foreground">
+              {dbText("noMatchingOptions")}
+            </div>
+          ) : null}
+          {filteredOptions.map((option) => {
+            const presence = databaseBulkMultiSelectOptionPresence(
+              selectedItems,
+              property,
+              option.id,
+              pendingMultiSelectOperation,
+            );
             return (
               <button
                 key={option.id}
                 type="button"
-                className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
+                aria-pressed={presence.presentInAll}
+                aria-label={`${
+                  presence.presentInAll ? "Remove" : "Add"
+                } ${option.name} for selected rows`}
+                className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent disabled:opacity-50"
+                disabled={disabled}
                 onClick={() =>
-                  setSelectedIds((current) =>
-                    current.includes(option.id)
-                      ? current.filter((id) => id !== option.id)
-                      : [...current, option.id],
+                  setPendingMultiSelectOperation((current) =>
+                    databaseBulkMultiSelectToggleOperation(
+                      selectedItems,
+                      property,
+                      option.id,
+                      current,
+                    ),
                   )
                 }
               >
-                <DatabaseBulkOptionPill option={option} />
-                {checked ? (
-                  <IconCheck className="size-4 text-muted-foreground" />
+                <span className="min-w-0 flex-1">
+                  <DatabaseBulkOptionPill option={option} />
+                  {option.description ? (
+                    <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                      {option.description}
+                    </span>
+                  ) : null}
+                </span>
+                {presence.presentInAll ? (
+                  <IconCheck className="size-4 shrink-0 text-muted-foreground" />
+                ) : presence.presentInAny ? (
+                  <IconMinus className="size-4 shrink-0 text-muted-foreground" />
                 ) : null}
               </button>
             );
           })}
         </div>
-        <div className="flex justify-end gap-2">
+        <div className="flex items-center justify-between gap-2">
           <Button
             type="button"
             variant="ghost"
             size="sm"
             disabled={disabled}
-            onClick={() => void onApply([])}
+            onClick={() => void onApply({ kind: "set", value: [] })}
           >
-            Clear
+            {dbText("clearValue")}
           </Button>
-          <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            disabled={disabled}
-            onClick={() => void onApply(selectedIds)}
-          >
-            Apply
-          </Button>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={disabled || !hasPendingChanges}
+              onClick={() => void onApply(pendingMultiSelectOperation)}
+            >
+              Apply
+            </Button>
+          </div>
         </div>
       </div>
     );
@@ -12550,9 +15696,16 @@ function DatabaseBulkOptionValueEditor({
             type="button"
             className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm hover:bg-accent disabled:opacity-50"
             disabled={disabled}
-            onClick={() => void onApply(option.id)}
+            onClick={() => void onApply({ kind: "set", value: option.id })}
           >
-            <DatabaseBulkOptionPill option={option} />
+            <span className="min-w-0 flex-1">
+              <DatabaseBulkOptionPill option={option} />
+              {option.description ? (
+                <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                  {option.description}
+                </span>
+              ) : null}
+            </span>
           </button>
         ))}
       </div>
@@ -12562,7 +15715,7 @@ function DatabaseBulkOptionValueEditor({
         variant="ghost"
         className="justify-start"
         disabled={disabled}
-        onClick={() => void onApply(null)}
+        onClick={() => void onApply({ kind: "set", value: null })}
       >
         {dbText("clearValue")}
       </Button>
@@ -12650,6 +15803,9 @@ function DatabasePropertyHeader({
   dropSide,
   sorts,
   filters,
+  onSortsChange,
+  onFiltersChange,
+  onPropertyHiddenChange,
   onPointerDown,
   onResize,
 }: {
@@ -12661,10 +15817,14 @@ function DatabasePropertyHeader({
   dropSide: DatabaseDropSide | null;
   sorts: DatabaseSort[];
   filters: DatabaseFilter[];
+  onSortsChange: (sorts: DatabaseSort[]) => void;
+  onFiltersChange: (filters: DatabaseFilter[]) => void;
+  onPropertyHiddenChange: (propertyId: string, hidden: boolean) => void;
   onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
   onResize: (event: ReactPointerEvent) => void;
 }) {
   const Icon = TYPE_ICONS[property.definition.type];
+  const canReorder = canEdit && !property.definition.systemRole;
   const columnState = databaseColumnHeaderState(
     sorts,
     filters,
@@ -12675,15 +15835,15 @@ function DatabasePropertyHeader({
     <div
       data-database-property-id={property.definition.id}
       className={cn(
-        "group relative flex h-8 min-w-0 items-center border-r border-border/45 px-1 transition-colors",
-        canEdit && "cursor-grab active:cursor-grabbing",
+        "group relative flex h-8 min-w-0 items-center border-r border-border/35 px-1 transition-colors",
+        canReorder && "cursor-grab active:cursor-grabbing",
         isDragging && "opacity-45",
         dropSide && "bg-accent/40",
       )}
-      onPointerDown={onPointerDown}
+      onPointerDown={canReorder ? onPointerDown : undefined}
     >
       <DatabaseDropIndicator side={dropSide} />
-      {canEdit ? (
+      {canEdit && !property.definition.systemRole ? (
         <PropertyManagementPopover
           property={property}
           documentId={documentId}
@@ -12702,6 +15862,11 @@ function DatabasePropertyHeader({
             property.definition.id,
           )}
           sourceAttached={!!source}
+          sorts={sorts}
+          filters={filters}
+          onSortsChange={onSortsChange}
+          onFiltersChange={onFiltersChange}
+          onHide={() => onPropertyHiddenChange(property.definition.id, true)}
         />
       ) : (
         <div className="flex h-7 min-w-0 flex-1 items-center gap-2 px-1">
@@ -13085,13 +16250,12 @@ export function applyDatabaseView(
   const activeFilters = filters.filter(isActiveFilter);
   const filtered = activeFilters.length
     ? searched.filter((item) =>
-        filterMode === "or"
-          ? activeFilters.some((filter) =>
-              databaseItemMatchesFilter(item, properties, filter),
-            )
-          : activeFilters.every((filter) =>
-              databaseItemMatchesFilter(item, properties, filter),
-            ),
+        databaseItemMatchesFilterTree(
+          item,
+          properties,
+          activeFilters,
+          filterMode,
+        ),
       )
     : searched;
 
@@ -13111,6 +16275,53 @@ export function applyDatabaseView(
   });
 }
 
+function databaseItemMatchesFilterTree(
+  item: ContentDatabaseItem,
+  properties: DocumentProperty[],
+  filters: DatabaseFilter[],
+  filterMode: DatabaseFilterMode,
+) {
+  const rootFilters = filters.filter((filter) => !filter.parentFilterGroupId);
+  const nestedGroups = nestedDatabaseFilterGroups(filters);
+  const matches = [
+    ...rootFilters.map((filter) =>
+      databaseItemMatchesFilter(item, properties, filter),
+    ),
+    ...nestedGroups.map((group) =>
+      combineDatabaseFilterMatches(
+        group.map((filter) =>
+          databaseItemMatchesFilter(item, properties, filter),
+        ),
+        filterMode,
+      ),
+    ),
+  ];
+
+  return combineDatabaseFilterMatches(matches, filterMode);
+}
+
+function nestedDatabaseFilterGroups(filters: DatabaseFilter[]) {
+  const groups = new Map<string, DatabaseFilter[]>();
+  for (const filter of filters) {
+    if (!filter.parentFilterGroupId || !filter.filterGroupId) continue;
+    groups.set(filter.filterGroupId, [
+      ...(groups.get(filter.filterGroupId) ?? []),
+      filter,
+    ]);
+  }
+  return [...groups.values()].filter((group) => group.length > 0);
+}
+
+function combineDatabaseFilterMatches(
+  matches: boolean[],
+  filterMode: DatabaseFilterMode,
+) {
+  if (matches.length === 0) return true;
+  return filterMode === "or"
+    ? matches.some((matched) => matched)
+    : matches.every((matched) => matched);
+}
+
 function defaultDatabaseSort(): DatabaseSort {
   return {
     key: "name",
@@ -13126,6 +16337,71 @@ function defaultDatabaseFilter(): DatabaseFilter {
     operator: "contains",
     value: "",
   };
+}
+
+function createDatabaseFilterForField(
+  key: ColumnKey,
+  label: string,
+  properties: DocumentProperty[],
+  advanced:
+    | boolean
+    | { filterGroupId: string; parentFilterGroupId?: string } = false,
+): DatabaseFilter {
+  const group =
+    typeof advanced === "object"
+      ? advanced
+      : advanced
+        ? { filterGroupId: DATABASE_ADVANCED_FILTER_GROUP_ID }
+        : null;
+  return {
+    key,
+    label,
+    operator: defaultFilterOperatorForKey(key, properties),
+    value: "",
+    ...(group ? { filterGroupId: group.filterGroupId } : {}),
+    ...(group?.parentFilterGroupId
+      ? { parentFilterGroupId: group.parentFilterGroupId }
+      : {}),
+  };
+}
+
+function isAdvancedDatabaseFilter(filter: DatabaseFilter) {
+  return (
+    filter.filterGroupId === DATABASE_ADVANCED_FILTER_GROUP_ID ||
+    filter.parentFilterGroupId === DATABASE_ADVANCED_FILTER_GROUP_ID
+  );
+}
+
+function advancedNestedFilterGroups(
+  entries: DatabaseFilterEntry[],
+): DatabaseNestedFilterGroupEntry[] {
+  const groups = new Map<string, DatabaseFilterEntry[]>();
+  for (const entry of entries) {
+    if (
+      entry.filter.parentFilterGroupId !== DATABASE_ADVANCED_FILTER_GROUP_ID ||
+      !entry.filter.filterGroupId
+    ) {
+      continue;
+    }
+    groups.set(entry.filter.filterGroupId, [
+      ...(groups.get(entry.filter.filterGroupId) ?? []),
+      entry,
+    ]);
+  }
+  return [...groups.entries()].map(([id, groupEntries]) => ({
+    id,
+    entries: groupEntries,
+  }));
+}
+
+function createAdvancedNestedFilterGroupId() {
+  return `advanced-${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+}
+
+function advancedFilterGroupLabel(ruleCount: number) {
+  return `${ruleCount} rule${ruleCount === 1 ? "" : "s"}`;
 }
 
 export function upsertDatabaseSort(
@@ -13283,7 +16559,7 @@ function isActiveFilter(
 ): filter is DatabaseFilter {
   if (!filter) return false;
   if (filterOperatorNeedsValue(filter.operator)) {
-    return filter.value.trim().length > 0;
+    return databaseFilterSelectedValues(filter.value).length > 0;
   }
   return true;
 }
@@ -13328,21 +16604,42 @@ function databaseFilterDefaultValueForNewItem(
   if (filter.operator === "is_unchecked") {
     return property.definition.type === "checkbox" ? false : undefined;
   }
-  if (filter.operator !== "equals") return undefined;
+  if (property.definition.type === "multi_select") {
+    if (filter.operator !== "equals" && filter.operator !== "contains") {
+      return undefined;
+    }
+    const values = databaseFilterSelectedValues(filter.value);
+    if (values.length === 0) return undefined;
+    return values.map(
+      (value) =>
+        databasePropertyOptionIdForFilterValue(property, value) ?? value,
+    );
+  }
+  if (property.definition.type === "person" && filter.operator === "contains") {
+    const values = databaseFilterSelectedValues(filter.value);
+    return values.length > 0 ? values : undefined;
+  }
 
   const value = filter.value.trim();
   if (!value) return undefined;
 
-  const optionValue = databasePropertyOptionIdForFilterValue(property, value);
-  if (property.definition.type === "multi_select") {
-    return [optionValue ?? value];
-  }
   if (
     property.definition.type === "select" ||
     property.definition.type === "status"
   ) {
-    return optionValue ?? value;
+    if (filter.operator !== "equals" && filter.operator !== "contains") {
+      return undefined;
+    }
+    const values = databaseFilterSelectedValues(filter.value);
+    const firstValue = values[0]?.trim() ?? "";
+    if (!firstValue) return undefined;
+    return (
+      databasePropertyOptionIdForFilterValue(property, firstValue) ?? firstValue
+    );
   }
+
+  if (filter.operator !== "equals") return undefined;
+
   if (property.definition.type === "date") {
     return /^\d{4}-\d{2}-\d{2}$/.test(value)
       ? { start: value, includeTime: false }
@@ -13387,10 +16684,20 @@ function databaseItemMatchesFilter(
       : current < target;
   }
 
-  if (filter.operator === "before" || filter.operator === "after") {
+  if (
+    filter.operator === "before" ||
+    filter.operator === "after" ||
+    filter.operator === "between"
+  ) {
     const current = propertyDateValue(property);
+    if (!Number.isFinite(current)) return false;
+    if (filter.operator === "between") {
+      const range = databaseFilterDateRangeValue(filter.value);
+      if (!range) return false;
+      return current >= range[0] && current <= range[1];
+    }
     const target = new Date(filter.value.trim()).getTime();
-    if (!Number.isFinite(current) || !Number.isFinite(target)) return false;
+    if (!Number.isFinite(target)) return false;
     return filter.operator === "before" ? current < target : current > target;
   }
 
@@ -13399,8 +16706,31 @@ function databaseItemMatchesFilter(
     properties,
     filter.key,
   ).map((candidate) => candidate.trim().toLowerCase());
+  const selectedFilterValues = databaseFilterSelectedValues(filter.value).map(
+    (candidate) => candidate.trim().toLowerCase(),
+  );
   const normalizedValue = value.trim().toLowerCase();
-  const normalizedFilter = filter.value.trim().toLowerCase();
+  const normalizedFilter = selectedFilterValues[0] ?? "";
+  const usesDiscreteValues =
+    property?.definition.type === "select" ||
+    property?.definition.type === "status" ||
+    property?.definition.type === "multi_select" ||
+    property?.definition.type === "person";
+
+  if (
+    usesDiscreteValues &&
+    (filter.operator === "equals" || filter.operator === "contains")
+  ) {
+    return selectedFilterValues.some((filterValue) =>
+      candidateValues.includes(filterValue),
+    );
+  }
+  if (usesDiscreteValues && filter.operator === "does_not_equal") {
+    return selectedFilterValues.every(
+      (filterValue) => !candidateValues.includes(filterValue),
+    );
+  }
+
   if (filter.operator === "equals") {
     return candidateValues.includes(normalizedFilter);
   }
@@ -13574,6 +16904,10 @@ function propertyDateValue(property: DocumentProperty | null | undefined) {
   return Number.isFinite(value) ? value : Number.NaN;
 }
 
+function databaseSortDirectionLabel(direction: SortDirection) {
+  return direction === "asc" ? "Ascending" : "Descending";
+}
+
 function SortMenu({
   properties,
   sorts,
@@ -13609,6 +16943,10 @@ function SortMenu({
     onSortsChange([...sorts, defaultDatabaseSort()]);
   }
 
+  function addSortForField(key: "name" | string, label: string) {
+    onSortsChange([...sorts, { key, label, direction: "asc" }]);
+  }
+
   function removeSort(index: number) {
     onSortsChange(sorts.filter((_, sortIndex) => sortIndex !== index));
   }
@@ -13641,96 +16979,112 @@ function SortMenu({
           ) : null}
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-[340px]">
-        <div className="grid gap-2 p-2">
-          <div className="text-xs font-medium text-muted-foreground">
-            {dbText("sortRowsBy")}
+      <DropdownMenuContent
+        align="end"
+        className={cn("w-[340px]", sorts.length === 0 && "w-64 p-0")}
+      >
+        {sorts.length === 0 ? (
+          <div onKeyDown={(event) => event.stopPropagation()}>
+            <DatabasePropertyPickerMenuItems
+              properties={properties}
+              includeName
+              placeholder={dbText("sortBy")}
+              closeOnSelect
+              onSelect={addSortForField}
+            />
           </div>
-          <div className="grid gap-2">
-            {displayedSorts.map((sort, index) => (
-              <div
-                key={`${index}-${sort.key}`}
-                className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-1 rounded border border-border/70 bg-background p-1.5"
-              >
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger className="min-w-0">
-                    <SortFieldIcon sort={sort} properties={properties} />
-                    <span className="min-w-0 flex-1 truncate">
-                      {sort.label}
-                    </span>
-                  </DropdownMenuSubTrigger>
-                  <DatabasePropertyPickerSubContent
-                    properties={properties}
-                    selectedKey={sort.key}
-                    includeName
-                    onSelect={(key, label) => selectSort(index, key, label)}
-                  />
-                </DropdownMenuSub>
-                <button
-                  type="button"
-                  className="flex h-8 items-center rounded px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-                  onClick={() => toggleDirection(index)}
+        ) : null}
+        {sorts.length > 0 ? (
+          <div className="grid gap-2 p-2">
+            <div className="text-xs font-medium text-muted-foreground">
+              {dbText("sortRowsBy")}
+            </div>
+            <div className="grid gap-2">
+              {displayedSorts.map((sort, index) => (
+                <div
+                  key={`${index}-${sort.key}`}
+                  className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-1 rounded border border-border/70 bg-background p-1.5"
                 >
-                  {sort.direction === "asc" ? "Asc" : "Desc"}
-                </button>
-                <div className="flex items-center">
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger className="min-w-0">
+                      <SortFieldIcon sort={sort} properties={properties} />
+                      <span className="min-w-0 flex-1 truncate">
+                        {sort.label}
+                      </span>
+                    </DropdownMenuSubTrigger>
+                    <DatabasePropertyPickerSubContent
+                      properties={properties}
+                      selectedKey={sort.key}
+                      includeName
+                      onSelect={(key, label) => selectSort(index, key, label)}
+                    />
+                  </DropdownMenuSub>
                   <button
                     type="button"
-                    aria-label={`Move sort ${index + 1} earlier`}
-                    className="flex size-8 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
-                    disabled={sorts.length <= 1 || index === 0}
-                    onClick={() => moveSort(index, "up")}
+                    className="flex h-8 items-center rounded px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                    onClick={() => toggleDirection(index)}
                   >
-                    <IconArrowUp className="size-3.5" />
+                    {sort.direction === "asc" ? "Asc" : "Desc"}
                   </button>
+                  <div className="flex items-center">
+                    <button
+                      type="button"
+                      aria-label={`Move sort ${index + 1} earlier`}
+                      className="flex size-8 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+                      disabled={sorts.length <= 1 || index === 0}
+                      onClick={() => moveSort(index, "up")}
+                    >
+                      <IconArrowUp className="size-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Move sort ${index + 1} later`}
+                      className="flex size-8 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+                      disabled={
+                        sorts.length <= 1 || index >= displayedSorts.length - 1
+                      }
+                      onClick={() => moveSort(index, "down")}
+                    >
+                      <IconArrowDown className="size-3.5" />
+                    </button>
+                  </div>
                   <button
                     type="button"
-                    aria-label={`Move sort ${index + 1} later`}
+                    aria-label={`Remove sort ${index + 1}`}
                     className="flex size-8 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
-                    disabled={
-                      sorts.length <= 1 || index >= displayedSorts.length - 1
-                    }
-                    onClick={() => moveSort(index, "down")}
+                    disabled={sorts.length === 0}
+                    onClick={() => removeSort(index)}
                   >
-                    <IconArrowDown className="size-3.5" />
+                    <IconX className="size-4" />
                   </button>
                 </div>
-                <button
-                  type="button"
-                  aria-label={`Remove sort ${index + 1}`}
-                  className="flex size-8 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
-                  disabled={sorts.length === 0}
-                  onClick={() => removeSort(index)}
-                >
-                  <IconX className="size-4" />
-                </button>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
 
-          <div className="flex justify-between gap-2 border-t pt-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              className="h-8 px-2 text-xs"
-              onClick={addSort}
-            >
-              <IconPlus className="mr-1 size-3.5" />
-              {dbText("addSort")}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              className="h-8 px-2 text-xs"
-              disabled={sorts.length === 0}
-              onClick={() => onSortsChange([])}
-            >
-              {dbText("clearSorts")}
-            </Button>
+            <div className="flex justify-between gap-2 border-t pt-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-8 px-2 text-xs"
+                onClick={addSort}
+              >
+                <IconPlus className="mr-1 size-3.5" />
+                {dbText("addSort")}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-8 px-2 text-xs"
+                disabled={sorts.length === 0}
+                onClick={() => onSortsChange([])}
+              >
+                {dbText("clearSorts")}
+              </Button>
+            </div>
           </div>
-        </div>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -13754,250 +17108,81 @@ function SortFieldIcon({
 }
 
 function FilterMenu({
-  documentId,
-  properties,
   filters,
-  filterMode,
-  onFiltersChange,
-  onFilterModeChange,
+  properties,
+  inlineOpen,
+  open,
+  onOpenChange,
+  onAddFilter,
+  onAddAdvancedFilter,
 }: {
-  documentId: string;
-  properties: DocumentProperty[];
   filters: DatabaseFilter[];
-  filterMode: DatabaseFilterMode;
-  onFiltersChange: (filters: DatabaseFilter[]) => void;
-  onFilterModeChange: (filterMode: DatabaseFilterMode) => void;
+  properties: DocumentProperty[];
+  inlineOpen: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onAddFilter: (key: "name" | string, label: string) => void;
+  onAddAdvancedFilter: (key: "name" | string, label: string) => void;
 }) {
   const activeFilters = filters.filter(isActiveFilter);
-  const active = activeFilters.length > 0;
-  const displayedFilters =
-    filters.length > 0 ? filters : [defaultDatabaseFilter()];
-
-  function updateFilter(index: number, next: Partial<DatabaseFilter>) {
-    const baseFilters =
-      filters.length > 0 ? [...filters] : [defaultDatabaseFilter()];
-    const currentFilter = baseFilters[index] ?? defaultDatabaseFilter();
-    const nextOperator = next.operator ?? currentFilter.operator;
-    baseFilters[index] = {
-      ...currentFilter,
-      ...next,
-      value: filterOperatorNeedsValue(nextOperator)
-        ? (next.value ?? currentFilter.value)
-        : "",
-    };
-    onFiltersChange(baseFilters);
-  }
-
-  function selectField(index: number, key: "name" | string, label: string) {
-    updateFilter(index, {
-      key,
-      label,
-      operator: defaultFilterOperatorForKey(key, properties),
-      value: "",
-    });
-  }
-
-  function selectOperator(index: number, operator: FilterOperator) {
-    updateFilter(index, { operator });
-  }
-
-  function addFilter() {
-    onFiltersChange([...filters, defaultDatabaseFilter()]);
-  }
-
-  function removeFilter(index: number) {
-    onFiltersChange(filters.filter((_, filterIndex) => filterIndex !== index));
-  }
-
-  function moveFilter(
-    index: number,
-    direction: DatabaseConditionMoveDirection,
-  ) {
-    onFiltersChange(moveDatabaseFilter(filters, index, direction));
-  }
+  const active = activeFilters.length > 0 || inlineOpen;
+  const excludedFilterKeys = useMemo(
+    () => new Set(activeFilters.map((filter) => filter.key)),
+    [activeFilters],
+  );
+  const advancedFilterCandidate =
+    databasePropertyPickerItems(properties, "", {
+      includeName: false,
+      excludeKeys: excludedFilterKeys,
+    })[0] ??
+    databasePropertyPickerItems(properties, "", {
+      includeName: true,
+      excludeKeys: excludedFilterKeys,
+    })[0];
 
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open} onOpenChange={onOpenChange}>
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
           variant="ghost"
           size="sm"
           aria-label={
-            active ? `${activeFilters.length} active filters` : "Filter"
+            activeFilters.length > 0
+              ? `${activeFilters.length} active filters`
+              : "Filter"
           }
           title="Filter"
-          className={cn(databaseToolbarIconButtonClass(active), "relative")}
+          className={databaseToolbarIconButtonClass(active || open)}
         >
           <IconFilter className="size-3.5" />
-          {active ? (
-            <span className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 shrink-0 items-center justify-center rounded-full bg-foreground px-1 text-[9px] leading-none text-background">
-              {formatCompactCountBadge(activeFilters.length)}
-            </span>
-          ) : null}
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-[360px]">
-        <div
-          className="grid gap-2 p-2"
-          onKeyDown={(event) => event.stopPropagation()}
-        >
-          <div className="text-xs font-medium text-muted-foreground">
-            {dbText("filterRowsWhere")}
-          </div>
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger className="h-8 rounded border border-border/70 bg-background px-2 text-sm">
-              <span className="min-w-0 flex-1 truncate text-left">
-                Match {databaseFilterModePhrase(filterMode)}
-              </span>
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="w-44">
-              {DATABASE_FILTER_MODES.map((mode) => (
-                <DropdownMenuItem
-                  key={mode}
-                  onSelect={(event) => {
-                    event.preventDefault();
-                    onFilterModeChange(mode);
-                  }}
-                >
-                  <span className="flex-1">
-                    {databaseFilterModeLabel(mode)}
-                  </span>
-                  {filterMode === mode ? (
-                    <IconCheck className="size-4 text-muted-foreground" />
-                  ) : null}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
-          <div className="grid gap-2">
-            {displayedFilters.map((currentFilter, index) => (
-              <div
-                key={`${index}-${currentFilter.key}`}
-                className="grid gap-1 rounded border border-border/70 bg-background p-1.5"
-              >
-                <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] gap-1">
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger className="min-w-0">
-                      <FilterFieldIcon
-                        filter={currentFilter}
-                        properties={properties}
-                      />
-                      <span className="min-w-0 flex-1 truncate">
-                        {currentFilter.label}
-                      </span>
-                    </DropdownMenuSubTrigger>
-                    <DatabasePropertyPickerSubContent
-                      properties={properties}
-                      selectedKey={currentFilter.key}
-                      includeName
-                      onSelect={(key, label) => selectField(index, key, label)}
-                    />
-                  </DropdownMenuSub>
-
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger className="min-w-0">
-                      <IconFilter className="mr-2 size-4 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate">
-                        {FILTER_OPERATOR_LABELS[currentFilter.operator] ??
-                          "Contains"}
-                      </span>
-                    </DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent className="w-44">
-                      {filterOperatorsForKey(currentFilter.key, properties).map(
-                        (operator) => (
-                          <DropdownMenuItem
-                            key={operator}
-                            onSelect={(event) => {
-                              event.preventDefault();
-                              selectOperator(index, operator);
-                            }}
-                          >
-                            <span className="flex-1">
-                              {FILTER_OPERATOR_LABELS[operator]}
-                            </span>
-                            {currentFilter.operator === operator ? (
-                              <IconCheck className="size-4 text-muted-foreground" />
-                            ) : null}
-                          </DropdownMenuItem>
-                        ),
-                      )}
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
-
-                  <div className="flex items-center">
-                    <button
-                      type="button"
-                      aria-label={`Move filter ${index + 1} earlier`}
-                      className="flex size-8 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
-                      disabled={filters.length <= 1 || index === 0}
-                      onClick={() => moveFilter(index, "up")}
-                    >
-                      <IconArrowUp className="size-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`Move filter ${index + 1} later`}
-                      className="flex size-8 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
-                      disabled={
-                        filters.length <= 1 ||
-                        index >= displayedFilters.length - 1
-                      }
-                      onClick={() => moveFilter(index, "down")}
-                    >
-                      <IconArrowDown className="size-3.5" />
-                    </button>
-                  </div>
-
-                  <button
-                    type="button"
-                    aria-label={`Remove filter ${index + 1}`}
-                    className="flex size-8 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
-                    disabled={filters.length === 0}
-                    onClick={() => removeFilter(index)}
-                  >
-                    <IconX className="size-4" />
-                  </button>
-                </div>
-
-                {filterOperatorNeedsValue(currentFilter.operator) ? (
-                  <DatabaseFilterValueControl
-                    autoFocus={index === displayedFilters.length - 1}
-                    documentId={documentId}
-                    filter={currentFilter}
-                    properties={properties}
-                    onValueChange={(value) => updateFilter(index, { value })}
-                  />
-                ) : null}
-              </div>
-            ))}
-          </div>
-
-          <div className="flex justify-between gap-2 border-t pt-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              className="h-8 px-2 text-xs"
-              onClick={addFilter}
-            >
-              <IconPlus className="mr-1 size-3.5" />
-              {dbText("addFilter")}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              className="h-8 px-2 text-xs"
-              disabled={filters.length === 0}
-              onClick={() => onFiltersChange([])}
-            >
-              {dbText("clearFilters")}
-            </Button>
-          </div>
-          <span className="text-xs text-muted-foreground">
-            {active ? `${activeFilters.length} active` : "Set a value to apply"}
-          </span>
+      <DropdownMenuContent align="end" className="w-64">
+        <div onKeyDown={(event) => event.stopPropagation()}>
+          <DatabasePropertyPickerMenuItems
+            properties={properties}
+            includeName
+            excludeKeys={excludedFilterKeys}
+            placeholder={dbText("filterBy")}
+            closeOnSelect
+            onSelect={onAddFilter}
+          />
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            disabled={!advancedFilterCandidate}
+            onSelect={(event) => {
+              event.preventDefault();
+              if (!advancedFilterCandidate) return;
+              onAddAdvancedFilter(
+                advancedFilterCandidate.key,
+                advancedFilterCandidate.label,
+              );
+            }}
+          >
+            <IconPlus className="mr-2 size-4 text-muted-foreground" />
+            {dbText("addAdvancedFilter")}
+          </DropdownMenuItem>
         </div>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -14007,18 +17192,29 @@ function FilterMenu({
 function DatabaseFilterValueControl({
   documentId,
   filter,
+  items,
   properties,
   autoFocus,
+  hideOptionsUntilQuery = false,
   onValueChange,
 }: {
   documentId: string;
   filter: DatabaseFilter;
+  items: ContentDatabaseItem[];
   properties: DocumentProperty[];
   autoFocus?: boolean;
+  hideOptionsUntilQuery?: boolean;
   onValueChange: (value: string) => void;
 }) {
   const configureProperty = useConfigureDocumentProperty(documentId);
-  const options = databaseFilterOptionChoices(filter.key, properties);
+  const { session } = useSession();
+  const currentUserEmail = session?.email?.trim() ?? "";
+  const options = databaseFilterOptionChoices(
+    filter.key,
+    properties,
+    items,
+    currentUserEmail,
+  );
   const type = filterPropertyTypeForKey(filter.key, properties);
   const [optionQuery, setOptionQuery] = useState("");
   const filteredOptions = filterPropertyOptions(options, optionQuery);
@@ -14027,7 +17223,57 @@ function DatabaseFilterValueControl({
     properties,
   );
   const canCreateOption =
-    !!optionProperty && canCreatePropertyOption(options, optionQuery);
+    !!optionProperty &&
+    optionProperty.definition.type !== "person" &&
+    canCreatePropertyOption(options, optionQuery);
+  const usesOptionFilterValues =
+    optionProperty?.definition.type === "select" ||
+    optionProperty?.definition.type === "status" ||
+    optionProperty?.definition.type === "multi_select" ||
+    optionProperty?.definition.type === "person";
+  const allowsMultipleValues =
+    usesOptionFilterValues &&
+    (filter.operator === "contains" || filter.operator === "does_not_equal");
+  const selectedValues = databaseFilterSelectedValues(filter.value);
+  const selectedOptions = selectedValues
+    .map((value) =>
+      options.find(
+        (option) =>
+          databaseFilterChoiceValue(option) === value ||
+          option.id === value ||
+          option.name.trim().toLowerCase() === value.trim().toLowerCase(),
+      ),
+    )
+    .filter((option): option is DatabaseFilterChoice => !!option);
+  const showClearValue = selectedValues.length > 0;
+  const showOptionChoices =
+    !hideOptionsUntilQuery ||
+    optionQuery.trim().length > 0 ||
+    selectedValues.length > 0;
+  const showCompactOptionValueInput =
+    hideOptionsUntilQuery && selectedOptions.length === 0;
+
+  function setSelectedValues(values: string[]) {
+    onValueChange(databaseFilterEncodeSelectedValues(values));
+  }
+
+  function chooseFilterOption(option: DatabaseFilterChoice) {
+    const optionValue = databaseFilterChoiceValue(option);
+    if (!allowsMultipleValues) {
+      onValueChange(optionValue);
+      return;
+    }
+    const selected = databaseFilterOptionIsSelected(option, selectedValues);
+    setSelectedValues(
+      selected
+        ? selectedValues.filter(
+            (value) =>
+              value !== optionValue &&
+              value.trim().toLowerCase() !== option.name.trim().toLowerCase(),
+          )
+        : [...selectedValues, optionValue],
+    );
+  }
 
   async function createFilterOption() {
     if (!optionProperty || !canCreateOption) return;
@@ -14041,37 +17287,82 @@ function DatabaseFilterValueControl({
       options: { options: [...options, option] },
     });
     setOptionQuery("");
-    onValueChange(option.id);
+    if (allowsMultipleValues) {
+      setSelectedValues([...selectedValues, option.id]);
+    } else {
+      onValueChange(option.id);
+    }
+  }
+
+  if (
+    filter.operator === "between" &&
+    (type === "date" || type === "created_time" || type === "last_edited_time")
+  ) {
+    return (
+      <DatabaseBetweenDateFilterValueControl
+        filter={filter}
+        onValueChange={onValueChange}
+      />
+    );
   }
 
   if (optionProperty) {
     return (
-      <DropdownMenuSub>
-        <DropdownMenuSubTrigger className="h-8 rounded border border-input bg-background px-2 text-sm">
-          <span className="min-w-0 flex-1 truncate text-left">
-            {databaseFilterValueLabel(filter, properties)}
-          </span>
-        </DropdownMenuSubTrigger>
-        <DropdownMenuSubContent className="max-h-72 w-56 overflow-auto">
-          <div
-            className="sticky top-0 z-10 border-b border-border bg-popover p-2"
-            onKeyDown={(event) => event.stopPropagation()}
-          >
-            <div className="flex h-8 items-center gap-1 rounded border border-border bg-background px-2">
+      <div className="overflow-hidden rounded-sm">
+        <div className="px-1 pb-1">
+          <div className="flex min-h-9 flex-wrap items-center gap-1 rounded border border-input bg-background px-2 py-1 focus-within:border-[#2383e2] focus-within:ring-2 focus-within:ring-[#2383e2]/25">
+            {showCompactOptionValueInput ? null : (
               <IconSearch className="size-3.5 shrink-0 text-muted-foreground" />
-              <Input
-                autoFocus={autoFocus}
-                value={optionQuery}
-                placeholder={dbText("searchOptions")}
-                aria-label={`Search ${filter.label} filter options`}
-                onChange={(event) => setOptionQuery(event.target.value)}
-                className="h-7 border-0 bg-transparent px-0 text-xs shadow-none focus-visible:ring-0"
-              />
-            </div>
+            )}
+            {selectedOptions.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                className={cn(
+                  "inline-flex max-w-[9rem] items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium",
+                  optionProperty?.definition.type === "person"
+                    ? "bg-muted text-foreground"
+                    : OPTION_COLOR_CLASSES[option.color ?? "gray"],
+                )}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setSelectedValues(
+                    selectedValues.filter(
+                      (value) => value !== databaseFilterChoiceValue(option),
+                    ),
+                  );
+                }}
+              >
+                {optionProperty?.definition.type === "person" ? (
+                  <PersonPill value={databaseFilterChoiceValue(option)} />
+                ) : (
+                  <span className="truncate">{option.name}</span>
+                )}
+                <IconX className="size-3 opacity-70" />
+              </button>
+            ))}
+            <Input
+              autoFocus={autoFocus}
+              value={optionQuery}
+              placeholder={
+                showCompactOptionValueInput
+                  ? filterValuePlaceholder(filter.key, properties)
+                  : selectedOptions.length > 0
+                    ? ""
+                    : filterOptionSearchPlaceholder(filter.key, properties)
+              }
+              aria-label={`Search ${filter.label} filter options`}
+              onChange={(event) => setOptionQuery(event.target.value)}
+              className="h-7 min-w-[7rem] flex-1 border-0 bg-transparent px-0 text-xs shadow-none focus-visible:ring-0"
+            />
           </div>
-          {filter.value ? (
-            <>
+        </div>
+        {showOptionChoices ? (
+          <div className="max-h-60 overflow-auto py-0.5">
+            {showClearValue ? (
               <DropdownMenuItem
+                className="text-xs"
                 onSelect={(event) => {
                   event.preventDefault();
                   onValueChange("");
@@ -14080,45 +17371,56 @@ function DatabaseFilterValueControl({
                 <IconX className="mr-2 size-4 text-muted-foreground" />
                 {dbText("clearValue")}
               </DropdownMenuItem>
-              <DropdownMenuSeparator />
-            </>
-          ) : null}
-          {filteredOptions.length === 0 && !canCreateOption ? (
-            <div className="px-3 py-4 text-sm text-muted-foreground">
-              {dbText("noMatchingOptions")}
-            </div>
-          ) : null}
-          {filteredOptions.map((option) => (
-            <DropdownMenuItem
-              key={option.id}
-              onSelect={(event) => {
-                event.preventDefault();
-                onValueChange(option.id);
-              }}
-            >
-              <span className="min-w-0 flex-1 truncate">{option.name}</span>
-              {filter.value === option.id || filter.value === option.name ? (
-                <IconCheck className="size-4 text-muted-foreground" />
-              ) : null}
-            </DropdownMenuItem>
-          ))}
-          {canCreateOption ? (
-            <>
-              <DropdownMenuSeparator />
+            ) : null}
+            {filteredOptions.length === 0 && !canCreateOption ? (
+              <div className="px-2 py-3 text-xs text-muted-foreground">
+                {dbText("noMatchingOptions")}
+              </div>
+            ) : null}
+            {filteredOptions.map((option) => (
               <DropdownMenuItem
-                disabled={configureProperty.isPending}
+                key={option.id}
+                className="text-xs"
                 onSelect={(event) => {
                   event.preventDefault();
-                  void createFilterOption();
+                  chooseFilterOption(option);
                 }}
               >
-                <IconPlus className="mr-2 size-4 text-muted-foreground" />
-                Create &ldquo;{optionQuery.trim()}&rdquo;
+                <span className="min-w-0 flex-1 truncate">
+                  {optionProperty?.definition.type === "person" ? (
+                    option.name === "Me" ? (
+                      "Me"
+                    ) : (
+                      <PersonPill value={databaseFilterChoiceValue(option)} />
+                    )
+                  ) : (
+                    option.name
+                  )}
+                </span>
+                {databaseFilterOptionIsSelected(option, selectedValues) ? (
+                  <IconCheck className="size-4 text-muted-foreground" />
+                ) : null}
               </DropdownMenuItem>
-            </>
-          ) : null}
-        </DropdownMenuSubContent>
-      </DropdownMenuSub>
+            ))}
+            {canCreateOption ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  disabled={configureProperty.isPending}
+                  className="text-xs"
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    void createFilterOption();
+                  }}
+                >
+                  <IconPlus className="mr-2 size-4 text-muted-foreground" />
+                  Create &ldquo;{optionQuery.trim()}&rdquo;
+                </DropdownMenuItem>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
     );
   }
 
@@ -14130,7 +17432,7 @@ function DatabaseFilterValueControl({
       value={filter.value}
       placeholder={filterValuePlaceholder(filter.key, properties)}
       onChange={(event) => onValueChange(event.target.value)}
-      className="h-8"
+      className="h-9 text-sm focus-visible:border-[#2383e2] focus-visible:ring-[#2383e2]/25"
     />
   );
 }
@@ -14160,11 +17462,38 @@ const FILTER_OPERATOR_LABELS: Record<FilterOperator, string> = {
   less_than: "Less than",
   before: "Before",
   after: "After",
+  between: "Between",
   is_checked: "Checked",
   is_unchecked: "Unchecked",
   is_empty: "Is empty",
   is_not_empty: "Is not empty",
 };
+
+function databaseFilterOperatorLabel(
+  operator: FilterOperator,
+  key: string,
+  properties: DocumentProperty[],
+) {
+  const type = filterPropertyTypeForKey(key, properties);
+  if (
+    operator === "does_not_equal" &&
+    (type === "select" ||
+      type === "status" ||
+      type === "multi_select" ||
+      type === "person")
+  ) {
+    return "Does not contain";
+  }
+  return FILTER_OPERATOR_LABELS[operator] ?? "Contains";
+}
+
+function databaseFilterOperatorInlineLabel(
+  operator: FilterOperator,
+  key: string,
+  properties: DocumentProperty[],
+) {
+  return databaseFilterOperatorLabel(operator, key, properties).toLowerCase();
+}
 
 function filterOperatorsForKey(
   key: string,
@@ -14176,8 +17505,13 @@ function filterOperatorsForKey(
     return ["is_checked", "is_unchecked"];
   }
 
-  if (type === "select" || type === "status" || type === "multi_select") {
-    return ["equals", "does_not_equal", "is_empty", "is_not_empty"];
+  if (
+    type === "select" ||
+    type === "status" ||
+    type === "multi_select" ||
+    type === "person"
+  ) {
+    return ["contains", "does_not_equal", "is_empty", "is_not_empty"];
   }
 
   if (type === "number") {
@@ -14201,6 +17535,7 @@ function filterOperatorsForKey(
       "does_not_equal",
       "before",
       "after",
+      "between",
       "is_empty",
       "is_not_empty",
     ];
@@ -14244,6 +17579,18 @@ function filterValuePlaceholder(key: string, properties: DocumentProperty[]) {
   return "Value";
 }
 
+function filterOptionSearchPlaceholder(
+  key: string,
+  properties: DocumentProperty[],
+) {
+  const type = filterPropertyTypeForKey(key, properties);
+  if (type === "person") return "Search for one or more people...";
+  if (type === "select" || type === "status" || type === "multi_select") {
+    return "Search for one or more options...";
+  }
+  return "Search for an option...";
+}
+
 function filterValueInputType(type: DocumentPropertyType) {
   if (type === "number") return "number";
   if (type === "date" || type === "created_time" || type === "last_edited_time")
@@ -14251,12 +17598,106 @@ function filterValueInputType(type: DocumentPropertyType) {
   return "text";
 }
 
+function DatabaseBetweenDateFilterValueControl({
+  filter,
+  onValueChange,
+}: {
+  filter: DatabaseFilter;
+  onValueChange: (value: string) => void;
+}) {
+  const [start, end] = databaseFilterDateRangeValues(filter.value);
+  const updateRange = (nextStart: string, nextEnd: string) => {
+    onValueChange(databaseFilterEncodeDateRangeValues(nextStart, nextEnd));
+  };
+
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
+      <Input
+        type="date"
+        value={start}
+        aria-label={`Start ${filter.label} filter date`}
+        onChange={(event) => updateRange(event.target.value, end)}
+        className="h-9 text-sm focus-visible:border-[#2383e2] focus-visible:ring-[#2383e2]/25"
+      />
+      <span className="text-xs text-muted-foreground">to</span>
+      <Input
+        type="date"
+        value={end}
+        aria-label={`End ${filter.label} filter date`}
+        onChange={(event) => updateRange(start, event.target.value)}
+        className="h-9 text-sm focus-visible:border-[#2383e2] focus-visible:ring-[#2383e2]/25"
+      />
+    </div>
+  );
+}
+
 export function databaseFilterOptionChoices(
   key: string,
   properties: DocumentProperty[],
+  items: ContentDatabaseItem[] = [],
+  currentUserEmail = "",
+): DatabaseFilterChoice[] {
+  const property = databaseFilterPropertyForKey(key, properties);
+  if (property?.definition.type === "person") {
+    return databaseFilterPersonChoices(
+      property.definition.id,
+      items,
+      currentUserEmail,
+    );
+  }
+  const optionProperty = databaseFilterOptionPropertyForKey(key, properties);
+  return optionProperty?.definition.options.options ?? [];
+}
+
+type DatabaseFilterChoice = DocumentPropertyOption & {
+  filterValue?: string;
+};
+
+function databaseFilterChoiceValue(option: DatabaseFilterChoice) {
+  return option.filterValue ?? option.id;
+}
+
+function databaseFilterPersonChoices(
+  propertyId: string,
+  items: ContentDatabaseItem[],
+  currentUserEmail = "",
 ) {
-  const property = databaseFilterOptionPropertyForKey(key, properties);
-  return property?.definition.options.options ?? [];
+  const people = new Map<string, string>();
+  for (const item of items) {
+    const property = item.properties.find(
+      (candidate) => candidate.definition.id === propertyId,
+    );
+    for (const person of personItems(property?.value ?? null)) {
+      const key = person.trim().toLowerCase();
+      if (!people.has(key)) people.set(key, person);
+    }
+  }
+  const choices: DatabaseFilterChoice[] = [];
+  const currentUserLabel = currentUserEmail
+    ? personLabel(currentUserEmail)
+    : "";
+  if (currentUserEmail) {
+    const matchingPerson =
+      Array.from(people.values()).find(
+        (person) =>
+          person.toLowerCase() === currentUserEmail.toLowerCase() ||
+          personLabel(person).toLowerCase() === currentUserLabel.toLowerCase(),
+      ) ?? currentUserEmail;
+    choices.push({
+      id: `__current_user__:${matchingPerson}`,
+      name: "Me",
+      color: "gray" as const,
+      filterValue: matchingPerson,
+    });
+  }
+  choices.push(
+    ...Array.from(people.values()).map((person) => ({
+      id: person,
+      name: personLabel(person),
+      color: "gray" as const,
+    })),
+  );
+  return choices;
 }
 
 export function databaseFilterOptionPropertyForKey(
@@ -14268,7 +17709,8 @@ export function databaseFilterOptionPropertyForKey(
   if (
     property.definition.type !== "select" &&
     property.definition.type !== "status" &&
-    property.definition.type !== "multi_select"
+    property.definition.type !== "multi_select" &&
+    property.definition.type !== "person"
   ) {
     return null;
   }
@@ -14279,18 +17721,105 @@ function databaseFilterValueLabel(
   filter: DatabaseFilter,
   properties: DocumentProperty[],
 ) {
-  const option = databaseFilterOptionChoices(filter.key, properties).find(
-    (candidate) =>
-      candidate.id === filter.value || candidate.name === filter.value,
+  if (filter.operator === "between") {
+    const [start, end] = databaseFilterDateRangeValues(filter.value);
+    if (start && end) return `${start} to ${end}`;
+    return start || end || "Choose dates";
+  }
+  const values = databaseFilterSelectedValues(filter.value);
+  const options = databaseFilterOptionChoices(filter.key, properties);
+  if (options.length > 0) {
+    const labels = values.map((value) => {
+      const option = options.find(
+        (candidate) =>
+          candidate.id === value ||
+          candidate.name.trim().toLowerCase() === value.trim().toLowerCase(),
+      );
+      return option?.name ?? value;
+    });
+    return labels.length > 0 ? labels.join(", ") : "Choose option";
+  }
+  return values[0] || "Choose option";
+}
+
+function databaseFilterSelectedValues(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!Array.isArray(parsed)) return [trimmed];
+    return [
+      ...new Set(
+        parsed
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.trim())
+          .filter(Boolean),
+      ),
+    ];
+  } catch {
+    return [trimmed];
+  }
+}
+
+function databaseFilterDateRangeValues(value: string): [string, string] {
+  const trimmed = value.trim();
+  if (!trimmed) return ["", ""];
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!Array.isArray(parsed)) return [trimmed, ""];
+    const start = typeof parsed[0] === "string" ? parsed[0].trim() : "";
+    const end = typeof parsed[1] === "string" ? parsed[1].trim() : "";
+    return [start, end];
+  } catch {
+    return [trimmed, ""];
+  }
+}
+
+function databaseFilterEncodeDateRangeValues(start: string, end: string) {
+  const normalizedStart = start.trim();
+  const normalizedEnd = end.trim();
+  if (!normalizedStart && !normalizedEnd) return "";
+  return JSON.stringify([normalizedStart, normalizedEnd]);
+}
+
+function databaseFilterDateRangeValue(value: string): [number, number] | null {
+  const [startValue, endValue] = databaseFilterDateRangeValues(value);
+  const start = new Date(startValue).getTime();
+  const end = new Date(endValue).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return start <= end ? [start, end] : [end, start];
+}
+
+function databaseFilterEncodeSelectedValues(values: string[]) {
+  const normalized = [
+    ...new Set(values.map((value) => value.trim()).filter(Boolean)),
+  ];
+  if (normalized.length === 0) return "";
+  if (normalized.length === 1) return normalized[0];
+  return JSON.stringify(normalized);
+}
+
+function databaseFilterOptionIsSelected(
+  option: DatabaseFilterChoice,
+  values: string[],
+) {
+  const optionValue = databaseFilterChoiceValue(option);
+  const optionName = option.name.trim().toLowerCase();
+  return values.some(
+    (value) =>
+      value === optionValue || value.trim().toLowerCase() === optionName,
   );
-  return (option?.name ?? filter.value) || "Choose option";
 }
 
 function databaseFilterChipLabel(
   filter: DatabaseFilter,
   properties: DocumentProperty[],
 ) {
-  const operator = FILTER_OPERATOR_LABELS[filter.operator] ?? "Contains";
+  const operator = databaseFilterOperatorLabel(
+    filter.operator,
+    filter.key,
+    properties,
+  );
   if (!filterOperatorNeedsValue(filter.operator)) {
     return `${filter.label} ${operator.toLowerCase()}`;
   }
@@ -14298,6 +17827,23 @@ function databaseFilterChipLabel(
     filter,
     properties,
   )}`;
+}
+
+export function databaseInlineFilterLabel(
+  filter: DatabaseFilter,
+  properties: DocumentProperty[],
+) {
+  if (!filterOperatorNeedsValue(filter.operator)) {
+    return `${filter.label}: ${databaseFilterOperatorLabel(
+      filter.operator,
+      filter.key,
+      properties,
+    )}`;
+  }
+  if (databaseFilterSelectedValues(filter.value).length === 0) {
+    return filter.label;
+  }
+  return `${filter.label}: ${databaseFilterValueLabel(filter, properties)}`;
 }
 
 function databaseFilterPropertyForKey(
@@ -14330,19 +17876,19 @@ export function normalizeClientDatabaseFilterMode(
 export function databaseTableRowDensityClass(rowDensity: DatabaseRowDensity) {
   if (rowDensity === "compact") return "min-h-8";
   if (rowDensity === "comfortable") return "min-h-12";
-  return "min-h-9";
+  return "min-h-8";
 }
 
 export function databaseTableCellDensityClass(rowDensity: DatabaseRowDensity) {
   if (rowDensity === "compact") return "px-2 py-0.5";
   if (rowDensity === "comfortable") return "px-2.5 py-2";
-  return "px-2 py-1";
+  return "px-2 py-0.5";
 }
 
 function databaseRowNameCellDensityClass(rowDensity: DatabaseRowDensity) {
   if (rowDensity === "compact") return "px-1 py-0.5";
   if (rowDensity === "comfortable") return "px-1.5 py-2";
-  return "px-1 py-1";
+  return "px-1 py-0.5";
 }
 
 function databaseTitleButtonDensityClass(
@@ -14371,11 +17917,14 @@ function DatabaseGroupedTableSection({
   properties,
   columnWidths,
   databaseDocumentId,
+  workspaceCatalog,
+  workspaceCreationPropertyValues,
   canEdit,
   selectedIdSet,
   wrapCells,
   rowDensity,
   isCreating,
+  newRowLabel,
   focusedTitleDocumentId,
   collapsed,
   onCreateRow,
@@ -14391,11 +17940,14 @@ function DatabaseGroupedTableSection({
   properties: DocumentProperty[];
   columnWidths: Record<string, number>;
   databaseDocumentId: string;
+  workspaceCatalog: boolean;
+  workspaceCreationPropertyValues?: Record<string, DocumentPropertyValue>;
   canEdit: boolean;
   selectedIdSet: Set<string>;
   wrapCells: boolean;
   rowDensity: DatabaseRowDensity;
   isCreating: boolean;
+  newRowLabel: string;
   focusedTitleDocumentId: string | null;
   collapsed: boolean;
   onCreateRow: (
@@ -14427,6 +17979,7 @@ function DatabaseGroupedTableSection({
               key={`${group.id}-${item.id}`}
               item={item}
               databaseDocumentId={databaseDocumentId}
+              workspaceCatalog={workspaceCatalog}
               properties={properties}
               columnWidths={columnWidths}
               canEdit={canEdit}
@@ -14454,14 +18007,36 @@ function DatabaseGroupedTableSection({
             />
           ))}
           {canEdit ? (
-            <NewDatabaseRow
-              properties={properties}
-              columnWidths={columnWidths}
-              rowDensity={rowDensity}
-              disabled={isCreating}
-              isPending={isCreating}
-              onCreate={(title) => onCreateRow(group, title)}
-            />
+            workspaceCatalog ? (
+              <WorkspaceSourceMenuRow
+                label={newRowLabel}
+                properties={properties}
+                columnWidths={columnWidths}
+                rowDensity={rowDensity}
+                propertyValues={{
+                  ...workspaceCreationPropertyValues,
+                  ...(group.property && group.value !== BOARD_UNGROUPED_VALUE
+                    ? {
+                        [group.property.definition.id]:
+                          boardGroupValueForProperty(
+                            group.property,
+                            group.value,
+                          ),
+                      }
+                    : {}),
+                }}
+              />
+            ) : (
+              <NewDatabaseRow
+                label={newRowLabel}
+                properties={properties}
+                columnWidths={columnWidths}
+                rowDensity={rowDensity}
+                disabled={isCreating}
+                isPending={isCreating}
+                onCreate={(title) => onCreateRow(group, title)}
+              />
+            )
           ) : null}
         </>
       ) : null}
@@ -14469,11 +18044,30 @@ function DatabaseGroupedTableSection({
   );
 }
 
+export function databaseItemPropertyForColumn(
+  item: ContentDatabaseItem,
+  columnProperty: DocumentProperty,
+): DocumentProperty {
+  const itemProperty = item.properties.find(
+    (candidate) => candidate.definition.id === columnProperty.definition.id,
+  );
+  if (!itemProperty) return columnProperty;
+
+  // Row payloads own values, not schema meaning. Always pair the row's value
+  // with the database's current canonical definition so a recently described
+  // option cannot remain invisible in an older row snapshot.
+  return {
+    ...itemProperty,
+    definition: columnProperty.definition,
+  };
+}
+
 function DatabaseTableRow({
   item,
   properties,
   columnWidths,
   databaseDocumentId,
+  workspaceCatalog,
   canEdit,
   rowIndex,
   canReorder,
@@ -14499,6 +18093,7 @@ function DatabaseTableRow({
   properties: ContentDatabaseItem["properties"];
   columnWidths: Record<string, number>;
   databaseDocumentId: string;
+  workspaceCatalog: boolean;
   canEdit: boolean;
   rowIndex: number;
   canReorder: boolean;
@@ -14523,7 +18118,7 @@ function DatabaseTableRow({
   return (
     <div
       className={cn(
-        "group grid border-t border-border/45 transition-colors",
+        "group grid border-t border-border/35 transition-colors",
         databaseTableRowDensityClass(rowDensity),
         selected && "bg-muted/20",
         isDragging && "opacity-50",
@@ -14541,6 +18136,7 @@ function DatabaseTableRow({
       <RowNameCell
         item={item}
         databaseDocumentId={databaseDocumentId}
+        workspaceCatalog={workspaceCatalog}
         canEdit={canEdit}
         canDragRow={canDragRow}
         selected={selected}
@@ -14553,10 +18149,11 @@ function DatabaseTableRow({
         onPreview={onPreview}
       />
       {properties.map((property) => {
-        const itemProperty =
-          item.properties.find(
-            (candidate) => candidate.definition.id === property.definition.id,
-          ) ?? property;
+        const itemProperty = databaseItemPropertyForColumn(item, property);
+        const bodyCellHydrationPending =
+          itemProperty.definition.type === "blocks" &&
+          databaseItemBodyHydrationIsPending(item);
+
         const value = (
           <div
             className={cn(
@@ -14564,10 +18161,12 @@ function DatabaseTableRow({
               wrapCells
                 ? "whitespace-normal break-words"
                 : "truncate whitespace-nowrap",
-              isEmptyPropertyValue(itemProperty.value) && "text-transparent",
+              isEmptyPropertyValue(itemProperty.value) &&
+                !bodyCellHydrationPending &&
+                "text-transparent",
             )}
           >
-            {databaseTableCellDisplayValue(itemProperty)}
+            {databaseTableCellDisplayValue(itemProperty, item)}
           </div>
         );
         const isEditableCheckbox =
@@ -14579,7 +18178,7 @@ function DatabaseTableRow({
           <div
             key={property.definition.id}
             className={cn(
-              "flex min-w-0 border-r border-border/55 last:border-r-0 hover:bg-muted/30",
+              "flex min-w-0 border-r border-border/35 last:border-r-0 hover:bg-muted/25",
               databaseTableCellDensityClass(rowDensity),
               wrapCells ? "items-start" : "items-center",
             )}
@@ -14630,7 +18229,7 @@ function DatabaseTableRow({
   );
 }
 
-function RowActionsCell({
+export function RowActionsCell({
   item,
   databaseDocumentId,
   onPreviewItem,
@@ -14649,11 +18248,22 @@ function RowActionsCell({
   onOpenPage: () => void;
 }) {
   const queryClient = useQueryClient();
+  const contentSpaces = useContentSpaces();
   const deleteDocument = useDeleteDocument();
+  const deleteContentSpace = useDeleteContentSpace();
   const duplicateItem = useDuplicateDatabaseItem(databaseDocumentId);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const title = item.document.title || "Untitled";
+  const removesFavoriteMembership =
+    contentSpaces.data?.favoritesDocumentId === databaseDocumentId;
+  const workspaceSpace = contentSpaces.data?.spaces.find(
+    (space) => space.catalogDocumentId === item.document.id,
+  );
+  const isWorkspaceCatalog =
+    contentSpaces.data?.catalogDocumentId === databaseDocumentId;
+  const canDeleteWorkspace =
+    isWorkspaceCatalog && workspaceSpace?.kind === "user";
 
   async function duplicateRow() {
     setMenuOpen(false);
@@ -14672,7 +18282,14 @@ function RowActionsCell({
   async function deleteRow() {
     const previewMoved = onDeletedPreviewItem?.(item) ?? false;
     try {
-      await deleteDocument.mutateAsync({ id: item.document.id });
+      if (canDeleteWorkspace && workspaceSpace) {
+        await deleteContentSpace.mutateAsync({ spaceId: workspaceSpace.id });
+      } else {
+        await deleteDocument.mutateAsync({
+          id: item.document.id,
+          databaseDocumentId,
+        });
+      }
       await queryClient.invalidateQueries({
         queryKey: [
           "action",
@@ -14715,48 +18332,87 @@ function RowActionsCell({
             <IconExternalLink className="mr-2 size-4 text-muted-foreground" />
             {dbText("openPage")}
           </DropdownMenuItem>
-          <DropdownMenuItem
-            disabled={duplicateItem.isPending}
-            onSelect={(event) => {
-              event.preventDefault();
-              void duplicateRow();
-            }}
-          >
-            <IconCopy className="mr-2 size-4 text-muted-foreground" />
-            {dbText("duplicateRow")}
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            className="text-destructive focus:bg-destructive/10 focus:text-destructive"
-            onSelect={(event) => {
-              event.preventDefault();
-              setMenuOpen(false);
-              setConfirmDeleteOpen(true);
-            }}
-          >
-            <IconTrash className="mr-2 size-4" />
-            {dbText("deleteRow")}
-          </DropdownMenuItem>
+          {!isWorkspaceCatalog ? (
+            <DropdownMenuItem
+              disabled={duplicateItem.isPending}
+              onSelect={(event) => {
+                event.preventDefault();
+                void duplicateRow();
+              }}
+            >
+              <IconCopy className="mr-2 size-4 text-muted-foreground" />
+              {dbText("duplicateRow")}
+            </DropdownMenuItem>
+          ) : null}
+          {!isWorkspaceCatalog || canDeleteWorkspace ? (
+            <DropdownMenuSeparator />
+          ) : null}
+          {removesFavoriteMembership ? (
+            <DropdownMenuItem
+              onSelect={(event) => {
+                event.preventDefault();
+                setMenuOpen(false);
+                void deleteRow();
+              }}
+            >
+              <IconStarOff className="mr-2 size-4 text-muted-foreground" />
+              {sidebarText("removeFromFavorites")}
+            </DropdownMenuItem>
+          ) : !isWorkspaceCatalog || canDeleteWorkspace ? (
+            <DropdownMenuItem
+              className="text-destructive focus:bg-destructive/10 focus:text-destructive"
+              onSelect={(event) => {
+                event.preventDefault();
+                setMenuOpen(false);
+                setConfirmDeleteOpen(true);
+              }}
+            >
+              <IconTrash className="mr-2 size-4" />
+              {canDeleteWorkspace ? "Delete workspace" : dbText("deleteRow")}
+            </DropdownMenuItem>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <AlertDialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
+      <AlertDialog
+        open={
+          !removesFavoriteMembership &&
+          (!isWorkspaceCatalog || canDeleteWorkspace) &&
+          confirmDeleteOpen
+        }
+        onOpenChange={setConfirmDeleteOpen}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{dbText("deleteRow2")}</AlertDialogTitle>
+            <AlertDialogTitle>
+              {canDeleteWorkspace ? "Delete workspace?" : dbText("deleteRow2")}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              &ldquo;{title}&rdquo; and any sub-pages will be permanently
-              deleted. This cannot be undone.
+              {canDeleteWorkspace ? (
+                <>
+                  &ldquo;{title}&rdquo; and every page and database inside it
+                  will be permanently deleted. This cannot be undone.
+                </>
+              ) : (
+                <>
+                  &ldquo;{title}&rdquo; and any sub-pages will be permanently
+                  deleted. This cannot be undone.
+                </>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              disabled={deleteDocument.isPending}
+              disabled={
+                deleteDocument.isPending || deleteContentSpace.isPending
+              }
               onClick={() => void deleteRow()}
             >
-              {deleteDocument.isPending ? "Deleting..." : "Delete"}
+              {deleteDocument.isPending || deleteContentSpace.isPending
+                ? "Deleting..."
+                : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -14768,6 +18424,7 @@ function RowActionsCell({
 function RowNameCell({
   item,
   databaseDocumentId,
+  workspaceCatalog,
   canEdit,
   canDragRow,
   selected,
@@ -14781,6 +18438,7 @@ function RowNameCell({
 }: {
   item: ContentDatabaseItem;
   databaseDocumentId: string;
+  workspaceCatalog: boolean;
   canEdit: boolean;
   canDragRow: boolean;
   selected: boolean;
@@ -14846,7 +18504,7 @@ function RowNameCell({
   return (
     <div
       className={cn(
-        "group group/name flex min-w-0 gap-1 border-r border-border/55 hover:bg-muted/30",
+        "group group/name flex min-w-0 gap-1 border-r border-border/35 hover:bg-muted/25",
         databaseRowNameCellDensityClass(rowDensity),
         wrapCells ? "items-start" : "items-center",
       )}
@@ -14873,6 +18531,7 @@ function RowNameCell({
         document={item.document}
         className="size-4 text-sm"
         fallbackClassName="size-4"
+        fallback={workspaceCatalog ? "folder" : "page"}
       />
       {canEdit && editingTitle ? (
         <input

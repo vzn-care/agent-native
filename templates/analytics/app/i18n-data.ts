@@ -1,4 +1,4 @@
-import type { LocaleCode } from "@agent-native/core/client";
+import { type LocaleCode } from "@agent-native/core/client/i18n";
 
 import zhTW from "./i18n/zh-TW";
 
@@ -14,6 +14,10 @@ const enUS = {
     dataSources: "Data Sources",
     dataDictionary: "Data Dictionary",
     sessions: "Sessions",
+    monitoring: "Monitoring",
+    monitoringUptime: "Uptime",
+    monitoringErrors: "Errors",
+    admin: "Admin",
     agents: "Agents",
     templateCatalog: "Catalog",
     dashboards: "Dashboards",
@@ -30,6 +34,18 @@ const enUS = {
     created: "Created {{date}}",
   },
   dashboard: {
+    sqlDashboard: "SQL dashboard",
+    historyTitle: "Dashboard history",
+    historyDescription:
+      "Restore a previous dashboard state. Restoring snapshots the current state first.",
+    historyEmpty:
+      "No history yet. Changes are saved here automatically after the next edit.",
+    historyRestore: "Restore",
+    historyRestored: "Dashboard restored",
+    historyRestoreFailed: "Couldn't restore dashboard",
+    historyRestoreQuestion: "Restore this dashboard version?",
+    historyRestoreWarning:
+      "This replaces the current dashboard layout and saves the current state in history.",
     panelSettings: "Panel settings",
     revenueOverTime: "Revenue over time",
     recentSales: "Recent Sales",
@@ -38,6 +54,8 @@ const enUS = {
   sidebar: {
     collapseSidebar: "Collapse sidebar",
     expandSidebar: "Expand sidebar",
+    collapseAsk: "Collapse Ask",
+    expandAsk: "Expand Ask",
     collapseDashboards: "Collapse dashboards",
     expandDashboards: "Expand dashboards",
     collapseAnalyses: "Collapse analyses",
@@ -45,6 +63,10 @@ const enUS = {
     showLess: "Show less",
     showMore: "Show {{count}} more",
     noAnalysesYet: "No analyses yet",
+    dashboardsLoadFailed: "Couldn't load dashboards.",
+    analysesLoadFailed: "Couldn't load analyses.",
+    favoritesUnavailable: "Favorites are unavailable right now",
+    retry: "Retry",
     search: "Search",
     searchShortcut: "Search ({{shortcut}})",
     sectionSettings: "{{label}} settings",
@@ -139,6 +161,7 @@ const enUS = {
     groupAppearance: "Appearance",
     groupHelp: "Help",
     groupSavedCharts: "Saved Charts",
+    loadFailed: "Some results couldn't be loaded.",
     hidden: "Hidden",
     toggleLightMode: "Toggle light mode",
     toggleDarkMode: "Toggle dark mode",
@@ -147,10 +170,10 @@ const enUS = {
     untitledDashboard: "Untitled dashboard",
   },
   settings: {
-    agentTitle: "Agent settings",
+    agentTitle: "Manage agent",
     agentDescription:
-      "Open the agent sidebar settings for model, API keys, automations, voice, and other agent controls.",
-    openAgentSettings: "Open agent settings",
+      "Manage the agent's model, API keys, automations, voice, and other controls.",
+    openAgentSettings: "Manage agent",
     account: "Account",
     signedInAs: "Signed in as",
     credentials: "Data Source Credentials",
@@ -258,6 +281,14 @@ const enUS = {
     alertChannels: "Channels",
     alertCustomChannels: "Additional channels",
     alertCustomChannelsPlaceholder: "pagerduty, opsgenie",
+    alertSlackWebhookUrl: "Slack webhook URL",
+    alertSlackWebhookUrlPlaceholder: "https://hooks.slack.com/services/...",
+    alertSlackWebhookUrlHint:
+      "Leave blank to use the workspace default, if configured.",
+    alertWebhookUrl: "Webhook URL",
+    alertWebhookUrlPlaceholder: "https://example.com/webhook",
+    alertWebhookUrlHint:
+      "Leave blank to use the workspace default, if configured.",
     alertEmailRecipients: "Email recipients",
     alertEmailRecipientsPlaceholder: "analytics@example.com, ops@example.com",
     alertEnabled: "Enabled",
@@ -267,6 +298,8 @@ const enUS = {
     alertFiltersInvalid: "Invalid filters JSON: {{message}}",
     alertNameRequired: "Add an alert name.",
     alertChannelRequired: "Select at least one notification channel.",
+    alertSlackWebhookUrlInvalid: "Enter a valid Slack webhook http(s) URL.",
+    alertWebhookUrlInvalid: "Enter a valid webhook http(s) URL.",
     alertSaved: "Alert rule saved.",
     alertSaveFailed: "Couldn't save alert rule: {{message}}",
     alertEnabledToast: "Alert enabled.",
@@ -317,6 +350,7 @@ const enUS = {
     newAnalysisPlaceholder: "Describe the question you want to investigate...",
   },
   common: {
+    cancel: "Cancel",
     docs: "Docs",
     noData: "No data",
     noDataAvailable: "No data available",
@@ -337,6 +371,8 @@ const enUS = {
     editSqlQuery: "Edit SQL Query",
     chartUnavailable: "Chart unavailable",
     failedToDecodePanel: "Failed to decode panel",
+    untitledAnalysis: "Untitled analysis",
+    untitledDashboard: "Untitled dashboard",
   },
   routeTitles: {
     notFound: "Not Found - Analytics",
@@ -347,7 +383,8 @@ const enUS = {
     dataDictionary: "Data Dictionary - Analytics",
     dataSources: "Data Sources - Analytics",
     sessions: "Sessions - Analytics",
-    agents: "Agents - Analytics",
+    monitoring: "Monitoring - Analytics",
+    agents: "Admin - Analytics",
     session: "Session Replay - Analytics",
     tool: "Tool - Analytics",
     extensions: "Extensions - Analytics",
@@ -361,12 +398,52 @@ const enUS = {
     embeddedContent: "Embedded content",
   },
   agents: {
-    title: "Agents",
+    title: "Admin",
     description:
-      "Monitor agent runs, evals, experiments, feedback, and connected app databases that admins can inspect behind the scenes.",
+      "Monitor agent runs, dashboard usage, evals, experiments, feedback, and connected app databases that admins can inspect behind the scenes.",
     monitoring: "Monitoring",
     monitoringDescription:
       "Core observability stays here: runs, traces, evals, experiments, and feedback. Install the LLM observability dashboard from the catalog when you want first-party token, latency, and cost charts.",
+    dashboardUsage: "Dashboard Usage",
+    dashboardUsageTitle: "Dashboard usage",
+    dashboardUsageDescription:
+      "Audit dashboard lifecycle, traffic, engagement, and ownership across the active organization. Existing dashboards only show a modifier after they are changed with updated attribution.",
+    dashboardUsageTotal: "Dashboards",
+    dashboardUsageActive: "{{count}} active",
+    dashboardUsageViews: "Views",
+    dashboardUsageEdits: "Edits",
+    dashboardUsageSort: "Sort dashboards",
+    dashboardUsageMostViewed: "Most viewed",
+    dashboardUsageMostEdited: "Most edited",
+    dashboardUsageTop: "Top: {{name}}",
+    dashboardUsageEngagements: "Engagements",
+    dashboardUsageEngagementsHint: "Non-pageview events plus saved views",
+    dashboardUsageStale: "No views",
+    dashboardUsageStaleHint: "Active dashboards without tracked views",
+    dashboardUsageDashboard: "Dashboard",
+    dashboardUsageOwner: "Owner",
+    dashboardUsageUsers: "Users",
+    dashboardUsageModified: "Modified",
+    dashboardUsageCreated: "Created",
+    dashboardMetadataCreated: "Created",
+    dashboardMetadataCreatedBy: "Created by",
+    dashboardMetadataUpdated: "Updated",
+    dashboardMetadataUpdatedBy: "Updated by",
+    dashboardUsageState: "State",
+    dashboardUsagePanels: "{{count}} panels",
+    dashboardUsageSavedViews: "{{count}} saved views",
+    dashboardUsageHidden: "Hidden",
+    dashboardUsageArchived: "Archived",
+    dashboardUsageEmpty: "No dashboards yet",
+    dashboardUsageEmptyDescription:
+      "Dashboards created in this organization will appear here with usage and cleanup signals.",
+    adminOnlyTitle: "Admin access required",
+    adminOnlyDescription:
+      "Only organization owners and admins can open Analytics admin tools.",
+    notTracked: "Not tracked",
+    visibilityprivate: "Private",
+    visibilityorg: "Shared with org",
+    visibilitypublic: "Public",
     advanced: "Advanced",
     database: "App Databases",
     openCatalog: "Open catalog",
@@ -391,6 +468,27 @@ const enUS = {
     deleteConnectionTitle: "Delete database connection?",
     deleteConnectionDescription:
       "This removes {{name}} from Analytics and deletes its stored connection secrets. The target app database is not modified.",
+    featureFlags: "Feature flags",
+    featureFlagsDescription:
+      "Review registered app flags and make deliberate, reversible rollout changes.",
+    reloadFlags: "Reload flags",
+    loading: "Loading",
+    flagsUnavailable: "Feature flags are unavailable",
+    flagsUnreachable:
+      "The workspace directory could not be reached. Retry when its connection is available.",
+    flagsEmpty: "No workspace apps reported flags",
+    flagsEmptyDetail:
+      "Registered flags will appear here when connected apps are ready.",
+    flagsNotReady:
+      "This app is {{status}}. Its flag state is not assumed to be off.",
+    noFlagDefinitions: "This ready app has no registered flag definitions.",
+    noFlagDescription: "No description supplied.",
+    selected: "Selected",
+    openFlag: "Open feature flag",
+    confirm: "Confirm",
+    name: "Name",
+    appId: "App ID",
+    flagKey: "Feature flag",
   },
   providerCorpusNotifier: {
     completed: "Provider corpus job completed",
@@ -476,6 +574,7 @@ const enUS = {
     halfWidth: "Half width",
     fullWidth: "Full width",
     editInExplorer: "Edit in Explorer",
+    chatWithChart: "Chat with chart",
     removeChart: "Remove chart",
     removeChartTitle: "Remove chart?",
     removeChartDescription:
@@ -520,6 +619,7 @@ const enUS = {
     clearAll: "Clear all",
     collapseFilters: "Collapse filters",
     expandFilters: "Expand filters",
+    filterSeries: "Filter",
     hide: "Hide",
     show: "Show",
     saveAsView: "Save as View",
@@ -533,10 +633,16 @@ const enUS = {
     extensionUnavailable:
       "This extension isn't shared with you, or it no longer exists.",
     panelOptions: "Panel options",
+    chatWithPanel: "Chat with panel",
     fullScreen: "Full screen",
     refresh: "Refresh",
     refreshing: "Refreshing...",
     downloadCsv: "Download CSV",
+    exportToGoogleSheets: "Export to Google Sheets",
+    exportingToGoogleSheets: "Exporting to Google Sheets...",
+    googleSheetsExported: "Exported to Google Sheets",
+    openGoogleSheet: "Open sheet",
+    googleSheetsExportFailed: "Couldn't export to Google Sheets: {{message}}",
     viewSql: "View SQL",
     dragToReorder: "Drag to reorder",
     deleteSectionTitle: "Delete section?",
@@ -630,6 +736,17 @@ const enUS = {
     allAnalyses: "All analyses",
     updated: "Updated {{date}}",
     created: "Created {{date}}",
+    historyTitle: "Analysis history",
+    historyDescription:
+      "Restore a previous saved analysis state. Restoring snapshots the current state first.",
+    historyEmpty:
+      "No history yet. Changes are saved here automatically after the next re-run.",
+    historyRestore: "Restore",
+    historyRestored: "Analysis restored",
+    historyRestoreFailed: "Couldn't restore analysis",
+    historyRestoreQuestion: "Restore this analysis version?",
+    historyRestoreWarning:
+      "This replaces the current saved findings and keeps the current state in history.",
     public: "Public",
     sharedWithOrg: "Shared with org",
     private: "Private",
@@ -711,6 +828,11 @@ const enUS = {
   },
   dataSources: {
     uploadFile: "Upload file",
+    googleSheetsExport: "Google Sheets export",
+    googleSheetsExportDescription:
+      "Export dashboard reports to Google Sheets through a shared Google connection.",
+    connected: "Connected",
+    googleSheets: "Google Sheets",
     open: "Open",
     savedValueHint:
       "A value is already saved. Leave blank to keep it, or enter a new value to replace it.",
@@ -805,12 +927,25 @@ const enUS = {
     chartTypePie: "Pie",
     chartTypeMetric: "Metric",
     chartTypeTable: "Table",
+    chartTypeExtension: "Extension",
     failedToSavePanel: "Failed to save panel",
     failedToFormatSql: "Failed to format SQL",
     title: "Title",
     titlePlaceholder: "e.g. Weekly signups",
     chartType: "Chart type",
     source: "Source",
+    extensionDisplay: "Extension display",
+    sharedExtension: "Shared extension",
+    perViewerSlot: "Per-viewer slot",
+    extension: "Extension",
+    loadingExtensions: "Loading extensions...",
+    selectExtension: "Select an extension",
+    noExtensions: "No visible extensions. Create or share one first.",
+    sharedExtensionHelp:
+      "The selected extension is shared with this dashboard and appears in scheduled reports. Viewers still need access to the extension.",
+    slotIdOptional: "Slot ID (optional)",
+    perViewerSlotHelp:
+      "Each viewer installs their own extension. Scheduled reports may show an empty slot. Leave blank to generate a stable ID.",
     sectionColumns: "Section columns",
     format: "Format",
     filterInterpolation: "Use {{example}} to interpolate filter values.",
@@ -953,6 +1088,7 @@ const enUS = {
     allTime: "All time",
     showing: "{{count}} sessions",
     eventCountCompact: "{{count}} events",
+    pageCountCompactSingular: "{{count}} page",
     pageCountCompact: "{{count}} pages",
     truncated: "Showing the first replay events only.",
     session: "Session",
@@ -1000,6 +1136,8 @@ const enUS = {
     timeline: "Event timeline",
     replayTimeline: "Replay timeline",
     timelineDescription: "Showing {{count}} of {{total}} useful events.",
+    timelineSearch: "Search events...",
+    timelineNoMatches: "No timeline events match the current search.",
     noTimelineEvents: "No timeline markers found",
     sequence: "Sequence",
     size: "Size",
@@ -1155,6 +1293,11 @@ const analyticsSliceTranslations: {
     },
     dataSources: {
       uploadFile: "上传文件",
+      googleSheetsExport: "Google Sheets 导出",
+      googleSheetsExportDescription:
+        "通过共享的 Google 连接将仪表板报告导出到 Google Sheets。",
+      connected: "已连接",
+      googleSheets: "Google Sheets",
       open: "打开",
       savedValueHint: "值已保存。留空以保留它，或输入新值以替换它。",
       githubOAuth: "GitHub OAuth",
@@ -1246,12 +1389,25 @@ const analyticsSliceTranslations: {
       chartTypePie: "馅饼",
       chartTypeMetric: "公制",
       chartTypeTable: "桌子",
+      chartTypeExtension: "扩展",
       failedToSavePanel: "保存面板失败",
       failedToFormatSql: "格式化SQL失败",
       title: "标题",
       titlePlaceholder: "例如每周注册人数",
       chartType: "图表类型",
       source: "来源",
+      extensionDisplay: "扩展显示方式",
+      sharedExtension: "共享扩展",
+      perViewerSlot: "每位查看者的插槽",
+      extension: "扩展",
+      loadingExtensions: "正在加载扩展...",
+      selectExtension: "选择扩展",
+      noExtensions: "没有可见的扩展。请先创建或共享一个。",
+      sharedExtensionHelp:
+        "所选扩展会与此仪表板共享并显示在计划报告中。查看者仍需拥有该扩展的访问权限。",
+      slotIdOptional: "插槽 ID（可选）",
+      perViewerSlotHelp:
+        "每位查看者各自安装扩展。计划报告可能显示空插槽。留空即可生成稳定 ID。",
       sectionColumns: "剖面列",
       format: "格式",
       filterInterpolation: "使用 {{example}} 插值滤波器值。",
@@ -1425,6 +1581,11 @@ const analyticsSliceTranslations: {
     },
     dataSources: {
       uploadFile: "Subir archivo",
+      googleSheetsExport: "Exportación a Google Sheets",
+      googleSheetsExportDescription:
+        "Exporte informes del panel a Google Sheets mediante una conexión de Google compartida.",
+      connected: "Conectado",
+      googleSheets: "Google Sheets",
       open: "Abierto",
       savedValueHint:
         "Ya hay un valor guardado. Déjelo en blanco para conservarlo o ingrese un nuevo valor para reemplazarlo.",
@@ -1521,12 +1682,25 @@ const analyticsSliceTranslations: {
       chartTypePie: "Pastel",
       chartTypeMetric: "Métrico",
       chartTypeTable: "Mesa",
+      chartTypeExtension: "Extensión",
       failedToSavePanel: "No se pudo guardar el panel",
       failedToFormatSql: "No se pudo formatear SQL",
       title: "Título",
       titlePlaceholder: "p.ej. Inscripciones semanales",
       chartType: "Tipo de gráfico",
       source: "Fuente",
+      extensionDisplay: "Visualización de extensión",
+      sharedExtension: "Extensión compartida",
+      perViewerSlot: "Espacio por usuario",
+      extension: "Extensión",
+      loadingExtensions: "Cargando extensiones...",
+      selectExtension: "Selecciona una extensión",
+      noExtensions: "No hay extensiones visibles. Crea o comparte una primero.",
+      sharedExtensionHelp:
+        "La extensión seleccionada se comparte con este panel y aparece en los informes programados. Los usuarios aún necesitan acceso a ella.",
+      slotIdOptional: "ID del espacio (opcional)",
+      perViewerSlotHelp:
+        "Cada usuario instala su propia extensión. Los informes programados pueden mostrar un espacio vacío. Déjalo en blanco para generar un ID estable.",
       sectionColumns: "Columnas de sección",
       format: "Formato",
       filterInterpolation:
@@ -1717,6 +1891,11 @@ const analyticsSliceTranslations: {
     },
     dataSources: {
       uploadFile: "Télécharger le fichier",
+      googleSheetsExport: "Export Google Sheets",
+      googleSheetsExportDescription:
+        "Exportez les rapports du tableau de bord vers Google Sheets grâce à une connexion Google partagée.",
+      connected: "Connecté",
+      googleSheets: "Google Sheets",
       open: "Ouvrir",
       savedValueHint:
         "Une valeur est déjà enregistrée. Laissez vide pour le conserver ou saisissez une nouvelle valeur pour le remplacer.",
@@ -1812,12 +1991,25 @@ const analyticsSliceTranslations: {
       chartTypePie: "Tarte",
       chartTypeMetric: "Métrique",
       chartTypeTable: "Tableau",
+      chartTypeExtension: "Extension",
       failedToSavePanel: "Échec de l'enregistrement du panneau",
       failedToFormatSql: "Échec du formatage du SQL",
       title: "Titre",
       titlePlaceholder: "par ex. Inscriptions hebdomadaires",
       chartType: "Type de graphique",
       source: "Source de données",
+      extensionDisplay: "Affichage de l'extension",
+      sharedExtension: "Extension partagée",
+      perViewerSlot: "Emplacement par utilisateur",
+      extension: "Extension",
+      loadingExtensions: "Chargement des extensions...",
+      selectExtension: "Sélectionner une extension",
+      noExtensions: "Aucune extension visible. Créez-en ou partagez-en une.",
+      sharedExtensionHelp:
+        "L'extension sélectionnée est partagée avec ce tableau de bord et apparaît dans les rapports planifiés. Les utilisateurs doivent toujours y avoir accès.",
+      slotIdOptional: "ID de l'emplacement (facultatif)",
+      perViewerSlotHelp:
+        "Chaque utilisateur installe sa propre extension. Les rapports planifiés peuvent afficher un emplacement vide. Laissez ce champ vide pour générer un ID stable.",
       sectionColumns: "Colonnes de section",
       format: "Mettre en forme",
       filterInterpolation:
@@ -2005,6 +2197,11 @@ const analyticsSliceTranslations: {
     },
     dataSources: {
       uploadFile: "Datei hochladen",
+      googleSheetsExport: "Google-Sheets-Export",
+      googleSheetsExportDescription:
+        "Exportieren Sie Dashboard-Berichte über eine gemeinsame Google-Verbindung nach Google Sheets.",
+      connected: "Verbunden",
+      googleSheets: "Google Sheets",
       open: "Offen",
       savedValueHint:
         "Ein Wert ist bereits gespeichert. Lassen Sie das Feld leer, um es beizubehalten, oder geben Sie einen neuen Wert ein, um es zu ersetzen.",
@@ -2101,12 +2298,26 @@ const analyticsSliceTranslations: {
       chartTypePie: "Torte",
       chartTypeMetric: "Metrisch",
       chartTypeTable: "Tisch",
+      chartTypeExtension: "Erweiterung",
       failedToSavePanel: "Das Panel konnte nicht gespeichert werden",
       failedToFormatSql: "SQL konnte nicht formatiert werden",
       title: "Titel",
       titlePlaceholder: "z.B. Wöchentliche Anmeldungen",
       chartType: "Diagrammtyp",
       source: "Datenquelle",
+      extensionDisplay: "Erweiterungsanzeige",
+      sharedExtension: "Geteilte Erweiterung",
+      perViewerSlot: "Slot pro Betrachter",
+      extension: "Erweiterung",
+      loadingExtensions: "Erweiterungen werden geladen...",
+      selectExtension: "Erweiterung auswählen",
+      noExtensions:
+        "Keine sichtbaren Erweiterungen. Erstellen oder teilen Sie zuerst eine.",
+      sharedExtensionHelp:
+        "Die ausgewählte Erweiterung wird mit diesem Dashboard geteilt und erscheint in geplanten Berichten. Betrachter benötigen weiterhin Zugriff darauf.",
+      slotIdOptional: "Slot-ID (optional)",
+      perViewerSlotHelp:
+        "Jeder Betrachter installiert eine eigene Erweiterung. Geplante Berichte können einen leeren Slot zeigen. Leer lassen, um eine stabile ID zu erzeugen.",
       sectionColumns: "Abschnittsspalten",
       format: "Formatieren",
       filterInterpolation:
@@ -2291,6 +2502,11 @@ const analyticsSliceTranslations: {
     },
     dataSources: {
       uploadFile: "ファイルをアップロードする",
+      googleSheetsExport: "Google スプレッドシートへのエクスポート",
+      googleSheetsExportDescription:
+        "共有 Google 接続を使用してダッシュボードレポートを Google スプレッドシートにエクスポートします。",
+      connected: "接続済み",
+      googleSheets: "Google Sheets",
       open: "開ける",
       savedValueHint:
         "値はすでに保存されています。空白のままにして保持するか、新しい値を入力して置き換えます。",
@@ -2386,12 +2602,26 @@ const analyticsSliceTranslations: {
       chartTypePie: "パイ",
       chartTypeMetric: "メトリック",
       chartTypeTable: "テーブル",
+      chartTypeExtension: "拡張機能",
       failedToSavePanel: "パネルの保存に失敗しました",
       failedToFormatSql: "SQLのフォーマットに失敗しました",
       title: "タイトル",
       titlePlaceholder: "例えば毎週のサインアップ",
       chartType: "グラフの種類",
       source: "ソース",
+      extensionDisplay: "拡張機能の表示",
+      sharedExtension: "共有拡張機能",
+      perViewerSlot: "閲覧者ごとのスロット",
+      extension: "拡張機能",
+      loadingExtensions: "拡張機能を読み込んでいます...",
+      selectExtension: "拡張機能を選択",
+      noExtensions:
+        "表示できる拡張機能がありません。先に作成または共有してください。",
+      sharedExtensionHelp:
+        "選択した拡張機能はこのダッシュボードと共有され、スケジュール済みレポートにも表示されます。閲覧者には拡張機能へのアクセス権が必要です。",
+      slotIdOptional: "スロット ID（任意）",
+      perViewerSlotHelp:
+        "各閲覧者が自分の拡張機能をインストールします。スケジュール済みレポートでは空のスロットが表示される場合があります。空欄にすると安定した ID が生成されます。",
       sectionColumns: "セクション列",
       format: "形式",
       filterInterpolation:
@@ -2572,6 +2802,11 @@ const analyticsSliceTranslations: {
     },
     dataSources: {
       uploadFile: "파일 업로드",
+      googleSheetsExport: "Google Sheets 내보내기",
+      googleSheetsExportDescription:
+        "공유 Google 연결을 통해 대시보드 보고서를 Google Sheets로 내보냅니다.",
+      connected: "연결됨",
+      googleSheets: "Google Sheets",
       open: "열려 있는",
       savedValueHint:
         "값이 이미 저장되어 있습니다. 유지하려면 비워두고, 바꾸려면 새 값을 입력하세요.",
@@ -2665,12 +2900,26 @@ const analyticsSliceTranslations: {
       chartTypePie: "파이",
       chartTypeMetric: "미터법",
       chartTypeTable: "테이블",
+      chartTypeExtension: "확장 프로그램",
       failedToSavePanel: "패널을 저장하지 못했습니다.",
       failedToFormatSql: "SQL 포맷 실패",
       title: "제목",
       titlePlaceholder: "예를 들어 주간 가입",
       chartType: "차트 종류",
       source: "소스",
+      extensionDisplay: "확장 프로그램 표시",
+      sharedExtension: "공유 확장 프로그램",
+      perViewerSlot: "사용자별 슬롯",
+      extension: "확장 프로그램",
+      loadingExtensions: "확장 프로그램을 불러오는 중...",
+      selectExtension: "확장 프로그램 선택",
+      noExtensions:
+        "표시할 확장 프로그램이 없습니다. 먼저 만들거나 공유하세요.",
+      sharedExtensionHelp:
+        "선택한 확장 프로그램은 이 대시보드와 공유되며 예약 보고서에 표시됩니다. 사용자는 해당 확장 프로그램에 대한 액세스 권한이 필요합니다.",
+      slotIdOptional: "슬롯 ID(선택 사항)",
+      perViewerSlotHelp:
+        "각 사용자가 자신의 확장 프로그램을 설치합니다. 예약 보고서에는 빈 슬롯이 표시될 수 있습니다. 비워 두면 안정적인 ID가 생성됩니다.",
       sectionColumns: "섹션 열",
       format: "체재",
       filterInterpolation: "{{example}}를 사용하여 필터 값을 보간합니다.",
@@ -2849,6 +3098,11 @@ const analyticsSliceTranslations: {
     },
     dataSources: {
       uploadFile: "Carregar arquivo",
+      googleSheetsExport: "Exportação para o Google Sheets",
+      googleSheetsExportDescription:
+        "Exporte relatórios do painel para o Google Sheets por meio de uma conexão Google compartilhada.",
+      connected: "Conectado",
+      googleSheets: "Google Sheets",
       open: "Abrir",
       savedValueHint:
         "Um valor já está salvo. Deixe em branco para mantê-lo ou insira um novo valor para substituí-lo.",
@@ -2943,12 +3197,26 @@ const analyticsSliceTranslations: {
       chartTypePie: "Torta",
       chartTypeMetric: "Métrica",
       chartTypeTable: "Mesa",
+      chartTypeExtension: "Extensão",
       failedToSavePanel: "Falha ao salvar painel",
       failedToFormatSql: "Falha ao formatar SQL",
       title: "Título",
       titlePlaceholder: "por exemplo Inscrições semanais",
       chartType: "Tipo de gráfico",
       source: "Fonte",
+      extensionDisplay: "Exibição da extensão",
+      sharedExtension: "Extensão compartilhada",
+      perViewerSlot: "Slot por usuário",
+      extension: "Extensão",
+      loadingExtensions: "Carregando extensões...",
+      selectExtension: "Selecione uma extensão",
+      noExtensions:
+        "Nenhuma extensão visível. Crie ou compartilhe uma primeiro.",
+      sharedExtensionHelp:
+        "A extensão selecionada é compartilhada com este painel e aparece nos relatórios agendados. Os usuários ainda precisam de acesso à extensão.",
+      slotIdOptional: "ID do slot (opcional)",
+      perViewerSlotHelp:
+        "Cada usuário instala sua própria extensão. Relatórios agendados podem mostrar um slot vazio. Deixe em branco para gerar um ID estável.",
       sectionColumns: "Colunas de seção",
       format: "Formatar",
       filterInterpolation: "Use {{example}} para interpolar valores de filtro.",
@@ -3131,6 +3399,11 @@ const analyticsSliceTranslations: {
     },
     dataSources: {
       uploadFile: "फ़ाइल अपलोड करें",
+      googleSheetsExport: "Google Sheets निर्यात",
+      googleSheetsExportDescription:
+        "साझा Google कनेक्शन के माध्यम से डैशबोर्ड रिपोर्ट को Google Sheets में निर्यात करें।",
+      connected: "कनेक्टेड",
+      googleSheets: "Google Sheets",
       open: "खुला",
       savedValueHint:
         "एक मान पहले से ही सहेजा गया है. इसे रखने के लिए खाली छोड़ दें, या इसे बदलने के लिए एक नया मान दर्ज करें।",
@@ -3224,12 +3497,25 @@ const analyticsSliceTranslations: {
       chartTypePie: "पाई",
       chartTypeMetric: "मीट्रिक",
       chartTypeTable: "मेज़",
+      chartTypeExtension: "एक्सटेंशन",
       failedToSavePanel: "पैनल सहेजने में विफल",
       failedToFormatSql: "SQL को फ़ॉर्मेट करने में विफल",
       title: "शीर्षक",
       titlePlaceholder: "जैसे साप्ताहिक साइनअप",
       chartType: "चार्ट प्रकार",
       source: "स्रोत",
+      extensionDisplay: "एक्सटेंशन प्रदर्शन",
+      sharedExtension: "साझा एक्सटेंशन",
+      perViewerSlot: "प्रति-दर्शक स्लॉट",
+      extension: "एक्सटेंशन",
+      loadingExtensions: "एक्सटेंशन लोड हो रहे हैं...",
+      selectExtension: "एक एक्सटेंशन चुनें",
+      noExtensions: "कोई दृश्यमान एक्सटेंशन नहीं है। पहले एक बनाएं या साझा करें।",
+      sharedExtensionHelp:
+        "चुना गया एक्सटेंशन इस डैशबोर्ड के साथ साझा होता है और निर्धारित रिपोर्ट में दिखाई देता है। दर्शकों को फिर भी एक्सटेंशन की पहुंच चाहिए।",
+      slotIdOptional: "स्लॉट ID (वैकल्पिक)",
+      perViewerSlotHelp:
+        "हर दर्शक अपना एक्सटेंशन इंस्टॉल करता है। निर्धारित रिपोर्ट में खाली स्लॉट दिख सकता है। स्थिर ID बनाने के लिए खाली छोड़ें।",
       sectionColumns: "अनुभाग स्तंभ",
       format: "प्रारूप",
       filterInterpolation:
@@ -3405,6 +3691,11 @@ const analyticsSliceTranslations: {
     },
     dataSources: {
       uploadFile: "تحميل الملف",
+      googleSheetsExport: "تصدير Google Sheets",
+      googleSheetsExportDescription:
+        "صدّر تقارير لوحة المعلومات إلى Google Sheets من خلال اتصال Google مشترك.",
+      connected: "متصل",
+      googleSheets: "Google Sheets",
       open: "يفتح",
       savedValueHint:
         "تم حفظ القيمة بالفعل. اتركه فارغًا للاحتفاظ به، أو أدخل قيمة جديدة لاستبداله.",
@@ -3499,12 +3790,25 @@ const analyticsSliceTranslations: {
       chartTypePie: "فطيرة",
       chartTypeMetric: "متري",
       chartTypeTable: "طاولة",
+      chartTypeExtension: "إضافة",
       failedToSavePanel: "فشل حفظ اللوحة",
       failedToFormatSql: "فشل تهيئة SQL",
       title: "عنوان",
       titlePlaceholder: "على سبيل المثال الاشتراكات الأسبوعية",
       chartType: "نوع الرسم البياني",
       source: "المصدر",
+      extensionDisplay: "عرض الإضافة",
+      sharedExtension: "إضافة مشتركة",
+      perViewerSlot: "فتحة لكل مشاهد",
+      extension: "إضافة",
+      loadingExtensions: "جارٍ تحميل الإضافات...",
+      selectExtension: "اختر إضافة",
+      noExtensions: "لا توجد إضافات ظاهرة. أنشئ إضافة أو شاركها أولاً.",
+      sharedExtensionHelp:
+        "تتم مشاركة الإضافة المحددة مع لوحة المعلومات هذه وتظهر في التقارير المجدولة. لا يزال المشاهدون بحاجة إلى صلاحية الوصول إليها.",
+      slotIdOptional: "معرّف الفتحة (اختياري)",
+      perViewerSlotHelp:
+        "يثبّت كل مشاهد إضافته الخاصة. قد تعرض التقارير المجدولة فتحة فارغة. اتركه فارغاً لإنشاء معرّف ثابت.",
       sectionColumns: "أعمدة القسم",
       format: "شكل",
       filterInterpolation: "استخدم {{example}} لاستكمال قيم التصفية.",
@@ -3704,6 +4008,8 @@ export const messagesByLocale = {
     sidebar: {
       collapseSidebar: "折叠侧边栏",
       expandSidebar: "展开侧边栏",
+      collapseAsk: "收起提问",
+      expandAsk: "展开提问",
       collapseDashboards: "收起仪表板",
       expandDashboards: "展开仪表板",
       collapseAnalyses: "收起分析",
@@ -3711,6 +4017,10 @@ export const messagesByLocale = {
       showLess: "显示更少",
       showMore: "再显示 {{count}} 个",
       noAnalysesYet: "还没有分析",
+      dashboardsLoadFailed: "无法加载仪表板。",
+      analysesLoadFailed: "无法加载分析。",
+      favoritesUnavailable: "收藏功能目前不可用",
+      retry: "重试",
       search: "搜索",
       searchShortcut: "搜索（{{shortcut}}）",
       sectionSettings: "{{label}} 设置",
@@ -3800,6 +4110,7 @@ export const messagesByLocale = {
       groupAppearance: "外观",
       groupHelp: "帮助",
       groupSavedCharts: "已保存图表",
+      loadFailed: "部分结果无法加载。",
       hidden: "已隐藏",
       toggleLightMode: "切换到浅色模式",
       toggleDarkMode: "切换到深色模式",
@@ -3808,10 +4119,9 @@ export const messagesByLocale = {
       untitledDashboard: "未命名仪表板",
     },
     settings: {
-      agentTitle: "代理设置",
-      agentDescription:
-        "打开代理侧边栏设置，管理模型、API 密钥、自动化、语音和其他代理控制项。",
-      openAgentSettings: "打开代理设置",
+      agentTitle: "管理代理",
+      agentDescription: "管理代理的模型、API 密钥、自动化、语音和其他控制项。",
+      openAgentSettings: "管理代理",
       account: "账户",
       signedInAs: "登录身份",
       credentials: "数据源凭据",
@@ -3906,6 +4216,8 @@ export const messagesByLocale = {
     sidebar: {
       collapseSidebar: "Contraer barra lateral",
       expandSidebar: "Expandir barra lateral",
+      collapseAsk: "Contraer Ask",
+      expandAsk: "Expandir Ask",
       collapseDashboards: "Contraer paneles",
       expandDashboards: "Expandir paneles",
       collapseAnalyses: "Contraer análisis",
@@ -3913,6 +4225,10 @@ export const messagesByLocale = {
       showLess: "Mostrar menos",
       showMore: "Mostrar {{count}} más",
       noAnalysesYet: "Aún no hay análisis",
+      dashboardsLoadFailed: "No se pudieron cargar los paneles.",
+      analysesLoadFailed: "No se pudieron cargar los análisis.",
+      favoritesUnavailable: "Los favoritos no están disponibles ahora",
+      retry: "Reintentar",
       search: "Buscar",
       searchShortcut: "Buscar ({{shortcut}})",
       sectionSettings: "Ajustes de {{label}}",
@@ -4009,6 +4325,7 @@ export const messagesByLocale = {
       groupAppearance: "Apariencia",
       groupHelp: "Ayuda",
       groupSavedCharts: "Gráficos guardados",
+      loadFailed: "No se pudieron cargar algunos resultados.",
       hidden: "Oculto",
       toggleLightMode: "Cambiar a modo claro",
       toggleDarkMode: "Cambiar a modo oscuro",
@@ -4017,10 +4334,10 @@ export const messagesByLocale = {
       untitledDashboard: "Panel sin título",
     },
     settings: {
-      agentTitle: "Ajustes del agente",
+      agentTitle: "Gestionar agente",
       agentDescription:
-        "Abre los ajustes del agente en la barra lateral para modelos, claves API, automatizaciones, voz y otros controles.",
-      openAgentSettings: "Abrir ajustes del agente",
+        "Gestiona el modelo del agente, claves API, automatizaciones, voz y otros controles.",
+      openAgentSettings: "Gestionar agente",
       account: "Cuenta",
       signedInAs: "Sesión iniciada como",
       credentials: "Credenciales de fuentes de datos",
@@ -4119,6 +4436,8 @@ export const messagesByLocale = {
     sidebar: {
       collapseSidebar: "Réduire la barre latérale",
       expandSidebar: "Développer la barre latérale",
+      collapseAsk: "Réduire Ask",
+      expandAsk: "Développer Ask",
       collapseDashboards: "Réduire les tableaux de bord",
       expandDashboards: "Développer les tableaux de bord",
       collapseAnalyses: "Réduire les analyses",
@@ -4126,6 +4445,10 @@ export const messagesByLocale = {
       showLess: "Afficher moins",
       showMore: "Afficher {{count}} de plus",
       noAnalysesYet: "Aucune analyse pour le moment",
+      dashboardsLoadFailed: "Impossible de charger les tableaux de bord.",
+      analysesLoadFailed: "Impossible de charger les analyses.",
+      favoritesUnavailable: "Les favoris sont indisponibles pour le moment",
+      retry: "Réessayer",
       search: "Rechercher",
       searchShortcut: "Rechercher ({{shortcut}})",
       sectionSettings: "Paramètres de {{label}}",
@@ -4224,6 +4547,7 @@ export const messagesByLocale = {
       groupAppearance: "Apparence",
       groupHelp: "Aide",
       groupSavedCharts: "Graphiques enregistrés",
+      loadFailed: "Certains résultats n'ont pas pu être chargés.",
       hidden: "Masqué",
       toggleLightMode: "Passer en mode clair",
       toggleDarkMode: "Passer en mode sombre",
@@ -4232,10 +4556,10 @@ export const messagesByLocale = {
       untitledDashboard: "Tableau de bord sans titre",
     },
     settings: {
-      agentTitle: "Paramètres de l’agent",
+      agentTitle: "Gérer l’agent",
       agentDescription:
-        "Ouvrez les paramètres de l’agent dans la barre latérale pour les modèles, clés API, automatisations, voix et autres contrôles.",
-      openAgentSettings: "Ouvrir les paramètres de l’agent",
+        "Gérez le modèle de l’agent, les clés API, les automatisations, la voix et les autres contrôles.",
+      openAgentSettings: "Gérer l’agent",
       account: "Compte",
       signedInAs: "Connecté en tant que",
       credentials: "Identifiants des sources de données",
@@ -4338,6 +4662,8 @@ export const messagesByLocale = {
     sidebar: {
       collapseSidebar: "Seitenleiste einklappen",
       expandSidebar: "Seitenleiste erweitern",
+      collapseAsk: "Ask einklappen",
+      expandAsk: "Ask ausklappen",
       collapseDashboards: "Dashboards einklappen",
       expandDashboards: "Dashboards ausklappen",
       collapseAnalyses: "Analysen einklappen",
@@ -4345,6 +4671,10 @@ export const messagesByLocale = {
       showLess: "Weniger anzeigen",
       showMore: "{{count}} weitere anzeigen",
       noAnalysesYet: "Noch keine Analysen",
+      dashboardsLoadFailed: "Dashboards konnten nicht geladen werden.",
+      analysesLoadFailed: "Analysen konnten nicht geladen werden.",
+      favoritesUnavailable: "Favoriten sind momentan nicht verfügbar",
+      retry: "Erneut versuchen",
       search: "Suchen",
       searchShortcut: "Suchen ({{shortcut}})",
       sectionSettings: "{{label}}-Einstellungen",
@@ -4446,6 +4776,7 @@ export const messagesByLocale = {
       groupAppearance: "Darstellung",
       groupHelp: "Hilfe",
       groupSavedCharts: "Gespeicherte Diagramme",
+      loadFailed: "Einige Ergebnisse konnten nicht geladen werden.",
       hidden: "Ausgeblendet",
       toggleLightMode: "Hellen Modus einschalten",
       toggleDarkMode: "Dunklen Modus einschalten",
@@ -4454,10 +4785,10 @@ export const messagesByLocale = {
       untitledDashboard: "Unbenanntes Dashboard",
     },
     settings: {
-      agentTitle: "Agent-Einstellungen",
+      agentTitle: "Agent verwalten",
       agentDescription:
-        "Öffne die Agent-Einstellungen in der Seitenleiste für Modell, API-Schlüssel, Automatisierungen, Sprache und weitere Steuerungen.",
-      openAgentSettings: "Agent-Einstellungen öffnen",
+        "Verwalte das Modell, die API-Schlüssel, Automatisierungen, Sprache und weitere Steuerungen des Agents.",
+      openAgentSettings: "Agent verwalten",
       account: "Konto",
       signedInAs: "Angemeldet als",
       credentials: "Datenquellen-Anmeldedaten",
@@ -4557,6 +4888,8 @@ export const messagesByLocale = {
     sidebar: {
       collapseSidebar: "サイドバーを折りたたむ",
       expandSidebar: "サイドバーを展開",
+      collapseAsk: "Ask を折りたたむ",
+      expandAsk: "Ask を展開",
       collapseDashboards: "ダッシュボードを折りたたむ",
       expandDashboards: "ダッシュボードを展開",
       collapseAnalyses: "分析を折りたたむ",
@@ -4564,6 +4897,10 @@ export const messagesByLocale = {
       showLess: "少なく表示",
       showMore: "さらに {{count}} 件表示",
       noAnalysesYet: "分析はまだありません",
+      dashboardsLoadFailed: "ダッシュボードを読み込めませんでした。",
+      analysesLoadFailed: "分析を読み込めませんでした。",
+      favoritesUnavailable: "お気に入りは現在利用できません",
+      retry: "再試行",
       search: "検索",
       searchShortcut: "検索（{{shortcut}}）",
       sectionSettings: "{{label}} の設定",
@@ -4659,6 +4996,7 @@ export const messagesByLocale = {
       groupAppearance: "表示",
       groupHelp: "ヘルプ",
       groupSavedCharts: "保存済みグラフ",
+      loadFailed: "一部の結果を読み込めませんでした。",
       hidden: "非表示",
       toggleLightMode: "ライトモードに切り替え",
       toggleDarkMode: "ダークモードに切り替え",
@@ -4667,10 +5005,10 @@ export const messagesByLocale = {
       untitledDashboard: "無題のダッシュボード",
     },
     settings: {
-      agentTitle: "エージェント設定",
+      agentTitle: "エージェントを管理",
       agentDescription:
-        "右サイドバーのエージェント設定を開き、モデル、API キー、自動化、音声などを管理します。",
-      openAgentSettings: "エージェント設定を開く",
+        "エージェントのモデル、API キー、自動化、音声などを管理します。",
+      openAgentSettings: "エージェントを管理",
       account: "アカウント",
       signedInAs: "サインイン中",
       credentials: "データソース認証情報",
@@ -4769,6 +5107,8 @@ export const messagesByLocale = {
     sidebar: {
       collapseSidebar: "사이드바 접기",
       expandSidebar: "사이드바 펼치기",
+      collapseAsk: "Ask 접기",
+      expandAsk: "Ask 펼치기",
       collapseDashboards: "대시보드 접기",
       expandDashboards: "대시보드 펼치기",
       collapseAnalyses: "분석 접기",
@@ -4776,6 +5116,10 @@ export const messagesByLocale = {
       showLess: "간단히 보기",
       showMore: "{{count}}개 더 보기",
       noAnalysesYet: "아직 분석이 없습니다",
+      dashboardsLoadFailed: "대시보드를 불러오지 못했습니다.",
+      analysesLoadFailed: "분석을 불러오지 못했습니다.",
+      favoritesUnavailable: "즐겨찾기를 지금 사용할 수 없습니다",
+      retry: "다시 시도",
       search: "검색",
       searchShortcut: "검색({{shortcut}})",
       sectionSettings: "{{label}} 설정",
@@ -4871,6 +5215,7 @@ export const messagesByLocale = {
       groupAppearance: "모양",
       groupHelp: "도움말",
       groupSavedCharts: "저장된 차트",
+      loadFailed: "일부 결과를 불러오지 못했습니다.",
       hidden: "숨김",
       toggleLightMode: "라이트 모드로 전환",
       toggleDarkMode: "다크 모드로 전환",
@@ -4879,10 +5224,10 @@ export const messagesByLocale = {
       untitledDashboard: "제목 없는 대시보드",
     },
     settings: {
-      agentTitle: "에이전트 설정",
+      agentTitle: "에이전트 관리",
       agentDescription:
-        "오른쪽 사이드바의 에이전트 설정을 열어 모델, API 키, 자동화, 음성 및 기타 제어를 관리합니다.",
-      openAgentSettings: "에이전트 설정 열기",
+        "에이전트의 모델, API 키, 자동화, 음성 및 기타 제어를 관리합니다.",
+      openAgentSettings: "에이전트 관리",
       account: "계정",
       signedInAs: "로그인 계정",
       credentials: "데이터 소스 자격 증명",
@@ -4981,6 +5326,8 @@ export const messagesByLocale = {
     sidebar: {
       collapseSidebar: "Recolher barra lateral",
       expandSidebar: "Expandir barra lateral",
+      collapseAsk: "Recolher Ask",
+      expandAsk: "Expandir Ask",
       collapseDashboards: "Recolher dashboards",
       expandDashboards: "Expandir dashboards",
       collapseAnalyses: "Recolher análises",
@@ -4988,6 +5335,10 @@ export const messagesByLocale = {
       showLess: "Mostrar menos",
       showMore: "Mostrar mais {{count}}",
       noAnalysesYet: "Ainda não há análises",
+      dashboardsLoadFailed: "Não foi possível carregar os painéis.",
+      analysesLoadFailed: "Não foi possível carregar as análises.",
+      favoritesUnavailable: "Os favoritos não estão disponíveis no momento",
+      retry: "Tentar novamente",
       search: "Pesquisar",
       searchShortcut: "Pesquisar ({{shortcut}})",
       sectionSettings: "Configurações de {{label}}",
@@ -5087,6 +5438,7 @@ export const messagesByLocale = {
       groupAppearance: "Aparência",
       groupHelp: "Ajuda",
       groupSavedCharts: "Gráficos salvos",
+      loadFailed: "Não foi possível carregar alguns resultados.",
       hidden: "Oculto",
       toggleLightMode: "Alternar para modo claro",
       toggleDarkMode: "Alternar para modo escuro",
@@ -5095,10 +5447,10 @@ export const messagesByLocale = {
       untitledDashboard: "Dashboard sem título",
     },
     settings: {
-      agentTitle: "Configurações do agente",
+      agentTitle: "Gerenciar agente",
       agentDescription:
-        "Abra as configurações do agente na barra lateral para modelos, chaves de API, automações, voz e outros controles.",
-      openAgentSettings: "Abrir configurações do agente",
+        "Gerencie o modelo do agente, chaves de API, automações, voz e outros controles.",
+      openAgentSettings: "Gerenciar agente",
       account: "Conta",
       signedInAs: "Conectado como",
       credentials: "Credenciais de fontes de dados",
@@ -5200,6 +5552,8 @@ export const messagesByLocale = {
     sidebar: {
       collapseSidebar: "साइडबार समेटें",
       expandSidebar: "साइडबार फैलाएं",
+      collapseAsk: "Ask समेटें",
+      expandAsk: "Ask फैलाएं",
       collapseDashboards: "डैशबोर्ड समेटें",
       expandDashboards: "डैशबोर्ड फैलाएं",
       collapseAnalyses: "विश्लेषण समेटें",
@@ -5207,6 +5561,10 @@ export const messagesByLocale = {
       showLess: "कम दिखाएं",
       showMore: "{{count}} और दिखाएं",
       noAnalysesYet: "अभी कोई विश्लेषण नहीं",
+      dashboardsLoadFailed: "डैशबोर्ड लोड नहीं हो सके।",
+      analysesLoadFailed: "विश्लेषण लोड नहीं हो सके।",
+      favoritesUnavailable: "पसंदीदा अभी उपलब्ध नहीं हैं",
+      retry: "फिर से कोशिश करें",
       search: "खोजें",
       searchShortcut: "खोजें ({{shortcut}})",
       sectionSettings: "{{label}} सेटिंग्स",
@@ -5298,6 +5656,7 @@ export const messagesByLocale = {
       groupAppearance: "दिखावट",
       groupHelp: "सहायता",
       groupSavedCharts: "सहेजे गए चार्ट",
+      loadFailed: "कुछ परिणाम लोड नहीं किए जा सके।",
       hidden: "छिपा हुआ",
       toggleLightMode: "लाइट मोड पर जाएं",
       toggleDarkMode: "डार्क मोड पर जाएं",
@@ -5306,10 +5665,10 @@ export const messagesByLocale = {
       untitledDashboard: "शीर्षकहीन डैशबोर्ड",
     },
     settings: {
-      agentTitle: "एजेंट सेटिंग्स",
+      agentTitle: "एजेंट प्रबंधित करें",
       agentDescription:
-        "मॉडल, API कुंजियों, ऑटोमेशन, आवाज़ और अन्य एजेंट नियंत्रणों के लिए साइडबार सेटिंग्स खोलें।",
-      openAgentSettings: "एजेंट सेटिंग्स खोलें",
+        "एजेंट के मॉडल, API कुंजियों, ऑटोमेशन, आवाज़ और अन्य नियंत्रणों को प्रबंधित करें।",
+      openAgentSettings: "एजेंट प्रबंधित करें",
       account: "खाता",
       signedInAs: "इस रूप में साइन इन",
       credentials: "डेटा स्रोत क्रेडेंशियल",
@@ -5409,6 +5768,8 @@ export const messagesByLocale = {
     sidebar: {
       collapseSidebar: "طي الشريط الجانبي",
       expandSidebar: "توسيع الشريط الجانبي",
+      collapseAsk: "طي Ask",
+      expandAsk: "توسيع Ask",
       collapseDashboards: "طي لوحات المعلومات",
       expandDashboards: "توسيع لوحات المعلومات",
       collapseAnalyses: "طي التحليلات",
@@ -5416,6 +5777,10 @@ export const messagesByLocale = {
       showLess: "عرض أقل",
       showMore: "عرض {{count}} إضافية",
       noAnalysesYet: "لا توجد تحليلات بعد",
+      dashboardsLoadFailed: "تعذر تحميل لوحات المعلومات.",
+      analysesLoadFailed: "تعذر تحميل التحليلات.",
+      favoritesUnavailable: "المفضلة غير متاحة الآن",
+      retry: "إعادة المحاولة",
       search: "بحث",
       searchShortcut: "بحث ({{shortcut}})",
       sectionSettings: "إعدادات {{label}}",
@@ -5508,6 +5873,7 @@ export const messagesByLocale = {
       groupAppearance: "المظهر",
       groupHelp: "المساعدة",
       groupSavedCharts: "المخططات المحفوظة",
+      loadFailed: "تعذر تحميل بعض النتائج.",
       hidden: "مخفي",
       toggleLightMode: "التبديل إلى الوضع الفاتح",
       toggleDarkMode: "التبديل إلى الوضع الداكن",
@@ -5516,10 +5882,10 @@ export const messagesByLocale = {
       untitledDashboard: "لوحة معلومات بلا عنوان",
     },
     settings: {
-      agentTitle: "إعدادات الوكيل",
+      agentTitle: "إدارة الوكيل",
       agentDescription:
-        "افتح إعدادات الوكيل في الشريط الجانبي لإدارة النموذج ومفاتيح API والأتمتة والصوت وعناصر التحكم الأخرى.",
-      openAgentSettings: "فتح إعدادات الوكيل",
+        "أدر نموذج الوكيل ومفاتيح API والأتمتة والصوت وعناصر التحكم الأخرى.",
+      openAgentSettings: "إدارة الوكيل",
       account: "الحساب",
       signedInAs: "تم تسجيل الدخول باسم",
       credentials: "بيانات اعتماد مصادر البيانات",
@@ -5660,6 +6026,7 @@ const translatedAnalyticsDebtTranslations = {
       deletePermanentlyTitle: "永久删除？",
       deletePermanently: "永久删除",
       editInExplorer: "在 Explorer 中编辑",
+      chatWithChart: "与图表聊天",
       fullWidth: "全宽",
       halfWidth: "半宽",
       hiddenDescription:
@@ -5701,6 +6068,7 @@ const translatedAnalyticsDebtTranslations = {
       dashboard: "仪表板 - Analytics",
       dataDictionary: "数据字典 - Analytics",
       dataSources: "数据源 - Analytics",
+      monitoring: "监控 - Analytics",
       agents: "代理 - Analytics",
       extensions: "扩展 - Analytics",
       notFound: "未找到 - Analytics",
@@ -5764,6 +6132,11 @@ const translatedAnalyticsDebtTranslations = {
       discardChanges: "放弃更改",
       dismissDemoIntro: "关闭演示介绍",
       downloadCsv: "下载CSV",
+      exportToGoogleSheets: "导出到 Google Sheets",
+      exportingToGoogleSheets: "正在导出到 Google Sheets...",
+      googleSheetsExported: "已导出到 Google Sheets",
+      openGoogleSheet: "打开表格",
+      googleSheetsExportFailed: "无法导出到 Google Sheets：{{message}}",
       dragToReorder: "拖动以重新排序",
       expandFilters: "展开过滤器",
       failedToFormatSql: "无法格式化 SQL",
@@ -5778,6 +6151,7 @@ const translatedAnalyticsDebtTranslations = {
       noPanels: "该仪表板还没有面板。",
       noSavedViews: "尚未保存视图。",
       panelOptions: "面板选项",
+      chatWithPanel: "与面板聊天",
       saveAsView: "另存为视图",
       saveCurrentView: "保存当前视图",
       saveFailed: "无法保存仪表板",
@@ -5866,6 +6240,7 @@ const translatedAnalyticsDebtTranslations = {
       deletePermanentlyTitle: "¿Eliminar permanentemente?",
       deletePermanently: "Eliminar permanentemente",
       editInExplorer: "Editar en Explorer",
+      chatWithChart: "Chatear sobre el gráfico",
       fullWidth: "Ancho completo",
       halfWidth: "Medio ancho",
       hiddenDescription:
@@ -5910,6 +6285,7 @@ const translatedAnalyticsDebtTranslations = {
       dashboard: "Panel de control - Analytics",
       dataDictionary: "Diccionario de datos - Analytics",
       dataSources: "Fuentes de datos - Analytics",
+      monitoring: "Monitorización - Analytics",
       agents: "Agentes - Analytics",
       extensions: "Extensiones - Analytics",
       notFound: "No encontrado - Analytics",
@@ -5973,6 +6349,12 @@ const translatedAnalyticsDebtTranslations = {
       discardChanges: "Descartar cambios",
       dismissDemoIntro: "Descartar la introducción de la demostración",
       downloadCsv: "Descargar CSV",
+      exportToGoogleSheets: "Exportar a Google Sheets",
+      exportingToGoogleSheets: "Exportando a Google Sheets...",
+      googleSheetsExported: "Exportado a Google Sheets",
+      openGoogleSheet: "Abrir hoja",
+      googleSheetsExportFailed:
+        "No se pudo exportar a Google Sheets: {{message}}",
       dragToReorder: "Arrastra para reordenar",
       expandFilters: "Ampliar filtros",
       failedToFormatSql: "No se pudo formatear SQL",
@@ -5988,6 +6370,7 @@ const translatedAnalyticsDebtTranslations = {
       noPanels: "Este panel aún no tiene paneles.",
       noSavedViews: "Aún no hay vistas guardadas.",
       panelOptions: "Opciones de paneles",
+      chatWithPanel: "Chatear sobre el panel",
       saveAsView: "Guardar como vista",
       saveCurrentView: "Guardar vista actual",
       saveFailed: "No se pudo guardar el panel",
@@ -6080,6 +6463,7 @@ const translatedAnalyticsDebtTranslations = {
       deletePermanentlyTitle: "Supprimer définitivement ?",
       deletePermanently: "Supprimer définitivement",
       editInExplorer: "Modifier dans Explorer",
+      chatWithChart: "Discuter du graphique",
       fullWidth: "Pleine largeur",
       halfWidth: "Demi-largeur",
       hiddenDescription:
@@ -6124,6 +6508,7 @@ const translatedAnalyticsDebtTranslations = {
       dashboard: "Tableau de bord - Analytics",
       dataDictionary: "Dictionnaire de données - Analytics",
       dataSources: "Sources de données - Analytics",
+      monitoring: "Surveillance - Analytics",
       agents: "Agents - Analytique",
       extensions: "Extensions-Analytics",
       notFound: "Introuvable - Analytics",
@@ -6187,6 +6572,12 @@ const translatedAnalyticsDebtTranslations = {
       discardChanges: "Ignorer les modifications",
       dismissDemoIntro: "Ignorer l'intro de la démo",
       downloadCsv: "Télécharger CSV",
+      exportToGoogleSheets: "Exporter vers Google Sheets",
+      exportingToGoogleSheets: "Exportation vers Google Sheets...",
+      googleSheetsExported: "Exporté vers Google Sheets",
+      openGoogleSheet: "Ouvrir la feuille",
+      googleSheetsExportFailed:
+        "Impossible d’exporter vers Google Sheets : {{message}}",
       dragToReorder: "Faites glisser pour réorganiser",
       expandFilters: "Développer les filtres",
       failedToFormatSql: "Échec du formatage de SQL",
@@ -6202,6 +6593,7 @@ const translatedAnalyticsDebtTranslations = {
       noPanels: "Ce tableau de bord n'a pas encore de panneaux.",
       noSavedViews: "Aucune vue enregistrée pour l'instant.",
       panelOptions: "Options du panneau",
+      chatWithPanel: "Discuter du panneau",
       saveAsView: "Enregistrer sous vue",
       saveCurrentView: "Enregistrer la vue actuelle",
       saveFailed: "Impossible d'enregistrer le tableau de bord",
@@ -6295,6 +6687,7 @@ const translatedAnalyticsDebtTranslations = {
       deletePermanentlyTitle: "Endgültig löschen?",
       deletePermanently: "Dauerhaft löschen",
       editInExplorer: "Bearbeiten in Explorer",
+      chatWithChart: "Mit Diagramm chatten",
       fullWidth: "Volle Breite",
       halfWidth: "Halbe Breite",
       hiddenDescription:
@@ -6339,6 +6732,7 @@ const translatedAnalyticsDebtTranslations = {
       dashboard: "Dashboard – Analytics",
       dataDictionary: "Datenwörterbuch – Analytics",
       dataSources: "Datenquellen – Analytics",
+      monitoring: "Überwachung – Analytics",
       agents: "Agenten – Analytics",
       extensions: "Erweiterungen – Analytics",
       notFound: "Nicht gefunden – Analytics",
@@ -6402,6 +6796,12 @@ const translatedAnalyticsDebtTranslations = {
       discardChanges: "Änderungen verwerfen",
       dismissDemoIntro: "Demo-Intro schließen",
       downloadCsv: "Laden Sie CSV herunter",
+      exportToGoogleSheets: "Nach Google Sheets exportieren",
+      exportingToGoogleSheets: "Export nach Google Sheets...",
+      googleSheetsExported: "Nach Google Sheets exportiert",
+      openGoogleSheet: "Tabelle öffnen",
+      googleSheetsExportFailed:
+        "Export nach Google Sheets fehlgeschlagen: {{message}}",
       dragToReorder: "Zum Neuanordnen ziehen",
       expandFilters: "Filter erweitern",
       failedToFormatSql: "SQL konnte nicht formatiert werden",
@@ -6417,6 +6817,7 @@ const translatedAnalyticsDebtTranslations = {
       noPanels: "Dieses Dashboard hat noch keine Panels.",
       noSavedViews: "Noch keine gespeicherten Ansichten.",
       panelOptions: "Panel-Optionen",
+      chatWithPanel: "Mit Panel chatten",
       saveAsView: "Als Ansicht speichern",
       saveCurrentView: "Aktuelle Ansicht speichern",
       saveFailed: "Das Dashboard konnte nicht gespeichert werden",
@@ -6506,6 +6907,7 @@ const translatedAnalyticsDebtTranslations = {
       deletePermanentlyTitle: "永久に削除しますか?",
       deletePermanently: "完全に削除",
       editInExplorer: "Explorerで編集",
+      chatWithChart: "グラフについてチャット",
       fullWidth: "全幅",
       halfWidth: "半角",
       hiddenDescription:
@@ -6549,6 +6951,7 @@ const translatedAnalyticsDebtTranslations = {
       dashboard: "ダッシュボード - Analytics",
       dataDictionary: "データディクショナリ - Analytics",
       dataSources: "データソース - Analytics",
+      monitoring: "監視 - Analytics",
       agents: "エージェント - Analytics",
       extensions: "拡張機能 - Analytics",
       notFound: "見つかりません - Analytics",
@@ -6612,6 +7015,12 @@ const translatedAnalyticsDebtTranslations = {
       discardChanges: "変更を破棄する",
       dismissDemoIntro: "デモのイントロを閉じる",
       downloadCsv: "CSVをダウンロード",
+      exportToGoogleSheets: "Google スプレッドシートにエクスポート",
+      exportingToGoogleSheets: "Google スプレッドシートにエクスポート中...",
+      googleSheetsExported: "Google スプレッドシートにエクスポートしました",
+      openGoogleSheet: "シートを開く",
+      googleSheetsExportFailed:
+        "Google スプレッドシートへのエクスポートに失敗しました: {{message}}",
       dragToReorder: "ドラッグして並べ替えます",
       expandFilters: "フィルターを展開する",
       failedToFormatSql: "SQLのフォーマットに失敗しました",
@@ -6627,6 +7036,7 @@ const translatedAnalyticsDebtTranslations = {
       noPanels: "このダッシュボードにはまだパネルがありません。",
       noSavedViews: "保存されたビューはまだありません。",
       panelOptions: "パネルオプション",
+      chatWithPanel: "パネルについてチャット",
       saveAsView: "ビューとして保存",
       saveCurrentView: "現在のビューを保存する",
       saveFailed: "ダッシュボードを保存できませんでした",
@@ -6716,6 +7126,7 @@ const translatedAnalyticsDebtTranslations = {
       deletePermanentlyTitle: "영구적으로 삭제하시겠습니까?",
       deletePermanently: "영구 삭제",
       editInExplorer: "Explorer에서 편집",
+      chatWithChart: "차트에 대해 채팅",
       fullWidth: "전폭",
       halfWidth: "반폭",
       hiddenDescription:
@@ -6758,6 +7169,7 @@ const translatedAnalyticsDebtTranslations = {
       dashboard: "대시보드 - Analytics",
       dataDictionary: "데이터 사전 - Analytics",
       dataSources: "데이터 소스 - Analytics",
+      monitoring: "모니터링 - Analytics",
       agents: "에이전트 - Analytics",
       extensions: "확장 - Analytics",
       notFound: "찾을 수 없음 - Analytics",
@@ -6821,6 +7233,12 @@ const translatedAnalyticsDebtTranslations = {
       discardChanges: "변경사항 취소",
       dismissDemoIntro: "데모 소개 닫기",
       downloadCsv: "CSV 다운로드",
+      exportToGoogleSheets: "Google Sheets로 내보내기",
+      exportingToGoogleSheets: "Google Sheets로 내보내는 중...",
+      googleSheetsExported: "Google Sheets로 내보냈습니다",
+      openGoogleSheet: "시트 열기",
+      googleSheetsExportFailed:
+        "Google Sheets로 내보내지 못했습니다: {{message}}",
       dragToReorder: "드래그하여 재정렬하세요.",
       expandFilters: "필터 확장",
       failedToFormatSql: "SQL을 포맷하지 못했습니다.",
@@ -6836,6 +7254,7 @@ const translatedAnalyticsDebtTranslations = {
       noPanels: "이 대시보드에는 아직 패널이 없습니다.",
       noSavedViews: "아직 저장된 보기가 없습니다.",
       panelOptions: "패널 옵션",
+      chatWithPanel: "패널에 대해 채팅",
       saveAsView: "보기로 저장",
       saveCurrentView: "현재 보기 저장",
       saveFailed: "대시보드를 저장할 수 없습니다.",
@@ -6927,6 +7346,7 @@ const translatedAnalyticsDebtTranslations = {
       deletePermanentlyTitle: "Excluir permanentemente?",
       deletePermanently: "Excluir permanentemente",
       editInExplorer: "Editar em Explorer",
+      chatWithChart: "Conversar sobre o gráfico",
       fullWidth: "Largura total",
       halfWidth: "Meia largura",
       hiddenDescription:
@@ -6971,6 +7391,7 @@ const translatedAnalyticsDebtTranslations = {
       dashboard: "Painel - Analytics",
       dataDictionary: "Dicionário de Dados - Analytics",
       dataSources: "Fontes de dados - Analytics",
+      monitoring: "Monitoramento - Analytics",
       agents: "Agentes - Analytics",
       extensions: "Extensões - Analytics",
       notFound: "Não encontrado - Analytics",
@@ -7034,6 +7455,12 @@ const translatedAnalyticsDebtTranslations = {
       discardChanges: "Descartar alterações",
       dismissDemoIntro: "Ignorar introdução da demonstração",
       downloadCsv: "Baixar CSV",
+      exportToGoogleSheets: "Exportar para o Google Sheets",
+      exportingToGoogleSheets: "Exportando para o Google Sheets...",
+      googleSheetsExported: "Exportado para o Google Sheets",
+      openGoogleSheet: "Abrir planilha",
+      googleSheetsExportFailed:
+        "Não foi possível exportar para o Google Sheets: {{message}}",
       dragToReorder: "Arraste para reordenar",
       expandFilters: "Expandir filtros",
       failedToFormatSql: "Falha ao formatar SQL",
@@ -7049,6 +7476,7 @@ const translatedAnalyticsDebtTranslations = {
       noPanels: "Este painel ainda não possui painéis.",
       noSavedViews: "Nenhuma visualização salva ainda.",
       panelOptions: "Opções do painel",
+      chatWithPanel: "Conversar sobre o painel",
       saveAsView: "Salvar como visualização",
       saveCurrentView: "Salvar visualização atual",
       saveFailed: "Não foi possível salvar o painel",
@@ -7138,6 +7566,7 @@ const translatedAnalyticsDebtTranslations = {
       deletePermanentlyTitle: "स्थायी रूप से हटाएँ?",
       deletePermanently: "स्थायी रूप से हटाएँ",
       editInExplorer: "Explorer में संपादित करें",
+      chatWithChart: "चार्ट के बारे में चैट करें",
       fullWidth: "पूरी चौड़ाई",
       halfWidth: "आधी चौड़ाई",
       hiddenDescription:
@@ -7180,6 +7609,7 @@ const translatedAnalyticsDebtTranslations = {
       dashboard: "डैशबोर्ड - Analytics",
       dataDictionary: "डेटा डिक्शनरी - Analytics",
       dataSources: "डेटा स्रोत - Analytics",
+      monitoring: "मॉनिटरिंग - Analytics",
       agents: "एजेंट - Analytics",
       extensions: "एक्सटेंशन - Analytics",
       notFound: "नहीं मिला - Analytics",
@@ -7243,6 +7673,12 @@ const translatedAnalyticsDebtTranslations = {
       discardChanges: "परिवर्तन त्यागें",
       dismissDemoIntro: "डेमो परिचय ख़ारिज करें",
       downloadCsv: "CSV डाउनलोड करें",
+      exportToGoogleSheets: "Google Sheets में निर्यात करें",
+      exportingToGoogleSheets: "Google Sheets में निर्यात किया जा रहा है...",
+      googleSheetsExported: "Google Sheets में निर्यात किया गया",
+      openGoogleSheet: "शीट खोलें",
+      googleSheetsExportFailed:
+        "Google Sheets में निर्यात नहीं किया जा सका: {{message}}",
       dragToReorder: "पुनः व्यवस्थित करने के लिए खींचें",
       expandFilters: "फ़िल्टर का विस्तार करें",
       failedToFormatSql: "SQL को प्रारूपित करने में विफल",
@@ -7258,6 +7694,7 @@ const translatedAnalyticsDebtTranslations = {
       noPanels: "इस डैशबोर्ड में अभी तक कोई पैनल नहीं है.",
       noSavedViews: "अभी तक कोई सहेजा गया दृश्य नहीं.",
       panelOptions: "पैनल विकल्प",
+      chatWithPanel: "पैनल के बारे में चैट करें",
       saveAsView: "दृश्य के रूप में सहेजें",
       saveCurrentView: "वर्तमान दृश्य सहेजें",
       saveFailed: "डैशबोर्ड सहेजा नहीं जा सका",
@@ -7346,6 +7783,7 @@ const translatedAnalyticsDebtTranslations = {
       deletePermanentlyTitle: "هل تريد الحذف نهائيًا؟",
       deletePermanently: "حذف نهائيا",
       editInExplorer: "تحرير في Explorer",
+      chatWithChart: "الدردشة حول المخطط",
       fullWidth: "العرض الكامل",
       halfWidth: "نصف العرض",
       hiddenDescription:
@@ -7388,6 +7826,7 @@ const translatedAnalyticsDebtTranslations = {
       dashboard: "لوحة القيادة - Analytics",
       dataDictionary: "قاموس البيانات - Analytics",
       dataSources: "مصادر البيانات - Analytics",
+      monitoring: "المراقبة - Analytics",
       agents: "الوكلاء - Analytics",
       extensions: "Extensions - Analytics",
       notFound: "Not Found - Analytics",
@@ -7451,6 +7890,11 @@ const translatedAnalyticsDebtTranslations = {
       discardChanges: "تجاهل التغييرات",
       dismissDemoIntro: "رفض المقدمة التجريبية",
       downloadCsv: "تحميل CSV",
+      exportToGoogleSheets: "تصدير إلى Google Sheets",
+      exportingToGoogleSheets: "جارٍ التصدير إلى Google Sheets...",
+      googleSheetsExported: "تم التصدير إلى Google Sheets",
+      openGoogleSheet: "فتح الورقة",
+      googleSheetsExportFailed: "تعذر التصدير إلى Google Sheets: {{message}}",
       dragToReorder: "اسحب لإعادة الترتيب",
       expandFilters: "قم بتوسيع عوامل التصفية",
       failedToFormatSql: "فشل تنسيق SQL",
@@ -7466,6 +7910,7 @@ const translatedAnalyticsDebtTranslations = {
       noPanels: "لوحة القيادة هذه لا تحتوي على لوحات حتى الآن.",
       noSavedViews: "لا توجد طرق عرض محفوظة حتى الآن.",
       panelOptions: "خيارات اللوحة",
+      chatWithPanel: "الدردشة حول اللوحة",
       saveAsView: "حفظ كعرض",
       saveCurrentView: "حفظ العرض الحالي",
       saveFailed: "تعذر حفظ لوحة البيانات",
@@ -8131,6 +8576,8 @@ const translatedSessionReplayTranslations = {
         "用于重建此回放的受控分块。提供商 URL 保持私有。",
       timeline: "事件时间线",
       timelineDescription: "显示 {{count}} / {{total}} 个有用事件。",
+      timelineSearch: "搜索事件...",
+      timelineNoMatches: "没有符合当前搜索的时间线事件。",
       started: "开始",
       signedIn: "已登录",
       anonymous: "匿名",
@@ -8254,6 +8701,9 @@ const translatedSessionReplayTranslations = {
         "Fragmentos con acceso controlado usados para reconstruir esta reproducción. Las URL del proveedor permanecen privadas.",
       timeline: "Línea de tiempo de eventos",
       timelineDescription: "Mostrando {{count}} de {{total}} eventos útiles.",
+      timelineSearch: "Buscar eventos...",
+      timelineNoMatches:
+        "Ningún evento de la línea de tiempo coincide con la búsqueda actual.",
       started: "Inicio",
       signedIn: "Con sesión iniciada",
       anonymous: "Anónimo",
@@ -8379,6 +8829,9 @@ const translatedSessionReplayTranslations = {
       timeline: "Chronologie des événements",
       timelineDescription:
         "Affichage de {{count}} événements utiles sur {{total}}.",
+      timelineSearch: "Rechercher des événements...",
+      timelineNoMatches:
+        "Aucun événement de la chronologie ne correspond à la recherche actuelle.",
       started: "Début",
       signedIn: "Connecté",
       anonymous: "Anonyme",
@@ -8503,6 +8956,9 @@ const translatedSessionReplayTranslations = {
       timeline: "Ereignis-Timeline",
       timelineDescription:
         "{{count}} von {{total}} nützlichen Ereignissen werden angezeigt.",
+      timelineSearch: "Ereignisse suchen...",
+      timelineNoMatches:
+        "Keine Timeline-Ereignisse entsprechen der aktuellen Suche.",
       started: "Gestartet",
       signedIn: "Angemeldet",
       anonymous: "Anonym",
@@ -8626,6 +9082,9 @@ const translatedSessionReplayTranslations = {
       timeline: "イベントタイムライン",
       timelineDescription:
         "有用なイベント {{count}} / {{total}} 件を表示しています。",
+      timelineSearch: "イベントを検索...",
+      timelineNoMatches:
+        "現在の検索に一致するタイムラインイベントはありません。",
       started: "開始",
       signedIn: "サインイン済み",
       anonymous: "匿名",
@@ -8748,6 +9207,8 @@ const translatedSessionReplayTranslations = {
       timeline: "이벤트 타임라인",
       timelineDescription:
         "유용한 이벤트 {{count}} / {{total}}개를 표시합니다.",
+      timelineSearch: "이벤트 검색...",
+      timelineNoMatches: "현재 검색과 일치하는 타임라인 이벤트가 없습니다.",
       started: "시작",
       signedIn: "로그인됨",
       anonymous: "익명",
@@ -8870,6 +9331,9 @@ const translatedSessionReplayTranslations = {
         "Blocos com escopo usados para reconstruir este replay. As URLs do provedor permanecem privadas.",
       timeline: "Linha do tempo de eventos",
       timelineDescription: "Mostrando {{count}} de {{total}} eventos úteis.",
+      timelineSearch: "Pesquisar eventos...",
+      timelineNoMatches:
+        "Nenhum evento da linha do tempo corresponde à pesquisa atual.",
       started: "Início",
       signedIn: "Logado",
       anonymous: "Anônimo",
@@ -8990,6 +9454,8 @@ const translatedSessionReplayTranslations = {
         "इस रीप्ले को फिर से बनाने के लिए उपयोग किए गए स्कोप्ड चंक। प्रदाता URL निजी रहते हैं।",
       timeline: "इवेंट टाइमलाइन",
       timelineDescription: "{{total}} में से {{count}} उपयोगी इवेंट दिखाए जा रहे हैं।",
+      timelineSearch: "इवेंट खोजें...",
+      timelineNoMatches: "वर्तमान खोज से कोई टाइमलाइन इवेंट मेल नहीं खाता।",
       started: "शुरू हुआ",
       signedIn: "साइन इन",
       anonymous: "अनाम",
@@ -9110,6 +9576,8 @@ const translatedSessionReplayTranslations = {
         "مقاطع محددة النطاق تُستخدم لإعادة بناء هذا التسجيل. تبقى عناوين URL الخاصة بالمزوّد خاصة.",
       timeline: "الخط الزمني للأحداث",
       timelineDescription: "عرض {{count}} من {{total}} أحداث مفيدة.",
+      timelineSearch: "البحث عن الأحداث...",
+      timelineNoMatches: "لا توجد أحداث في الخط الزمني تطابق البحث الحالي.",
       started: "بدأت",
       signedIn: "تم تسجيل الدخول",
       anonymous: "مجهول",
@@ -10601,6 +11069,1019 @@ const translatedSessionDevToolsTranslations = {
 
 for (const [locale, overrides] of Object.entries(
   translatedSessionDevToolsTranslations,
+) as Array<[LocaleCode, AnalyticsPartialMessages]>) {
+  const messages = messagesByLocale[locale];
+  if (!messages) continue;
+
+  for (const [section, sectionOverrides] of Object.entries(overrides) as Array<
+    [Section, Partial<Messages[Section]>]
+  >) {
+    Object.assign(messages[section], sectionOverrides);
+  }
+}
+
+const translatedFeatureFlagAdminTranslations = {
+  "zh-CN": {
+    agents: {
+      featureFlags: "功能开关",
+      featureFlagsDescription: "查看已注册应用开关，并进行可逆的发布调整。",
+      reloadFlags: "重新加载开关",
+      flagsUnavailable: "功能开关不可用",
+      flagsUnreachable: "无法连接工作区目录。连接恢复后重试。",
+      flagsEmpty: "没有应用报告功能开关",
+      flagsEmptyDetail: "连接的应用准备就绪后，已注册开关会显示在这里。",
+      flagsNotReady: "此应用状态为 {{status}}，不会将其开关状态假定为关闭。",
+      noFlagDefinitions: "此应用没有注册功能开关定义。",
+      noFlagDescription: "未提供说明。",
+      selected: "已选择",
+      openFlag: "打开功能开关",
+      confirm: "确认",
+      name: "名称",
+      appId: "应用 ID",
+      flagKey: "功能开关",
+    },
+  },
+  "es-ES": {
+    agents: {
+      featureFlags: "Indicadores de funciones",
+      featureFlagsDescription:
+        "Revisa los indicadores de las aplicaciones registradas y aplica cambios de lanzamiento reversibles.",
+      reloadFlags: "Volver a cargar indicadores",
+      flagsUnavailable: "Los indicadores de funciones no están disponibles",
+      flagsUnreachable:
+        "No se pudo acceder al directorio del espacio de trabajo. Inténtalo de nuevo cuando esté disponible.",
+      flagsEmpty: "Ninguna aplicación informó indicadores",
+      flagsEmptyDetail:
+        "Los indicadores registrados aparecerán aquí cuando las aplicaciones conectadas estén listas.",
+      flagsNotReady:
+        "Esta aplicación está {{status}}; su estado no se supone desactivado.",
+      noFlagDefinitions:
+        "Esta aplicación lista no tiene definiciones de indicadores.",
+      noFlagDescription: "No se proporcionó descripción.",
+      selected: "Seleccionado",
+      openFlag: "Abrir indicador",
+      confirm: "Confirmar",
+      name: "Nombre",
+      appId: "ID de aplicación",
+      flagKey: "Indicador de función",
+    },
+  },
+  "fr-FR": {
+    agents: {
+      featureFlags: "Indicateurs de fonctionnalités",
+      featureFlagsDescription:
+        "Examinez les indicateurs d'applications enregistrées et appliquez des changements de déploiement réversibles.",
+      reloadFlags: "Recharger les indicateurs",
+      flagsUnavailable: "Les indicateurs de fonctionnalités sont indisponibles",
+      flagsUnreachable:
+        "Le répertoire de l'espace de travail est inaccessible. Réessayez lorsqu'il sera disponible.",
+      flagsEmpty: "Aucune application n'a signalé d'indicateur",
+      flagsEmptyDetail:
+        "Les indicateurs enregistrés apparaîtront ici lorsque les applications connectées seront prêtes.",
+      flagsNotReady:
+        "Cette application est {{status}} ; son état n'est pas supposé désactivé.",
+      noFlagDefinitions:
+        "Cette application prête n'a aucune définition d'indicateur.",
+      noFlagDescription: "Aucune description fournie.",
+      selected: "Sélectionné",
+      openFlag: "Ouvrir l'indicateur",
+      confirm: "Confirmer",
+      name: "Nom",
+      appId: "ID d'application",
+      flagKey: "Indicateur de fonctionnalité",
+    },
+  },
+  "de-DE": {
+    agents: {
+      featureFlags: "Funktionsschalter",
+      featureFlagsDescription:
+        "Prüfe registrierte App-Schalter und nimm bewusste, rückgängig machbare Rollout-Änderungen vor.",
+      reloadFlags: "Funktionsschalter neu laden",
+      flagsUnavailable: "Funktionsschalter sind nicht verfügbar",
+      flagsUnreachable:
+        "Das Arbeitsbereichsverzeichnis konnte nicht erreicht werden. Versuche es erneut, wenn die Verbindung verfügbar ist.",
+      flagsEmpty: "Keine Arbeitsbereichs-App meldet Funktionsschalter",
+      flagsEmptyDetail:
+        "Registrierte Schalter erscheinen hier, sobald verbundene Apps bereit sind.",
+      flagsNotReady:
+        "Diese App ist {{status}}; ihr Schalterzustand wird nicht als aus angenommen.",
+      noFlagDefinitions:
+        "Diese bereite App hat keine registrierten Schalterdefinitionen.",
+      noFlagDescription: "Keine Beschreibung vorhanden.",
+      selected: "Ausgewählt",
+      openFlag: "Funktionsschalter öffnen",
+      confirm: "Bestätigen",
+      name: "Name",
+      appId: "App-ID",
+      flagKey: "Funktionsschalter",
+    },
+  },
+  "pt-BR": {
+    agents: {
+      featureFlags: "Sinalizadores de recursos",
+      featureFlagsDescription:
+        "Revise sinalizadores de apps registrados e faça mudanças de lançamento reversíveis.",
+      reloadFlags: "Recarregar sinalizadores",
+      flagsUnavailable: "Sinalizadores de recursos indisponíveis",
+      flagsUnreachable:
+        "Não foi possível acessar o diretório do espaço de trabalho. Tente novamente quando estiver disponível.",
+      flagsEmpty: "Nenhum app informou sinalizadores",
+      flagsEmptyDetail:
+        "Sinalizadores registrados aparecerão aqui quando os apps conectados estiverem prontos.",
+      flagsNotReady:
+        "Este app está {{status}}; seu estado não é considerado desligado.",
+      noFlagDefinitions:
+        "Este app pronto não tem definições de sinalizador registradas.",
+      noFlagDescription: "Nenhuma descrição fornecida.",
+      selected: "Selecionado",
+      openFlag: "Abrir sinalizador",
+      confirm: "Confirmar",
+      name: "Nome",
+      appId: "ID do app",
+      flagKey: "Sinalizador de recurso",
+    },
+  },
+  "ja-JP": {
+    agents: {
+      featureFlags: "機能フラグ",
+      featureFlagsDescription:
+        "登録済みアプリのフラグを確認し、元に戻せるロールアウト変更を行います。",
+      reloadFlags: "機能フラグを再読み込み",
+      flagsUnavailable: "機能フラグを利用できません",
+      flagsUnreachable:
+        "ワークスペースディレクトリに接続できません。接続可能になったら再試行してください。",
+      flagsEmpty: "フラグを報告したワークスペースアプリはありません",
+      flagsEmptyDetail:
+        "接続済みアプリの準備ができると、登録済みフラグがここに表示されます。",
+      flagsNotReady:
+        "このアプリは {{status}} です。フラグ状態をオフとは見なしません。",
+      noFlagDefinitions:
+        "この準備済みアプリには登録済みフラグ定義がありません。",
+      noFlagDescription: "説明はありません。",
+      selected: "選択済み",
+      openFlag: "機能フラグを開く",
+      confirm: "確認",
+      name: "名前",
+      appId: "アプリ ID",
+      flagKey: "機能フラグ",
+    },
+  },
+  "ko-KR": {
+    agents: {
+      featureFlags: "기능 플래그",
+      featureFlagsDescription:
+        "등록된 앱 플래그를 검토하고 되돌릴 수 있는 출시 변경을 적용합니다.",
+      reloadFlags: "기능 플래그 다시 불러오기",
+      flagsUnavailable: "기능 플래그를 사용할 수 없습니다",
+      flagsUnreachable:
+        "작업 공간 디렉터리에 연결할 수 없습니다. 연결되면 다시 시도하세요.",
+      flagsEmpty: "플래그를 보고한 작업 공간 앱이 없습니다",
+      flagsEmptyDetail:
+        "연결된 앱이 준비되면 등록된 플래그가 여기에 표시됩니다.",
+      flagsNotReady:
+        "이 앱은 {{status}} 상태이며 플래그가 꺼진 것으로 가정하지 않습니다.",
+      noFlagDefinitions: "준비된 이 앱에는 등록된 플래그 정의가 없습니다.",
+      noFlagDescription: "설명이 제공되지 않았습니다.",
+      selected: "선택됨",
+      openFlag: "기능 플래그 열기",
+      confirm: "확인",
+      name: "이름",
+      appId: "앱 ID",
+      flagKey: "기능 플래그",
+    },
+  },
+  "hi-IN": {
+    agents: {
+      featureFlags: "फ़ीचर फ़्लैग",
+      featureFlagsDescription:
+        "पंजीकृत ऐप फ़्लैग देखें और वापस किए जा सकने वाले रोलआउट बदलाव करें।",
+      reloadFlags: "फ़ीचर फ़्लैग फिर से लोड करें",
+      flagsUnavailable: "फ़ीचर फ़्लैग उपलब्ध नहीं हैं",
+      flagsUnreachable:
+        "वर्कस्पेस डायरेक्टरी तक नहीं पहुँचा जा सका। कनेक्शन उपलब्ध होने पर फिर कोशिश करें।",
+      flagsEmpty: "किसी वर्कस्पेस ऐप ने फ़्लैग की सूचना नहीं दी",
+      flagsEmptyDetail: "कनेक्टेड ऐप तैयार होने पर पंजीकृत फ़्लैग यहाँ दिखाई देंगे।",
+      flagsNotReady: "यह ऐप {{status}} है; इसकी फ़्लैग स्थिति को बंद नहीं माना जाता।",
+      noFlagDefinitions: "इस तैयार ऐप में पंजीकृत फ़्लैग परिभाषाएँ नहीं हैं।",
+      noFlagDescription: "कोई विवरण नहीं दिया गया।",
+      selected: "चयनित",
+      openFlag: "फ़ीचर फ़्लैग खोलें",
+      confirm: "पुष्टि करें",
+      name: "नाम",
+      appId: "ऐप ID",
+      flagKey: "फ़ीचर फ़्लैग",
+    },
+  },
+  "ar-SA": {
+    agents: {
+      featureFlags: "علامات الميزات",
+      featureFlagsDescription:
+        "راجع علامات التطبيقات المسجلة ونفّذ تغييرات طرح قابلة للعكس.",
+      reloadFlags: "إعادة تحميل علامات الميزات",
+      flagsUnavailable: "علامات الميزات غير متاحة",
+      flagsUnreachable:
+        "تعذر الوصول إلى دليل مساحة العمل. أعد المحاولة عند توفر الاتصال.",
+      flagsEmpty: "لم يبلغ أي تطبيق في مساحة العمل عن علامات",
+      flagsEmptyDetail:
+        "ستظهر العلامات المسجلة هنا عندما تصبح التطبيقات المتصلة جاهزة.",
+      flagsNotReady:
+        "حالة هذا التطبيق هي {{status}}؛ ولا يُفترض أن علاماته متوقفة.",
+      noFlagDefinitions: "لا يحتوي هذا التطبيق الجاهز على تعريفات علامات مسجلة.",
+      noFlagDescription: "لم يُقدَّم وصف.",
+      selected: "محدد",
+      openFlag: "فتح علامة الميزة",
+      confirm: "تأكيد",
+      name: "الاسم",
+      appId: "معرّف التطبيق",
+      flagKey: "علامة ميزة",
+    },
+  },
+} satisfies Partial<Record<LocaleCode, AnalyticsPartialMessages>>;
+
+const translatedDashboardAdminTranslations = {
+  "zh-CN": {
+    navigation: {
+      admin: "管理",
+    },
+    agents: {
+      dashboardUsage: "仪表板使用情况",
+      dashboardUsageTitle: "仪表板使用情况",
+      dashboardUsageDescription:
+        "审计当前组织中的仪表板生命周期、流量、互动和所有权。现有仪表板只有在启用更新归因后再次修改，才会显示修改人。",
+      dashboardUsageTotal: "仪表板",
+      dashboardUsageActive: "{{count}} 个活跃",
+      dashboardUsageViews: "浏览量",
+      dashboardUsageEdits: "编辑次数",
+      dashboardUsageSort: "排序仪表板",
+      dashboardUsageMostViewed: "浏览最多",
+      dashboardUsageMostEdited: "编辑最多",
+      dashboardUsageTop: "最高：{{name}}",
+      dashboardUsageEngagements: "互动",
+      dashboardUsageEngagementsHint: "非页面浏览事件加已保存视图",
+      dashboardUsageStale: "无浏览",
+      dashboardUsageStaleHint: "没有已跟踪浏览量的活跃仪表板",
+      dashboardUsageDashboard: "仪表板",
+      dashboardUsageOwner: "所有者",
+      dashboardUsageUsers: "用户",
+      dashboardUsageModified: "修改时间",
+      dashboardUsageCreated: "创建时间",
+      dashboardMetadataCreated: "创建时间",
+      dashboardMetadataCreatedBy: "创建者",
+      dashboardMetadataUpdated: "更新时间",
+      dashboardMetadataUpdatedBy: "更新者",
+      dashboardUsageState: "状态",
+      dashboardUsagePanels: "{{count}} 个面板",
+      dashboardUsageSavedViews: "{{count}} 个已保存视图",
+      dashboardUsageHidden: "已隐藏",
+      dashboardUsageArchived: "已归档",
+      dashboardUsageEmpty: "还没有仪表板",
+      dashboardUsageEmptyDescription:
+        "此组织中创建的仪表板会在这里显示使用情况和清理信号。",
+      adminOnlyTitle: "需要管理员权限",
+      adminOnlyDescription:
+        "只有组织所有者和管理员可以打开 Analytics 管理工具。",
+      notTracked: "未跟踪",
+      visibilityprivate: "私有",
+      visibilityorg: "与组织共享",
+      visibilitypublic: "公开",
+    },
+  },
+  "es-ES": {
+    navigation: {
+      admin: "Administración",
+    },
+    agents: {
+      dashboardUsage: "Uso de paneles",
+      dashboardUsageTitle: "Uso de paneles",
+      dashboardUsageDescription:
+        "Audita el ciclo de vida, el tráfico, la interacción y la propiedad de los paneles en la organización activa. Los paneles existentes solo mostrarán quién los modificó después de cambiarse con atribución actualizada.",
+      dashboardUsageTotal: "Paneles",
+      dashboardUsageActive: "{{count}} activos",
+      dashboardUsageViews: "Vistas",
+      dashboardUsageEdits: "Ediciones",
+      dashboardUsageSort: "Ordenar paneles",
+      dashboardUsageMostViewed: "Más vistas",
+      dashboardUsageMostEdited: "Más editados",
+      dashboardUsageTop: "Principal: {{name}}",
+      dashboardUsageEngagements: "Interacciones",
+      dashboardUsageEngagementsHint:
+        "Eventos que no son pageview más vistas guardadas",
+      dashboardUsageStale: "Sin vistas",
+      dashboardUsageStaleHint: "Paneles activos sin vistas registradas",
+      dashboardUsageDashboard: "Panel",
+      dashboardUsageOwner: "Propietario",
+      dashboardUsageUsers: "Usuarios",
+      dashboardUsageModified: "Modificado",
+      dashboardUsageCreated: "Creado",
+      dashboardMetadataCreated: "Creado",
+      dashboardMetadataCreatedBy: "Creado por",
+      dashboardMetadataUpdated: "Modificado",
+      dashboardMetadataUpdatedBy: "Modificado por",
+      dashboardUsageState: "Estado",
+      dashboardUsagePanels: "{{count}} paneles",
+      dashboardUsageSavedViews: "{{count}} vistas guardadas",
+      dashboardUsageHidden: "Oculto",
+      dashboardUsageArchived: "Archivado",
+      dashboardUsageEmpty: "Aún no hay paneles",
+      dashboardUsageEmptyDescription:
+        "Los paneles creados en esta organización aparecerán aquí con señales de uso y limpieza.",
+      adminOnlyTitle: "Se requiere acceso de administrador",
+      adminOnlyDescription:
+        "Solo los propietarios y administradores de la organización pueden abrir las herramientas de administración de Analytics.",
+      notTracked: "No registrado",
+      visibilityprivate: "Privado",
+      visibilityorg: "Compartido con la organización",
+      visibilitypublic: "Público",
+    },
+  },
+  "fr-FR": {
+    navigation: {
+      admin: "Admin",
+    },
+    agents: {
+      dashboardUsage: "Utilisation des tableaux de bord",
+      dashboardUsageTitle: "Utilisation des tableaux de bord",
+      dashboardUsageDescription:
+        "Auditez le cycle de vie, le trafic, l'engagement et la propriété des tableaux de bord dans l'organisation active. Les tableaux de bord existants n'affichent un modificateur qu'après une modification avec attribution mise à jour.",
+      dashboardUsageTotal: "Tableaux de bord",
+      dashboardUsageActive: "{{count}} actifs",
+      dashboardUsageViews: "Vues",
+      dashboardUsageEdits: "Modifications",
+      dashboardUsageSort: "Trier les tableaux",
+      dashboardUsageMostViewed: "Les plus consultés",
+      dashboardUsageMostEdited: "Les plus modifiés",
+      dashboardUsageTop: "Meilleur : {{name}}",
+      dashboardUsageEngagements: "Engagements",
+      dashboardUsageEngagementsHint:
+        "Événements hors pageview plus vues enregistrées",
+      dashboardUsageStale: "Aucune vue",
+      dashboardUsageStaleHint: "Tableaux de bord actifs sans vues suivies",
+      dashboardUsageDashboard: "Tableau de bord",
+      dashboardUsageOwner: "Propriétaire",
+      dashboardUsageUsers: "Utilisateurs",
+      dashboardUsageModified: "Modifié",
+      dashboardUsageCreated: "Créé",
+      dashboardMetadataCreated: "Créé",
+      dashboardMetadataCreatedBy: "Créé par",
+      dashboardMetadataUpdated: "Modifié",
+      dashboardMetadataUpdatedBy: "Modifié par",
+      dashboardUsageState: "État",
+      dashboardUsagePanels: "{{count}} panneaux",
+      dashboardUsageSavedViews: "{{count}} vues enregistrées",
+      dashboardUsageHidden: "Masqué",
+      dashboardUsageArchived: "Archivé",
+      dashboardUsageEmpty: "Aucun tableau de bord pour l'instant",
+      dashboardUsageEmptyDescription:
+        "Les tableaux de bord créés dans cette organisation apparaîtront ici avec les signaux d'utilisation et de nettoyage.",
+      adminOnlyTitle: "Accès administrateur requis",
+      adminOnlyDescription:
+        "Seuls les propriétaires et administrateurs de l'organisation peuvent ouvrir les outils d'administration Analytics.",
+      notTracked: "Non suivi",
+      visibilityprivate: "Privé",
+      visibilityorg: "Partagé avec l'organisation",
+      visibilitypublic: "Public",
+    },
+  },
+  "de-DE": {
+    navigation: {
+      admin: "Admin",
+    },
+    agents: {
+      dashboardUsage: "Dashboard-Nutzung",
+      dashboardUsageTitle: "Dashboard-Nutzung",
+      dashboardUsageDescription:
+        "Prüfe Lebenszyklus, Traffic, Engagement und Besitz von Dashboards in der aktiven Organisation. Bestehende Dashboards zeigen einen Bearbeiter erst nach einer Änderung mit aktualisierter Zuordnung.",
+      dashboardUsageTotal: "Dashboards",
+      dashboardUsageActive: "{{count}} aktiv",
+      dashboardUsageViews: "Aufrufe",
+      dashboardUsageEdits: "Bearbeitungen",
+      dashboardUsageSort: "Dashboards sortieren",
+      dashboardUsageMostViewed: "Am häufigsten aufgerufen",
+      dashboardUsageMostEdited: "Am häufigsten bearbeitet",
+      dashboardUsageTop: "Top: {{name}}",
+      dashboardUsageEngagements: "Interaktionen",
+      dashboardUsageEngagementsHint:
+        "Nicht-Pageview-Ereignisse plus gespeicherte Ansichten",
+      dashboardUsageStale: "Keine Aufrufe",
+      dashboardUsageStaleHint: "Aktive Dashboards ohne erfasste Aufrufe",
+      dashboardUsageDashboard: "Dashboard",
+      dashboardUsageOwner: "Besitzer",
+      dashboardUsageUsers: "Benutzer",
+      dashboardUsageModified: "Geändert",
+      dashboardUsageCreated: "Erstellt",
+      dashboardMetadataCreated: "Erstellt",
+      dashboardMetadataCreatedBy: "Erstellt von",
+      dashboardMetadataUpdated: "Geändert",
+      dashboardMetadataUpdatedBy: "Geändert von",
+      dashboardUsageState: "Status",
+      dashboardUsagePanels: "{{count}} Panels",
+      dashboardUsageSavedViews: "{{count}} gespeicherte Ansichten",
+      dashboardUsageHidden: "Ausgeblendet",
+      dashboardUsageArchived: "Archiviert",
+      dashboardUsageEmpty: "Noch keine Dashboards",
+      dashboardUsageEmptyDescription:
+        "In dieser Organisation erstellte Dashboards erscheinen hier mit Nutzungs- und Aufräumsignalen.",
+      adminOnlyTitle: "Adminzugriff erforderlich",
+      adminOnlyDescription:
+        "Nur Organisationsinhaber und Administratoren können Analytics-Admin-Tools öffnen.",
+      notTracked: "Nicht erfasst",
+      visibilityprivate: "Privat",
+      visibilityorg: "Mit Organisation geteilt",
+      visibilitypublic: "Öffentlich",
+    },
+  },
+  "ja-JP": {
+    navigation: {
+      admin: "管理",
+    },
+    agents: {
+      dashboardUsage: "ダッシュボード使用状況",
+      dashboardUsageTitle: "ダッシュボード使用状況",
+      dashboardUsageDescription:
+        "アクティブな組織全体で、ダッシュボードのライフサイクル、トラフィック、エンゲージメント、所有者を監査します。既存のダッシュボードは、更新の帰属が記録された後に変更されると編集者が表示されます。",
+      dashboardUsageTotal: "ダッシュボード",
+      dashboardUsageActive: "{{count}} 件がアクティブ",
+      dashboardUsageViews: "閲覧数",
+      dashboardUsageEdits: "編集数",
+      dashboardUsageSort: "ダッシュボードを並べ替え",
+      dashboardUsageMostViewed: "閲覧数が多い順",
+      dashboardUsageMostEdited: "編集数が多い順",
+      dashboardUsageTop: "トップ：{{name}}",
+      dashboardUsageEngagements: "エンゲージメント",
+      dashboardUsageEngagementsHint:
+        "ページビュー以外のイベントと保存済みビュー",
+      dashboardUsageStale: "閲覧なし",
+      dashboardUsageStaleHint: "追跡された閲覧がないアクティブなダッシュボード",
+      dashboardUsageDashboard: "ダッシュボード",
+      dashboardUsageOwner: "所有者",
+      dashboardUsageUsers: "ユーザー",
+      dashboardUsageModified: "更新日",
+      dashboardUsageCreated: "作成日",
+      dashboardMetadataCreated: "作成日",
+      dashboardMetadataCreatedBy: "作成者",
+      dashboardMetadataUpdated: "更新日",
+      dashboardMetadataUpdatedBy: "更新者",
+      dashboardUsageState: "状態",
+      dashboardUsagePanels: "{{count}} パネル",
+      dashboardUsageSavedViews: "{{count}} 件の保存済みビュー",
+      dashboardUsageHidden: "非表示",
+      dashboardUsageArchived: "アーカイブ済み",
+      dashboardUsageEmpty: "まだダッシュボードがありません",
+      dashboardUsageEmptyDescription:
+        "この組織で作成されたダッシュボードは、使用状況と整理のシグナルとともにここに表示されます。",
+      adminOnlyTitle: "管理者アクセスが必要です",
+      adminOnlyDescription:
+        "組織の所有者と管理者のみが Analytics 管理ツールを開けます。",
+      notTracked: "未追跡",
+      visibilityprivate: "非公開",
+      visibilityorg: "組織と共有",
+      visibilitypublic: "公開",
+    },
+  },
+  "ko-KR": {
+    navigation: {
+      admin: "관리",
+    },
+    agents: {
+      dashboardUsage: "대시보드 사용량",
+      dashboardUsageTitle: "대시보드 사용량",
+      dashboardUsageDescription:
+        "활성 조직 전체의 대시보드 수명 주기, 트래픽, 참여도, 소유권을 감사합니다. 기존 대시보드는 업데이트 귀속이 적용된 뒤 변경되어야 수정자가 표시됩니다.",
+      dashboardUsageTotal: "대시보드",
+      dashboardUsageActive: "{{count}}개 활성",
+      dashboardUsageViews: "조회수",
+      dashboardUsageEdits: "편집 횟수",
+      dashboardUsageSort: "대시보드 정렬",
+      dashboardUsageMostViewed: "조회수 많은 순",
+      dashboardUsageMostEdited: "편집 많은 순",
+      dashboardUsageTop: "상위: {{name}}",
+      dashboardUsageEngagements: "참여",
+      dashboardUsageEngagementsHint: "페이지뷰 외 이벤트와 저장된 보기",
+      dashboardUsageStale: "조회 없음",
+      dashboardUsageStaleHint: "추적된 조회가 없는 활성 대시보드",
+      dashboardUsageDashboard: "대시보드",
+      dashboardUsageOwner: "소유자",
+      dashboardUsageUsers: "사용자",
+      dashboardUsageModified: "수정됨",
+      dashboardUsageCreated: "생성됨",
+      dashboardMetadataCreated: "생성됨",
+      dashboardMetadataCreatedBy: "생성자",
+      dashboardMetadataUpdated: "수정됨",
+      dashboardMetadataUpdatedBy: "수정자",
+      dashboardUsageState: "상태",
+      dashboardUsagePanels: "{{count}}개 패널",
+      dashboardUsageSavedViews: "{{count}}개 저장된 보기",
+      dashboardUsageHidden: "숨김",
+      dashboardUsageArchived: "보관됨",
+      dashboardUsageEmpty: "아직 대시보드가 없습니다",
+      dashboardUsageEmptyDescription:
+        "이 조직에서 생성된 대시보드는 사용량 및 정리 신호와 함께 여기에 표시됩니다.",
+      adminOnlyTitle: "관리자 권한 필요",
+      adminOnlyDescription:
+        "조직 소유자와 관리자만 Analytics 관리 도구를 열 수 있습니다.",
+      notTracked: "추적 안 됨",
+      visibilityprivate: "비공개",
+      visibilityorg: "조직과 공유됨",
+      visibilitypublic: "공개",
+    },
+  },
+  "pt-BR": {
+    navigation: {
+      admin: "Administração",
+    },
+    agents: {
+      dashboardUsage: "Uso dos painéis",
+      dashboardUsageTitle: "Uso dos painéis",
+      dashboardUsageDescription:
+        "Audite ciclo de vida, tráfego, engajamento e propriedade dos painéis na organização ativa. Painéis existentes só mostram quem modificou depois de uma alteração com atribuição atualizada.",
+      dashboardUsageTotal: "Painéis",
+      dashboardUsageActive: "{{count}} ativos",
+      dashboardUsageViews: "Visualizações",
+      dashboardUsageEdits: "Edições",
+      dashboardUsageSort: "Ordenar painéis",
+      dashboardUsageMostViewed: "Mais visualizados",
+      dashboardUsageMostEdited: "Mais editados",
+      dashboardUsageTop: "Principal: {{name}}",
+      dashboardUsageEngagements: "Engajamentos",
+      dashboardUsageEngagementsHint:
+        "Eventos que não são pageview mais visualizações salvas",
+      dashboardUsageStale: "Sem visualizações",
+      dashboardUsageStaleHint: "Painéis ativos sem visualizações rastreadas",
+      dashboardUsageDashboard: "Painel",
+      dashboardUsageOwner: "Proprietário",
+      dashboardUsageUsers: "Usuários",
+      dashboardUsageModified: "Modificado",
+      dashboardUsageCreated: "Criado",
+      dashboardMetadataCreated: "Criado",
+      dashboardMetadataCreatedBy: "Criado por",
+      dashboardMetadataUpdated: "Modificado",
+      dashboardMetadataUpdatedBy: "Modificado por",
+      dashboardUsageState: "Estado",
+      dashboardUsagePanels: "{{count}} painéis",
+      dashboardUsageSavedViews: "{{count}} visualizações salvas",
+      dashboardUsageHidden: "Oculto",
+      dashboardUsageArchived: "Arquivado",
+      dashboardUsageEmpty: "Ainda não há painéis",
+      dashboardUsageEmptyDescription:
+        "Painéis criados nesta organização aparecerão aqui com sinais de uso e limpeza.",
+      adminOnlyTitle: "Acesso de administrador necessário",
+      adminOnlyDescription:
+        "Somente proprietários e administradores da organização podem abrir as ferramentas administrativas do Analytics.",
+      notTracked: "Não rastreado",
+      visibilityprivate: "Privado",
+      visibilityorg: "Compartilhado com a organização",
+      visibilitypublic: "Público",
+    },
+  },
+  "hi-IN": {
+    navigation: {
+      admin: "एडमिन",
+    },
+    agents: {
+      dashboardUsage: "डैशबोर्ड उपयोग",
+      dashboardUsageTitle: "डैशबोर्ड उपयोग",
+      dashboardUsageDescription:
+        "सक्रिय संगठन में डैशबोर्ड lifecycle, traffic, engagement, और ownership का audit करें। मौजूदा dashboards में modifier तभी दिखेगा जब वे updated attribution के साथ बदले जाएँगे।",
+      dashboardUsageTotal: "डैशबोर्ड",
+      dashboardUsageActive: "{{count}} सक्रिय",
+      dashboardUsageViews: "व्यू",
+      dashboardUsageEdits: "संपादन",
+      dashboardUsageSort: "डैशबोर्ड क्रमित करें",
+      dashboardUsageMostViewed: "सबसे अधिक देखे गए",
+      dashboardUsageMostEdited: "सबसे अधिक संपादित",
+      dashboardUsageTop: "शीर्ष: {{name}}",
+      dashboardUsageEngagements: "एंगेजमेंट",
+      dashboardUsageEngagementsHint: "Non-pageview events और saved views",
+      dashboardUsageStale: "कोई व्यू नहीं",
+      dashboardUsageStaleHint: "Tracked views के बिना सक्रिय dashboards",
+      dashboardUsageDashboard: "डैशबोर्ड",
+      dashboardUsageOwner: "स्वामी",
+      dashboardUsageUsers: "यूज़र",
+      dashboardUsageModified: "संशोधित",
+      dashboardUsageCreated: "बनाया गया",
+      dashboardMetadataCreated: "बनाया गया",
+      dashboardMetadataCreatedBy: "इसके द्वारा बनाया गया",
+      dashboardMetadataUpdated: "संशोधित",
+      dashboardMetadataUpdatedBy: "इसके द्वारा संशोधित",
+      dashboardUsageState: "स्थिति",
+      dashboardUsagePanels: "{{count}} पैनल",
+      dashboardUsageSavedViews: "{{count}} saved views",
+      dashboardUsageHidden: "छिपा हुआ",
+      dashboardUsageArchived: "आर्काइव किया गया",
+      dashboardUsageEmpty: "अभी कोई डैशबोर्ड नहीं",
+      dashboardUsageEmptyDescription:
+        "इस संगठन में बनाए गए dashboards usage और cleanup signals के साथ यहाँ दिखेंगे।",
+      adminOnlyTitle: "एडमिन access आवश्यक है",
+      adminOnlyDescription:
+        "केवल organization owners और admins Analytics admin tools खोल सकते हैं।",
+      notTracked: "ट्रैक नहीं किया गया",
+      visibilityprivate: "निजी",
+      visibilityorg: "संगठन के साथ साझा",
+      visibilitypublic: "सार्वजनिक",
+    },
+  },
+  "ar-SA": {
+    navigation: {
+      admin: "الإدارة",
+    },
+    agents: {
+      dashboardUsage: "استخدام لوحات المعلومات",
+      dashboardUsageTitle: "استخدام لوحات المعلومات",
+      dashboardUsageDescription:
+        "راجع دورة حياة لوحات المعلومات وحركة المرور والتفاعل والملكية عبر المؤسسة النشطة. لا تعرض اللوحات الحالية آخر معدّل إلا بعد تغييرها مع تفعيل الإسناد المحدّث.",
+      dashboardUsageTotal: "لوحات المعلومات",
+      dashboardUsageActive: "{{count}} نشطة",
+      dashboardUsageViews: "المشاهدات",
+      dashboardUsageEdits: "التعديلات",
+      dashboardUsageSort: "فرز لوحات المعلومات",
+      dashboardUsageMostViewed: "الأكثر مشاهدة",
+      dashboardUsageMostEdited: "الأكثر تعديلاً",
+      dashboardUsageTop: "الأعلى: {{name}}",
+      dashboardUsageEngagements: "التفاعلات",
+      dashboardUsageEngagementsHint:
+        "أحداث غير pageview بالإضافة إلى طرق العرض المحفوظة",
+      dashboardUsageStale: "بلا مشاهدات",
+      dashboardUsageStaleHint: "لوحات نشطة بلا مشاهدات متتبعة",
+      dashboardUsageDashboard: "لوحة المعلومات",
+      dashboardUsageOwner: "المالك",
+      dashboardUsageUsers: "المستخدمون",
+      dashboardUsageModified: "عُدّلت",
+      dashboardUsageCreated: "أُنشئت",
+      dashboardMetadataCreated: "أُنشئت",
+      dashboardMetadataCreatedBy: "أنشأها",
+      dashboardMetadataUpdated: "عُدّلت",
+      dashboardMetadataUpdatedBy: "عدّلها",
+      dashboardUsageState: "الحالة",
+      dashboardUsagePanels: "{{count}} لوحات",
+      dashboardUsageSavedViews: "{{count}} طرق عرض محفوظة",
+      dashboardUsageHidden: "مخفية",
+      dashboardUsageArchived: "مؤرشفة",
+      dashboardUsageEmpty: "لا توجد لوحات معلومات بعد",
+      dashboardUsageEmptyDescription:
+        "ستظهر لوحات المعلومات التي تُنشأ في هذه المؤسسة هنا مع إشارات الاستخدام والتنظيف.",
+      adminOnlyTitle: "مطلوب وصول مسؤول",
+      adminOnlyDescription:
+        "يمكن لمالكي المؤسسة والمسؤولين فقط فتح أدوات إدارة Analytics.",
+      notTracked: "غير متتبع",
+      visibilityprivate: "خاص",
+      visibilityorg: "مشترك مع المؤسسة",
+      visibilitypublic: "عام",
+    },
+  },
+} satisfies Partial<Record<LocaleCode, AnalyticsPartialMessages>>;
+
+for (const [locale, overrides] of Object.entries(
+  translatedFeatureFlagAdminTranslations,
+) as Array<[LocaleCode, AnalyticsPartialMessages]>) {
+  const messages = messagesByLocale[locale];
+  if (!messages) continue;
+  for (const [section, sectionOverrides] of Object.entries(overrides) as Array<
+    [Section, Partial<Messages[Section]>]
+  >) {
+    Object.assign(messages[section], sectionOverrides);
+  }
+}
+
+for (const [locale, overrides] of Object.entries(
+  translatedDashboardAdminTranslations,
+) as Array<[LocaleCode, AnalyticsPartialMessages]>) {
+  const messages = messagesByLocale[locale];
+  if (!messages) continue;
+
+  for (const [section, sectionOverrides] of Object.entries(overrides) as Array<
+    [Section, Partial<Messages[Section]>]
+  >) {
+    Object.assign(messages[section], sectionOverrides);
+  }
+}
+
+const translatedHistoryTranslations = {
+  "zh-TW": {
+    common: {
+      cancel: "取消",
+      untitledAnalysis: "未命名分析",
+      untitledDashboard: "未命名儀表板",
+    },
+    dashboard: {
+      historyTitle: "儀表板歷史記錄",
+      historyDescription: "還原先前的儀表板狀態。還原前會先保存目前狀態。",
+      historyEmpty: "尚無歷史記錄。下一次編輯後，變更會自動保存在這裡。",
+      historyRestore: "還原",
+      historyRestored: "儀表板已還原",
+      historyRestoreFailed: "無法還原儀表板",
+      historyRestoreQuestion: "要還原此儀表板版本嗎？",
+      historyRestoreWarning:
+        "這會取代目前的儀表板版面，並將目前狀態保存到歷史記錄。",
+    },
+    analyses: {
+      historyTitle: "分析歷史記錄",
+      historyDescription: "還原先前保存的分析狀態。還原前會先保存目前狀態。",
+      historyEmpty: "尚無歷史記錄。下一次重新執行後，變更會自動保存在這裡。",
+      historyRestore: "還原",
+      historyRestored: "分析已還原",
+      historyRestoreFailed: "無法還原分析",
+      historyRestoreQuestion: "要還原此分析版本嗎？",
+      historyRestoreWarning:
+        "這會取代目前保存的發現，並將目前狀態保留在歷史記錄。",
+    },
+  },
+  "zh-CN": {
+    common: {
+      cancel: "取消",
+      untitledAnalysis: "未命名分析",
+      untitledDashboard: "未命名仪表板",
+    },
+    dashboard: {
+      historyTitle: "仪表板历史记录",
+      historyDescription: "还原之前的仪表板状态。还原前会先保存当前状态。",
+      historyEmpty: "还没有历史记录。下一次编辑后，变更会自动保存到这里。",
+      historyRestore: "还原",
+      historyRestored: "仪表板已还原",
+      historyRestoreFailed: "无法还原仪表板",
+      historyRestoreQuestion: "要还原此仪表板版本吗？",
+      historyRestoreWarning:
+        "这会替换当前仪表板布局，并把当前状态保存到历史记录。",
+    },
+    analyses: {
+      historyTitle: "分析历史记录",
+      historyDescription: "还原之前保存的分析状态。还原前会先保存当前状态。",
+      historyEmpty: "还没有历史记录。下一次重新运行后，变更会自动保存到这里。",
+      historyRestore: "还原",
+      historyRestored: "分析已还原",
+      historyRestoreFailed: "无法还原分析",
+      historyRestoreQuestion: "要还原此分析版本吗？",
+      historyRestoreWarning:
+        "这会替换当前保存的发现，并把当前状态保留在历史记录中。",
+    },
+  },
+  "es-ES": {
+    common: {
+      cancel: "Cancelar",
+      untitledAnalysis: "Análisis sin título",
+      untitledDashboard: "Panel sin título",
+    },
+    dashboard: {
+      historyTitle: "Historial del panel",
+      historyDescription:
+        "Restaura un estado anterior del panel. Al restaurar, primero se guarda una instantánea del estado actual.",
+      historyEmpty:
+        "Aún no hay historial. Los cambios se guardarán aquí automáticamente tras la próxima edición.",
+      historyRestore: "Restaurar",
+      historyRestored: "Panel restaurado",
+      historyRestoreFailed: "No se pudo restaurar el panel",
+      historyRestoreQuestion: "¿Restaurar esta versión del panel?",
+      historyRestoreWarning:
+        "Esto reemplaza el diseño actual del panel y guarda el estado actual en el historial.",
+    },
+    analyses: {
+      historyTitle: "Historial del análisis",
+      historyDescription:
+        "Restaura un estado anterior del análisis guardado. Al restaurar, primero se guarda una instantánea del estado actual.",
+      historyEmpty:
+        "Aún no hay historial. Los cambios se guardarán aquí automáticamente tras la próxima nueva ejecución.",
+      historyRestore: "Restaurar",
+      historyRestored: "Análisis restaurado",
+      historyRestoreFailed: "No se pudo restaurar el análisis",
+      historyRestoreQuestion: "¿Restaurar esta versión del análisis?",
+      historyRestoreWarning:
+        "Esto reemplaza los hallazgos guardados actuales y conserva el estado actual en el historial.",
+    },
+  },
+  "fr-FR": {
+    common: {
+      cancel: "Annuler",
+      untitledAnalysis: "Analyse sans titre",
+      untitledDashboard: "Tableau de bord sans titre",
+    },
+    dashboard: {
+      historyTitle: "Historique du tableau de bord",
+      historyDescription:
+        "Restaurez un état précédent du tableau de bord. La restauration enregistre d'abord l'état actuel.",
+      historyEmpty:
+        "Aucun historique pour l'instant. Les changements seront enregistrés ici automatiquement après la prochaine modification.",
+      historyRestore: "Restaurer",
+      historyRestored: "Tableau de bord restauré",
+      historyRestoreFailed: "Impossible de restaurer le tableau de bord",
+      historyRestoreQuestion: "Restaurer cette version du tableau de bord ?",
+      historyRestoreWarning:
+        "Cela remplace la mise en page actuelle du tableau de bord et enregistre l'état actuel dans l'historique.",
+    },
+    analyses: {
+      historyTitle: "Historique de l'analyse",
+      historyDescription:
+        "Restaurez un état précédent de l'analyse enregistrée. La restauration enregistre d'abord l'état actuel.",
+      historyEmpty:
+        "Aucun historique pour l'instant. Les changements seront enregistrés ici automatiquement après la prochaine réexécution.",
+      historyRestore: "Restaurer",
+      historyRestored: "Analyse restaurée",
+      historyRestoreFailed: "Impossible de restaurer l'analyse",
+      historyRestoreQuestion: "Restaurer cette version de l'analyse ?",
+      historyRestoreWarning:
+        "Cela remplace les résultats enregistrés actuels et conserve l'état actuel dans l'historique.",
+    },
+  },
+  "de-DE": {
+    common: {
+      cancel: "Abbrechen",
+      untitledAnalysis: "Unbenannte Analyse",
+      untitledDashboard: "Unbenanntes Dashboard",
+    },
+    dashboard: {
+      historyTitle: "Dashboard-Verlauf",
+      historyDescription:
+        "Stelle einen früheren Dashboard-Stand wieder her. Vor der Wiederherstellung wird der aktuelle Stand gespeichert.",
+      historyEmpty:
+        "Noch kein Verlauf. Änderungen werden nach der nächsten Bearbeitung automatisch hier gespeichert.",
+      historyRestore: "Wiederherstellen",
+      historyRestored: "Dashboard wiederhergestellt",
+      historyRestoreFailed: "Dashboard konnte nicht wiederhergestellt werden",
+      historyRestoreQuestion: "Diese Dashboard-Version wiederherstellen?",
+      historyRestoreWarning:
+        "Dies ersetzt das aktuelle Dashboard-Layout und speichert den aktuellen Stand im Verlauf.",
+    },
+    analyses: {
+      historyTitle: "Analyseverlauf",
+      historyDescription:
+        "Stelle einen früheren Stand der gespeicherten Analyse wieder her. Vor der Wiederherstellung wird der aktuelle Stand gespeichert.",
+      historyEmpty:
+        "Noch kein Verlauf. Änderungen werden nach der nächsten erneuten Ausführung automatisch hier gespeichert.",
+      historyRestore: "Wiederherstellen",
+      historyRestored: "Analyse wiederhergestellt",
+      historyRestoreFailed: "Analyse konnte nicht wiederhergestellt werden",
+      historyRestoreQuestion: "Diese Analyseversion wiederherstellen?",
+      historyRestoreWarning:
+        "Dies ersetzt die aktuell gespeicherten Erkenntnisse und behält den aktuellen Stand im Verlauf.",
+    },
+  },
+  "ja-JP": {
+    common: {
+      cancel: "キャンセル",
+      untitledAnalysis: "無題の分析",
+      untitledDashboard: "無題のダッシュボード",
+    },
+    dashboard: {
+      historyTitle: "ダッシュボード履歴",
+      historyDescription:
+        "以前のダッシュボード状態を復元します。復元前に現在の状態を履歴に保存します。",
+      historyEmpty:
+        "まだ履歴はありません。次回の編集後、変更はここに自動保存されます。",
+      historyRestore: "復元",
+      historyRestored: "ダッシュボードを復元しました",
+      historyRestoreFailed: "ダッシュボードを復元できませんでした",
+      historyRestoreQuestion: "このダッシュボード版を復元しますか？",
+      historyRestoreWarning:
+        "現在のダッシュボードレイアウトを置き換え、現在の状態を履歴に保存します。",
+    },
+    analyses: {
+      historyTitle: "分析履歴",
+      historyDescription:
+        "以前の保存済み分析状態を復元します。復元前に現在の状態を履歴に保存します。",
+      historyEmpty:
+        "まだ履歴はありません。次回の再実行後、変更はここに自動保存されます。",
+      historyRestore: "復元",
+      historyRestored: "分析を復元しました",
+      historyRestoreFailed: "分析を復元できませんでした",
+      historyRestoreQuestion: "この分析版を復元しますか？",
+      historyRestoreWarning:
+        "現在保存されている結果を置き換え、現在の状態を履歴に保持します。",
+    },
+  },
+  "ko-KR": {
+    common: {
+      cancel: "취소",
+      untitledAnalysis: "제목 없는 분석",
+      untitledDashboard: "제목 없는 대시보드",
+    },
+    dashboard: {
+      historyTitle: "대시보드 기록",
+      historyDescription:
+        "이전 대시보드 상태를 복원합니다. 복원하기 전에 현재 상태를 먼저 기록에 저장합니다.",
+      historyEmpty:
+        "아직 기록이 없습니다. 다음 편집 후 변경 사항이 여기에 자동으로 저장됩니다.",
+      historyRestore: "복원",
+      historyRestored: "대시보드가 복원되었습니다",
+      historyRestoreFailed: "대시보드를 복원할 수 없습니다",
+      historyRestoreQuestion: "이 대시보드 버전을 복원할까요?",
+      historyRestoreWarning:
+        "현재 대시보드 레이아웃을 대체하고 현재 상태를 기록에 저장합니다.",
+    },
+    analyses: {
+      historyTitle: "분석 기록",
+      historyDescription:
+        "이전 저장된 분석 상태를 복원합니다. 복원하기 전에 현재 상태를 먼저 기록에 저장합니다.",
+      historyEmpty:
+        "아직 기록이 없습니다. 다음 재실행 후 변경 사항이 여기에 자동으로 저장됩니다.",
+      historyRestore: "복원",
+      historyRestored: "분석이 복원되었습니다",
+      historyRestoreFailed: "분석을 복원할 수 없습니다",
+      historyRestoreQuestion: "이 분석 버전을 복원할까요?",
+      historyRestoreWarning:
+        "현재 저장된 결과를 대체하고 현재 상태를 기록에 보관합니다.",
+    },
+  },
+  "pt-BR": {
+    common: {
+      cancel: "Cancelar",
+      untitledAnalysis: "Análise sem título",
+      untitledDashboard: "Painel sem título",
+    },
+    dashboard: {
+      historyTitle: "Histórico do painel",
+      historyDescription:
+        "Restaure um estado anterior do painel. A restauração salva primeiro um snapshot do estado atual.",
+      historyEmpty:
+        "Ainda não há histórico. As alterações serão salvas aqui automaticamente após a próxima edição.",
+      historyRestore: "Restaurar",
+      historyRestored: "Painel restaurado",
+      historyRestoreFailed: "Não foi possível restaurar o painel",
+      historyRestoreQuestion: "Restaurar esta versão do painel?",
+      historyRestoreWarning:
+        "Isso substitui o layout atual do painel e salva o estado atual no histórico.",
+    },
+    analyses: {
+      historyTitle: "Histórico da análise",
+      historyDescription:
+        "Restaure um estado anterior da análise salva. A restauração salva primeiro um snapshot do estado atual.",
+      historyEmpty:
+        "Ainda não há histórico. As alterações serão salvas aqui automaticamente após a próxima nova execução.",
+      historyRestore: "Restaurar",
+      historyRestored: "Análise restaurada",
+      historyRestoreFailed: "Não foi possível restaurar a análise",
+      historyRestoreQuestion: "Restaurar esta versão da análise?",
+      historyRestoreWarning:
+        "Isso substitui as descobertas salvas atuais e mantém o estado atual no histórico.",
+    },
+  },
+  "hi-IN": {
+    common: {
+      cancel: "रद्द करें",
+      untitledAnalysis: "बिना शीर्षक वाला विश्लेषण",
+      untitledDashboard: "बिना शीर्षक वाला डैशबोर्ड",
+    },
+    dashboard: {
+      historyTitle: "डैशबोर्ड इतिहास",
+      historyDescription:
+        "पिछली डैशबोर्ड स्थिति को पुनर्स्थापित करें। पुनर्स्थापना से पहले वर्तमान स्थिति का snapshot सहेजा जाता है।",
+      historyEmpty:
+        "अभी कोई इतिहास नहीं है। अगले edit के बाद बदलाव यहाँ अपने-आप सहेजे जाएँगे।",
+      historyRestore: "पुनर्स्थापित करें",
+      historyRestored: "डैशबोर्ड पुनर्स्थापित हुआ",
+      historyRestoreFailed: "डैशबोर्ड पुनर्स्थापित नहीं किया जा सका",
+      historyRestoreQuestion: "इस डैशबोर्ड संस्करण को पुनर्स्थापित करें?",
+      historyRestoreWarning:
+        "यह वर्तमान डैशबोर्ड layout को बदल देगा और वर्तमान स्थिति को इतिहास में सहेजेगा।",
+    },
+    analyses: {
+      historyTitle: "विश्लेषण इतिहास",
+      historyDescription:
+        "पिछली सहेजी गई विश्लेषण स्थिति को पुनर्स्थापित करें। पुनर्स्थापना से पहले वर्तमान स्थिति का snapshot सहेजा जाता है।",
+      historyEmpty:
+        "अभी कोई इतिहास नहीं है। अगली re-run के बाद बदलाव यहाँ अपने-आप सहेजे जाएँगे।",
+      historyRestore: "पुनर्स्थापित करें",
+      historyRestored: "विश्लेषण पुनर्स्थापित हुआ",
+      historyRestoreFailed: "विश्लेषण पुनर्स्थापित नहीं किया जा सका",
+      historyRestoreQuestion: "इस विश्लेषण संस्करण को पुनर्स्थापित करें?",
+      historyRestoreWarning:
+        "यह वर्तमान सहेजे गए findings को बदल देगा और वर्तमान स्थिति को इतिहास में रखेगा।",
+    },
+  },
+  "ar-SA": {
+    common: {
+      cancel: "إلغاء",
+      untitledAnalysis: "تحليل بلا عنوان",
+      untitledDashboard: "لوحة معلومات بلا عنوان",
+    },
+    dashboard: {
+      historyTitle: "سجل لوحة المعلومات",
+      historyDescription:
+        "استعد حالة سابقة للوحة المعلومات. تحفظ الاستعادة لقطة من الحالة الحالية أولاً.",
+      historyEmpty:
+        "لا يوجد سجل بعد. ستُحفظ التغييرات هنا تلقائياً بعد التعديل التالي.",
+      historyRestore: "استعادة",
+      historyRestored: "تمت استعادة لوحة المعلومات",
+      historyRestoreFailed: "تعذرت استعادة لوحة المعلومات",
+      historyRestoreQuestion: "هل تريد استعادة هذا الإصدار من لوحة المعلومات؟",
+      historyRestoreWarning:
+        "سيستبدل هذا تخطيط لوحة المعلومات الحالي ويحفظ الحالة الحالية في السجل.",
+    },
+    analyses: {
+      historyTitle: "سجل التحليل",
+      historyDescription:
+        "استعد حالة سابقة للتحليل المحفوظ. تحفظ الاستعادة لقطة من الحالة الحالية أولاً.",
+      historyEmpty:
+        "لا يوجد سجل بعد. ستُحفظ التغييرات هنا تلقائياً بعد إعادة التشغيل التالية.",
+      historyRestore: "استعادة",
+      historyRestored: "تمت استعادة التحليل",
+      historyRestoreFailed: "تعذرت استعادة التحليل",
+      historyRestoreQuestion: "هل تريد استعادة هذا الإصدار من التحليل؟",
+      historyRestoreWarning:
+        "سيستبدل هذا النتائج المحفوظة الحالية ويحتفظ بالحالة الحالية في السجل.",
+    },
+  },
+} satisfies Partial<Record<LocaleCode, AnalyticsPartialMessages>>;
+
+for (const [locale, overrides] of Object.entries(
+  translatedHistoryTranslations,
 ) as Array<[LocaleCode, AnalyticsPartialMessages]>) {
   const messages = messagesByLocale[locale];
   if (!messages) continue;

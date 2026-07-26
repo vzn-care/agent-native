@@ -1,4 +1,7 @@
+import { creativeContextMessagesByLocale } from "@agent-native/creative-context/messages";
+
 const messages = {
+  creativeContext: creativeContextMessagesByLocale["ja-JP"],
   root: {
     commandPresentations: "プレゼンテーション",
     searchDecks: "デッキを検索",
@@ -34,10 +37,10 @@ const messages = {
       "チームメンバー、組織アクセス、共有ワークスペース設定を管理します。",
     openTeamSettings: "チーム設定を開く",
     openResourceSettings: "リソース設定を開く",
-    agentTitle: "エージェント設定",
+    agentTitle: "エージェントを管理",
     agentDescription:
-      "右サイドバーのエージェント設定を開き、モデル、API キー、自動化、音声などを管理します。",
-    openAgentSettings: "エージェント設定を開く",
+      "エージェントのモデル、API キー、自動化、音声などを管理します。",
+    openAgentSettings: "エージェントを管理",
   },
   agent: {
     emptyState: "プレゼンテーションについて何でも聞いてください",
@@ -92,6 +95,8 @@ const messages = {
     googlePickerNeedsKeys:
       "Google PickerにはGOOGLE_PICKER_API_KEYとGOOGLE_PICKER_APP_IDが必要です。",
     imageUploadFailed: "画像のアップロードに失敗しました",
+    imageUploadNeedsBuilder:
+      "スライドに画像をアップロードするには、エージェント作成欄のモデルメニューから Builder.io に接続してください。空のキャンバスに画像をドロップすると、プロバイダーなしでもエージェントに送信できます。",
     sentToAgent: "エージェントに送信しました",
     imageUploadGenericError: "この画像のアップロード中に問題が発生しました。",
     uploading: "アップロード中…",
@@ -102,6 +107,7 @@ const messages = {
     searchImagesPlaceholder: "画像を検索...",
     searchForLogosImagesIcons: "ロゴ、画像、アイコンを検索...",
     search: "検索",
+    searchFailed: "検索に失敗しました",
     logoSearchTitle: "ロゴ検索",
     searchCompanyLogo: "会社を検索してロゴを見つける",
     searchCompanyPlaceholder: "会社名を検索（例: Intuit）",
@@ -115,6 +121,7 @@ const messages = {
     uploadAttachedFailed: "添付ファイルをアップロードできませんでした。",
     uploadFailed: "アップロード失敗",
     doubleClickEdit: "テキストをダブルクリックして編集",
+    dragToMove: "ドラッグして移動",
     aiEditing: "AIが編集中",
     startTypingCommands: "入力を開始…または / でコマンド",
     pinDropHint: "任意の場所をクリックしてコメントピンを追加",
@@ -204,6 +211,7 @@ const messages = {
     elementAnimations: "要素アニメーション",
     tweaks: "調整",
     drawOnSlide: "スライドに描画",
+    addTextBox: "テキストボックスを追加",
     pinComments: "コメントをピン留め",
     pinCommentsDescription:
       "スライド上の位置をクリックして複数の編集をキューに入れ、まとめて送信します。",
@@ -329,6 +337,8 @@ const messages = {
     hideResolved: "解決済みを非表示",
     showResolved: "{{count}} 件の解決済みを表示",
     noCommentsYet: "まだコメントはありません",
+    loadFailed: "コメントを読み込めませんでした",
+    retry: "再試行",
     clickToAddComment: "クリックしてコメントを追加",
     selectSlideToAdd: "追加するにはスライドを選択してください",
   },
@@ -471,6 +481,8 @@ const messages = {
     backToDecks: "返回幻灯片",
     tryAgain: "重试",
     imageUploadFailed: "图片上传失败",
+    imageUploadNeedsBuilder:
+      "スライドに画像をアップロードするには、エージェント作成欄のモデルメニューから Builder.io に接続してください。空のキャンバスに画像をドロップすると、プロバイダーなしでもエージェントに送信できます。",
     imageAdded: "图片已添加",
     imageUploadError: "上传此图片时出了点问题。",
     exportFailed: "导出失败",
@@ -537,6 +549,10 @@ const messages = {
     chooseAnotherFile: "別のファイルを選択",
   },
   home: {
+    loadFailed: "コンテンツを読み込めませんでした",
+    loadFailedDescription:
+      "保存済みのコンテンツはそのままです。接続を確認して再試行してください。",
+    retry: "再試行",
     decksTitle: "デッキ",
     newDeck: "新しいデッキ",
     deckLengthQuestion: "このデッキの長さはどれくらいにしますか？",

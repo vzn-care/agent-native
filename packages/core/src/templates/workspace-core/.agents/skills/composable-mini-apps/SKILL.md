@@ -33,7 +33,20 @@ The main agent should discover available siblings before assuming capability:
 
 - Runtime agents receive an `<available-apps>` block built from
   `discoverAgents()`. Workspace siblings are layered in by
-  `discoverWorkspaceAgents()`.
+  `discoverWorkspaceAgents()`. It carries one line per app — enough to know a
+  sibling exists, not enough to know what it can do.
+- Use the built-in `describe-workspace-apps` tool for actual capability.
+  It reads each peer's live `/.well-known/agent-card.json` and returns their
+  callable action names; pass `app: "<id>"` for one peer's full list with
+  descriptions. Call it before building something a sibling may already own,
+  before telling a user what is or is not possible across apps, and whenever
+  someone asks which app to use for a job.
+- Never hand-maintain a markdown or code list of what each workspace app does.
+  A stale catalog is worse than none: it reads as authoritative while pointing
+  at capabilities that moved or vanished. An app's purpose belongs in its own
+  `package.json` `description` (which flows into the workspace manifest and the
+  `<available-apps>` block), and its capabilities belong in its exposed
+  actions — both of which `describe-workspace-apps` reads live.
 - UI shells, headless surfaces, and scripts can read the same registry through
   `GET /_agent-native/agents?selfAppId=<app-id>`.
 - Code or CLI callers should use the first-class A2A invocation path
@@ -42,6 +55,11 @@ The main agent should discover available siblings before assuming capability:
 - In the agent loop, use `call-agent` with the sibling app id when another app
   owns the work or data. Never call the current app through `call-agent`; use
   local actions instead.
+- When the exact sibling-owned read action and input are already known, use
+  `invokeAgentAction()` or `call-agent` with `action` + `input`. This preserves
+  the receiver's credentials and access checks while skipping its second model
+  loop. Use prompt-based `invokeAgent()` only when the sibling must reason,
+  synthesize, mutate, or perform a multi-step workflow.
 
 Send narrow prompts to siblings: name the exact question, relevant ids, date
 ranges, and expected output shape. Preserve returned ids and URLs verbatim.
