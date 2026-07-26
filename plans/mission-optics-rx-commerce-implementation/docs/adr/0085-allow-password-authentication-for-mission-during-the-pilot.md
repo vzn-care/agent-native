@@ -1,0 +1,3 @@
+# Allow Password Authentication for Mission During the Pilot
+
+Mission workforce authentication targets verified Google Workspace SSO with an approved-domain allowlist. During the HyperLight pilot, Mission users may instead use individually assigned, verified email-and-password Better Auth accounts with mandatory MFA; shared accounts and fallback identities remain prohibited. Merchant staff use separate verified Better Auth identities and required MFA. Removing a user's role assignment revokes future access without changing historical attribution. Password access is an explicit pilot exception and not the intended general-availability workforce policy.

@@ -1,0 +1,3 @@
+# Support Four Prescription Intake Methods
+
+The Shopify pilot launches with prescription-document upload, manual entry followed by independent Prescription Verification, and secure submission after payment. The canonical architecture also supports subject-authorized reuse of an existing verified Mission Prescription Record. Saved-record reuse is enabled during the pilot when eligible records exist but does not block launch. Every method creates or references the same governed Prescription Record model and remains subject to authorization, validity, verification, revision, and Optical Approval rules.

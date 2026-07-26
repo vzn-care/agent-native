@@ -1,0 +1,3 @@
+# Sign Currency and Component Prices in Cart Authorization
+
+Every Cart Authorization signs the checkout currency and each allowed commercial component's identifier, quantity, and locked gross unit amount in addition to the store, pair, configuration and catalog revisions, key ID, and expiry. The local commerce validation surface compares those signed values with the bound cart lines before discounts, tax, and shipping and fails closed on any mismatch. This preserves quote price protection during a Mission outage and prevents a merchant catalog edit from silently changing the amount charged for an unexpired Rx Quote.

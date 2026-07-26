@@ -1,0 +1,3 @@
+# Separate Production Exception Approval From Optical Approval
+
+Production Exception Approval does not satisfy or replace Optical Approval. A qualified and configured person may hold both Rx Exception Manager and Optical Reviewer roles, but must perform and record the operational exception and optical determination as separate actions with separate Approval Bases. A customer-service manager without Optical Reviewer authority may approve an operational exception within Verified Production Capability but cannot approve the prescription or manufacturing interpretation. Production Release remains the responsibility of the separate Release Operator.

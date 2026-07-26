@@ -1,0 +1,3 @@
+# Start the Production SLA at Production Commitment
+
+Checkout presents a conditional Customer Delivery Estimate divided into the time to complete prescription and approval requirements and the expected production and shipping period. The Production SLA Clock begins only at Production Commitment after optical, financial, frame, and release requirements are satisfied, not on the purchase date. Customer-action, financial, inventory, address, exception, or quality holds suspend or recalculate the applicable estimate. Lab estimates arrive through the Lab Adapter and are converted into a customer-safe range. Merchants may configure approved wording and conservative buffers but cannot alter authoritative milestone timestamps.

@@ -1,0 +1,3 @@
+# Build vznrx on Agent Native
+
+`vzn-care/vznrx` uses Agent Native as its application foundation in a TypeScript monorepo. SQL through Drizzle stores governed application state, and shared actions are the canonical operation surface for the hosted configurator, merchant administration, Rx operations, Manual Pilot Queue, and agent workflows. Shopify extensions and checkout-validation functions live in dedicated packages in the same repository. Custom server routes are limited to integration boundaries that require them, including Shopify OAuth, signed embed sessions, protected uploads, and raw webhook verification. Protected document bytes live in encrypted object storage with authorization and metadata in SQL.

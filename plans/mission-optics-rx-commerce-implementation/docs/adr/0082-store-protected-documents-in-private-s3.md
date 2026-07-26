@@ -1,0 +1,3 @@
+# Store Protected Documents in Private S3
+
+VZNRX stores prescription documents and other protected file bytes in a dedicated private Amazon S3 production bucket under an executed AWS BAA. Public access is blocked; access uses short-lived signed URLs; objects use server-side encryption with a dedicated KMS key; uploads remain quarantined until malware scanning succeeds; and versioning, access logging, retention, backup, and governed deletion policies apply. Neon stores only opaque object references and authorization metadata. Protected files never enter Vercel build artifacts, logs, analytics, caches, or public delivery paths. Development and ordinary staging use synthetic files in separate accounts and buckets.

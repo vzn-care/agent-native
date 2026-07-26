@@ -1,0 +1,3 @@
+# Limit the Pilot to One United States Market
+
+The first production pilot supports one United States market, USD pricing, and domestic fulfillment only. The canonical model still records jurisdiction, market, currency, tax allocations, prescribing-provider location, Prescription Subject location, and fulfillment destination so geographic expansion does not require restructuring the core. International currencies, cross-border fulfillment, translated regulated content, and country-specific prescription rules remain disabled until each combination becomes an Approved Market through legal, optical, tax, privacy, content, and operational review.

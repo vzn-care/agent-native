@@ -1,0 +1,3 @@
+# Manage Delivery Through Linear Milestones and Dependencies
+
+Mission manages HyperLight implementation in a Linear project rather than a day-number roadmap. Outcomes become ordered milestones, workstream deliverables become issues or sub-issues, and blocking relationships are explicit dependencies. Every launch-relevant issue records an owner or owning role, acceptance criteria, required evidence, risk or safety labels, and the milestone it unblocks. Calendar dates, cycles, and estimates may be added after assignees and capacity are known, but dates never replace dependency or exit-gate completion as the basis for advancement.

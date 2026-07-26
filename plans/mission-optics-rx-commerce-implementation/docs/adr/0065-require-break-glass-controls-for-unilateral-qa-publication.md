@@ -1,0 +1,3 @@
+# Require Break-Glass Controls for Unilateral QA Publication
+
+A Mission System Administrator uses an Administrative Break-Glass Publication to change a Quality Policy or Critical QA Limit without secondary approval. The flow requires fresh step-up authentication, a stated reason and supporting evidence, and a preview of the policy difference and affected cases before publication. Publication remains immediate and cannot be blocked by another approver. The system records an immutable audit event and immediately notifies the Mission Optical or Clinical Lead, Lab or Quality Lead, and security contact after the change.

@@ -1,0 +1,3 @@
+# Set Pilot Recovery Objectives and Test Restores
+
+The HyperLight pilot targets a database recovery point of no more than 15 minutes and restoration of critical configuration, prescription-case, order, and fulfillment operations within four hours. Protected S3 objects use versioning and governed retention so application errors do not immediately destroy the last recoverable copy. Mission completes a database-and-document recovery rehearsal before launch and repeats it quarterly and after material infrastructure changes. A restored environment reconciles against Shopify, the Manual Pilot Queue, and immutable audit and event records before production reopens. Recovery credentials and procedures remain available outside the failed production environment.

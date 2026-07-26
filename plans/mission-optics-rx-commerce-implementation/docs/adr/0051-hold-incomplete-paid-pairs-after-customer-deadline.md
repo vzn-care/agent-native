@@ -1,0 +1,3 @@
+# Hold Incomplete Paid Pairs After the Customer Action Deadline
+
+Mission sends configurable reminders before a paid pair's Customer Action Deadline. If required prescription information, measurements, approvals, or corrections remain incomplete at expiration, the pair enters an Expired Customer Action Hold and its delivery estimate is suspended. Mission sends customer-safe notices to the customer and merchant, but does not automatically cancel the paid order by default. The merchant must explicitly extend the deadline, approve a compatible substitution or backorder treatment, or cancel and refund through the order-owning commerce channel. A later auto-cancellation option may be configurable only within Mission-defined limits.

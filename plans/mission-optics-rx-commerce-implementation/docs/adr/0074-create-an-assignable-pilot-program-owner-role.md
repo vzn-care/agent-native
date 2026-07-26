@@ -1,0 +1,3 @@
+# Create an Assignable Pilot Program Owner Role
+
+Mission creates a Pilot Program Owner role and leaves the initial HyperLight assignment TBA. The role is the single accountable coordinator for product, engineering, optical review, lab operations, customer service, merchant readiness, launch evidence, and go-live decision preparation. It is assigned through role configuration rather than hard-coded to a person. The role does not automatically grant protected prescription access, Optical Approval, Production Exception Approval, Production Release, QA exception, System Administrator, or other separately governed authority.

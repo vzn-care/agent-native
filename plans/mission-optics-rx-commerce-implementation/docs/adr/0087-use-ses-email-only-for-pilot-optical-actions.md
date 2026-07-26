@@ -1,0 +1,3 @@
+# Use SES Email Only for Pilot Optical Actions
+
+The HyperLight pilot sends merchant-branded Optical Action Requests through Amazon SES in the AWS account covered by Mission's BAA. Messages contain no prescription values, measurements, documents, or detailed clinical reasons; they include only customer-safe status, the requested action, transparent Mission fulfillment identification, and a short-lived signed link to the secure Mission experience. Delivery, bounce, complaint, and suppression events are monitored and reconciled. SMS remains disabled until Mission approves a BAA-covered provider, consent and opt-out model, content policy, and operational support.

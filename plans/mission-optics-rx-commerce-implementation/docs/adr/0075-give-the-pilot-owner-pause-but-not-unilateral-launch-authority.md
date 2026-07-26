@@ -1,0 +1,3 @@
+# Give the Pilot Owner Pause but Not Unilateral Launch Authority
+
+The Pilot Program Owner may view all nonclinical pilot readiness, commerce, inventory, fulfillment, support, and incident status; assign and escalate work; coordinate the go-live record; and immediately pause new HyperLight Rx configurations when risk is identified. The role cannot unilaterally activate or resume production selling: the required product, optical, engineering, lab, merchant, security or privacy, and support approvals must be current. The role receives no prescription values, Optical Approval, Production Exception Approval, Production Release, or other protected authority unless the assignee separately holds the required role.

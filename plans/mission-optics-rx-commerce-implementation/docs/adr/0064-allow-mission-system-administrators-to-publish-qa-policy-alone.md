@@ -1,0 +1,3 @@
+# Allow Mission System Administrators to Publish QA Policy Alone
+
+Ordinary changes to Mission's Quality Policy and Critical QA Limits require approval from both a Mission Optical or Clinical Lead and a Mission Lab or Quality Lead, with supporting standards, validation evidence, measurement methods, rationale, and effective date. A narrowly assigned Mission System Administrator may publish any such change without secondary approval. The administrative path still creates a new immutable policy version, attributes the actor and rationale, preserves prior history, and follows the same effective-date and case-re-evaluation rules. Merchant administrators, lab managers, and other roles never inherit this authority.

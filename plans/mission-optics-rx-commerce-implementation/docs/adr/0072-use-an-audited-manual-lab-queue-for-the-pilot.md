@@ -1,0 +1,3 @@
+# Use an Audited Manual Lab Queue for the Pilot
+
+HyperLight's Production Instruction Packages enter a Mission-operated Manual Pilot Queue rather than a direct lab API. Authorized operators explicitly record package acceptance or rejection, revocation, Production Commitment, production status, QA, shipment, and remake events. The queue enforces the same immutable package digest, idempotency, acknowledgment, timestamps, role separation, reconciliation, and audit contract as an automated Lab Adapter. It is a supported pilot transport, not an email, spreadsheet, or undocumented portal handoff, and can later be replaced without changing the canonical fulfillment model.

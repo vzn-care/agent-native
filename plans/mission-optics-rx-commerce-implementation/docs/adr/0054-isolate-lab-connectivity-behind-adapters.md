@@ -1,0 +1,3 @@
+# Isolate Lab Connectivity Behind Lab Adapters
+
+Mission defines one provider-neutral Lab Adapter contract for Production Instruction Package submission, acceptance or rejection, revocation, Production Commitment, status, QA, shipment, and remake events. Provider-specific APIs, SFTP or file exchanges, and audited manual portal workflows implement that contract without leaking lab job IDs, status vocabularies, or file formats into the canonical Rx and fulfillment core. The pilot may use a manual adapter, but every transport must enforce the same package digest, idempotency, explicit acknowledgment, reconciliation, and audit requirements.

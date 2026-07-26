@@ -1,0 +1,3 @@
+# Refund Lower-Price Differences Through the Commerce Channel
+
+When prescription verification produces a lower-priced approved configuration, the purchaser first accepts the revision and Mission creates a pair-specific Financial Adjustment Request. The order-owning commerce channel executes a partial refund to the original payment method by default and authoritatively recalculates tax, discount, and payment allocations. Store credit may be offered only as an explicit purchaser choice under an approved merchant policy. Mission records the authoritative adjustment result before Financial Clearance and Production Release, and the merchant may not silently retain the difference.

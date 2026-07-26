@@ -1,0 +1,3 @@
+# Separate Return Authorization From Physical Recovery
+
+The order-owning commerce platform controls return authorization and financial refunds. Mission receives or inspects returns involving optical quality, defects, remakes, warranties, or production investigations. Prescription lenses are never reused or returned to sellable inventory. A returned Frame Unit may re-enter usable inventory only through Frame Recovery: lens removal, identity-safe handling, documented inspection, disposition approval, and preserved unit history under Mission policy. Otherwise Mission quarantines, returns, or responsibly disposes of the frame according to the recorded reason. Physical receipt alone never creates a refund, remake, Replacement Credit, or other financial effect.

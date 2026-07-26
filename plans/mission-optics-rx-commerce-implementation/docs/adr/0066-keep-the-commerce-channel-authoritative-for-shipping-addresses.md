@@ -1,0 +1,3 @@
+# Keep the Commerce Channel Authoritative for Shipping Addresses
+
+The order-owning commerce platform remains authoritative for a Mission-fulfilled pair's shipping address. Mission records a Fulfillment Destination Snapshot at authoritative order acceptance and re-fetches it before purchasing the label. Customer changes normally occur through the merchant's commerce workflow. A post-Production Release address change places shipment on hold until Mission validates the authoritative update. If the platform cannot update the address, Mission may make an audited manual correction only after verifying customer identity and recording merchant authorization. Protected prescription information never enters commerce address or fulfillment fields.

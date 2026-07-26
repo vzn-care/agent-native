@@ -1,0 +1,3 @@
+# Collect the Full Selected Price Before Prescription Approval
+
+HyperLight uses Conditional Full Payment rather than a deposit when a shopper checks out before providing an approved prescription. The commerce channel collects the full quoted frame and selected lens-package price while clearly stating that production remains conditional on prescription verification. If the verified prescription fits the paid package, no financial change occurs. A required higher-priced package uses a Change Proposal; a lower-priced or unsupported outcome uses a Financial Adjustment Request for the order-owning channel. Mission does not create a second platform-specific deposit-collection workflow.

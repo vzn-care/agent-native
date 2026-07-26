@@ -1,0 +1,3 @@
+# Fund New Commerce Adapters With Signed Demand
+
+Mission starts a second production Commerce Adapter only after meeting the Adapter Investment Gate: three committed design partners on the same platform or one anchor merchant funding development and first-year support. Platform selection also weighs qualified demand, GMV, geography, implementation uniformity, enforceable capabilities, and support burden. Calendar timing or global platform popularity alone does not justify an adapter. Until the gate is met, unsupported channels may use demonstrations, a non-transactional Hosted Configurator, or a Mission-owned checkout where appropriate, but never a weak native integration that cannot enforce cart and order integrity.

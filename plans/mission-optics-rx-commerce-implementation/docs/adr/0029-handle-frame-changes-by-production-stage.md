@@ -1,0 +1,3 @@
+# Handle Frame Changes by Production Stage
+
+Before payment, a compatible Configuration Rebase is immediate. After payment but before Production Commitment, a purchaser-initiated change within the same Frame Style may rebase directly after validation, re-quoting, commerce synchronization, and renewed approvals, while a different Frame Style uses a Change Proposal. After Production Commitment, the original attempt remains unchanged and no return is required; the customer receives one pair-bound Replacement Credit toward a new Commercial Order, Rx Configuration, and Fulfillment Case, paying only any amount above the credit.

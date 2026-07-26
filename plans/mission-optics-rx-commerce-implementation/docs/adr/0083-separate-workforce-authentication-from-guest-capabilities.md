@@ -1,0 +1,3 @@
+# Separate Workforce Authentication From Guest Capabilities
+
+Mission and merchant workforce users authenticate through Agent Native's Better Auth integration and framework-managed organizations. Anonymous shoppers begin with a short-lived Guest Capability derived from a verified, store-bound HyperLight embed context and limited to one configuration and its protected upload operations. A shopper creates or signs into a Mission Account only to claim ongoing subject access, reuse a saved prescription, or manage records. Guest records join a verified account only through an explicit Subject Claim. VZNRX never pools unauthenticated requests under a shared fallback user, and Merchant Organization membership never establishes Prescription Subject authorization.
