@@ -2,33 +2,34 @@
 # Visual plan: open https://plan.agent-native.com/plans/plan-ce8922fe0a074041 in a browser for the canvas and review UI.
 visualUrl: "https://plan.agent-native.com/plans/plan-ce8922fe0a074041"
 title: "Mission Optics Rx Commerce Platform — Shopify-First Implementation Plan"
-brief: "Build one Mission-owned Rx configuration, quoting, prescription, and fulfillment platform; ship Shopify as the first thin commerce adapter; prove financial, optical, and operational integrity through a dependency-gated HyperLight pilot."
-version: 1
+brief: "Build one Mission-owned Rx commerce and prescription layer that releases pair-level work into the OMS fulfillment engine; ship Shopify as the first thin commerce adapter; prove financial, optical, and operational integrity through a dependency-gated HyperLight pilot."
+version: 2
 ---
 
 # Mission Optics Rx Commerce Platform — Shopify-First Implementation Plan
 
 ## Objective
 
-A shopper on a sunglass brand’s product page selects **Add prescription lenses**, completes a Mission-hosted lens configuration, and checks out through the brand’s existing Shopify cart. Shopify remains authoritative for payment, tax, discounts, refunds, and the commercial order. Mission remains authoritative for optical eligibility, prescription records, lens pricing logic, manufacturing instructions, lab release, remakes, and fulfillment.
+A shopper on a sunglass brand’s product page selects **Add prescription lenses**, completes a Mission-hosted lens configuration, and checks out through the brand’s existing Shopify cart. Shopify remains authoritative for payment, tax, discounts, refunds, and the consumer commercial order. VZN Rx owns optical eligibility, prescription records, pair configuration, the signed shopper-facing cart commitment, and the pre-production release/quarantine decision. OMS owns the canonical operational order, immutable submit/build snapshot, jobs, fulfillment units, routing, production, QA, remakes, shipments, and lab release after that gate.
 
 The first release must prove this complete journey with one pilot brand and a bounded catalog while establishing reusable contracts for future WooCommerce, BigCommerce, Commerce Layer, and headless adapters.
 
 <Callout id="architecture-decision" tone="decision">
 
-**Committed architecture:** build the Mission Rx service first and Shopify as
-an adapter. Core Rx types must contain no Shopify-specific identifiers.
-Prescription values and documents never enter commerce metadata, storefront
-analytics, or ordinary logs.
+**Committed architecture:** Shopify/Rx commerce → OMS fulfillment engine →
+lab/Prizma systems. Build VZN Rx and OMS as cooperating bounded contexts, with
+Shopify and labs behind adapters. Core Rx and OMS types contain no
+provider-specific identifiers. Prescription values and documents never enter
+commerce metadata, OMS envelopes, storefront analytics, or ordinary logs.
 
 </Callout>
 
 ## Target architecture
 
-<Diagram id="architecture-diagram" caption={"The commerce platform owns the transaction; Mission owns the optical case and fulfillment decision."} frame="show">
+<Diagram id="architecture-diagram" caption="Shopify owns the consumer transaction, VZN Rx owns optical authorization and release, and OMS owns production fulfillment." frame="show">
 
 ```html
-<div class="diagram-panel architecture" data-rough><section class="diagram-card"><div class="diagram-pill">Brand storefront</div><div class="diagram-node">Shopify product page</div><div class="diagram-node">Mission Rx card launcher</div><div class="diagram-muted">Theme app extension and native cart</div></section><section class="diagram-card mission"><div class="diagram-pill">Mission core</div><div class="diagram-node">Rx configuration actions</div><div class="diagram-node">Lens rules and price books</div><div class="diagram-node">Encrypted prescription vault</div><div class="diagram-node">Immutable signed quote</div><div class="diagram-node">Fulfillment orchestration</div></section><section class="diagram-card"><div class="diagram-pill">Integration boundaries</div><div class="diagram-node">Commerce Adapter contract</div><div class="diagram-node">Lab Adapter contract</div><div class="diagram-node">Webhook inbox and outbox</div><div class="diagram-muted">Provider concepts remain outside the core</div></section><section class="diagram-card span"><div class="diagram-pill">Authoritative downstream systems</div><div class="systems"><div class="diagram-box">Shopify<br><span class="diagram-muted">cart, checkout, payment, order, refund</span></div><div class="diagram-box">Mission and partner labs<br><span class="diagram-muted">production, QA, shipment, remake</span></div></div></section></div>
+<div class="diagram-panel architecture" data-rough><section class="diagram-card"><div class="diagram-pill">Commerce authority</div><div class="diagram-node">Shopify storefront and native cart</div><div class="diagram-node">Payment, tax, discounts, refunds</div><div class="diagram-muted">Commerce Adapter + CommerceOrderMirror</div></section><section class="diagram-card mission"><div class="diagram-pill">VZN Rx authority</div><div class="diagram-node">Prescription subject and authorization</div><div class="diagram-node">One-pair RxConfiguration</div><div class="diagram-node">ConsumerCartCommitment</div><div class="diagram-node">Release or quarantine</div></section><section class="diagram-card"><div class="diagram-pill">OMS fulfillment authority</div><div class="diagram-node">Catalog and OmsBrandQuote</div><div class="diagram-node">Canonical order, line, build spec, job</div><div class="diagram-node">Fulfillment unit, route, QA, remake</div><div class="diagram-muted">One accepted handoff per pair package</div></section><section class="diagram-card span"><div class="diagram-pill">Production and value seams</div><div class="systems"><div class="diagram-box">Lab adapters / DCS / OMA<br><span class="diagram-muted">production acknowledgments and as-built status</span></div><div class="diagram-box">Prizma value plane<br><span class="diagram-muted">route-cost valuation and Mission-to-Brand receivable</span></div></div></section></div>
 ```
 
 ```css
@@ -83,7 +84,7 @@ analytics, or ordinary logs.
     {
       id: "done-one",
       label:
-        "One pilot Shopify store completes product page → Rx configuration → paid order → lab job → shipment without manual database intervention.",
+        "One pilot Shopify store completes product page → Rx configuration → paid order → pair release → OMS job → shipment without manual database intervention.",
     },
     {
       id: "done-two",
@@ -93,7 +94,7 @@ analytics, or ordinary logs.
     {
       id: "done-three",
       label:
-        "Duplicate or out-of-order events never create a duplicate quote, cart package, Commerce Order, Order Package Binding, fulfillment case, outbox effect, or lab job.",
+        "Duplicate or out-of-order events never create a duplicate ConsumerCartCommitment, cart package, CommerceOrderMirror, OrderPackageBinding, ProductionReleaseCase, OMS inbound order/line/job, or outbox effect.",
     },
     {
       id: "done-four",
@@ -141,14 +142,19 @@ analytics, or ordinary logs.
   columns={["Concern", "Authoritative system", "Rule"]}
   rows={[
     [
-      "Frame catalog and inventory",
+      "Merchant merchandise catalog and customer-visible availability",
       "Shopify / merchant catalog",
-      "Mission stores mappings, not a duplicate merchant catalog.",
+      "VZN Rx stores approved variant mappings and eligibility, not a duplicate merchant catalog.",
+    ],
+    [
+      "Physical frame inventory, reservation, allocation, and inspection",
+      "OMS inventory",
+      "OMS owns SKU balances and the identity and lifecycle of every physical Frame Unit used in production.",
     ],
     [
       "Cart, checkout, tax, discount, payment",
       "Shopify",
-      "Mission supplies validated commercial components and a signed quote.",
+      "Mission supplies validated commercial components and a signed ConsumerCartCommitment.",
     ],
     [
       "Prescription and optical measurements",
@@ -161,7 +167,7 @@ analytics, or ordinary logs.
       "Rules are versioned and reproduced for audit/remake.",
     ],
     [
-      "Commercial quote",
+      "Consumer cart commitment",
       "Mission",
       "Immutable, expiring, currency-specific, and signed.",
     ],
@@ -172,8 +178,8 @@ analytics, or ordinary logs.
     ],
     [
       "Production and remake",
-      "Mission fulfillment",
-      "Every release records configuration, prescription, and rules versions.",
+      "OMS fulfillment engine",
+      "OMS owns canonical operational orders, jobs, units, routing, production transitions, QA, remakes, and shipments.",
     ],
     [
       "Shipment and customer tracking",
@@ -189,16 +195,18 @@ analytics, or ordinary logs.
 <Mermaid
   id="flow-sequence"
   source={
-    "sequenceDiagram\n  participant Shopper\n  participant Store as Shopify Storefront\n  participant Core as Mission Rx Core\n  participant Adapter as Shopify Adapter\n  participant Lab as Mission Lab Engine\n  Shopper->>Store: Select frame and Add prescription lenses\n  Store->>Core: Start configuration with store and variant context\n  Core-->>Shopper: Compatible options and customer-safe guidance\n  Shopper->>Core: Submit selections and prescription reference\n  Core->>Core: Validate rules and create immutable quote\n  Core-->>Store: Signed cart execution plan\n  Store->>Adapter: Add frame and finite lens/service components\n  Adapter-->>Store: Bound native cart package\n  Store->>Store: Server-side checkout validation\n  Shopper->>Store: Pay through native checkout\n  Store-->>Adapter: Order/fulfillment webhook\n  Adapter->>Adapter: Verify, enqueue, deduplicate, and re-fetch order\n  Adapter->>Core: Capture authoritative order and validate quote\n  Core->>Core: Release or quarantine fulfillment case\n  Core->>Lab: Create exactly one lab job\n  Lab-->>Core: Production and shipment updates\n  Core->>Adapter: Fulfillment and tracking update\n  Adapter->>Store: Update merchant order"
+    "sequenceDiagram\n  participant Shopper\n  participant Store as Shopify Storefront\n  participant Rx as VZN Rx Commerce Layer\n  participant Adapter as Shopify Adapter\n  participant OMS as OMS Fulfillment Engine\n  participant Lab as Lab Adapter\n  Shopper->>Store: Select frame and Add prescription lenses\n  Store->>Rx: Start one-pair configuration\n  Rx-->>Shopper: Compatible options and customer-safe guidance\n  Shopper->>Rx: Submit selections and prescription reference\n  Rx->>Rx: Issue ConsumerCartCommitment\n  Rx-->>Store: Signed cart execution plan\n  Store->>Adapter: Add finite native cart components\n  Store->>Store: Validate signed commitment locally\n  Shopper->>Store: Pay through native checkout\n  Store-->>Adapter: Order notification\n  Adapter->>Adapter: Verify, persist, deduplicate, and re-fetch order\n  Adapter->>Rx: Refresh CommerceOrderMirror and pair binding\n  Rx->>Rx: Release or quarantine exact pair revision\n  Rx->>OMS: Submit one sanitized pair handoff with digest\n  OMS->>OMS: Create canonical order line, snapshot, and exactly one job\n  OMS->>Lab: Route immutable production package\n  Lab-->>OMS: Production, QA, and shipment updates\n  OMS-->>Rx: Pair fulfillment projection\n  Rx->>Adapter: Customer-safe fulfillment update\n  Adapter->>Store: Update merchant order"
   }
-  caption="The paid order is re-fetched and revalidated before Mission creates a lab job."
+  caption="A paid pair is re-fetched and revalidated before VZN Rx releases one sanitized, idempotent handoff into OMS."
 />
 
 <RichText id="roadmap-heading" title="Linear delivery model">
 
 ## Linear delivery model
 
-Create one Linear project named **HyperLight Rx Pilot**. Outcomes are milestones, workstream deliverables are issues or sub-issues, and every blocking relationship is represented with Linear dependencies. Advancement depends on exit-gate evidence, not elapsed days.
+Create one Linear project named **HyperLight Rx Pilot** for delivery execution. Outcomes are milestones, workstream deliverables are issues or sub-issues, and every blocking relationship is represented with Linear dependencies. Advancement depends on exit-gate evidence, not elapsed days.
+
+OMS product decisions, PDR status, architecture mappings, and cross-context contracts remain authoritative in the OMS repository and its linked GitHub issues. Linear issues link to those accepted artifacts and track implementation evidence; they do not restate or independently approve architecture decisions. A decision change begins in OMS/GitHub, then the affected Linear issue and exit gate are updated.
 
 The first two launch-blocking spikes prove that Shopify Cart and Checkout Validation can fail closed across standard and accelerated checkout using a self-contained token and no Mission network call, and that the Manual Pilot Queue can idempotently accept, retrieve, revoke, and disposition one test Production Instruction Package. The end-to-end configurator build is blocked by both spike issues.
 
@@ -212,15 +220,15 @@ Every launch-relevant issue must contain an owner or owning role, acceptance cri
   rows={[
     [
       "M0 — Foundations approved",
-      "Contracts, security classification, tenant/store model, optical catalog, and Shopify development setup",
+      "Contracts, security classification, organization/Brand and store model, optical catalog, OMS boundary, and Shopify development setup",
       "Pilot Program Owner, HyperLight access, workstream owners",
-      "Architecture decision records approved; no platform IDs in core types; field classification complete.",
+      "The seven accepted OMS PDRs, ADR-0010 through ADR-0014, and the commerce-to-OMS context map are committed and revision-pinned; no platform IDs in core types; field classification complete.",
     ],
     [
       "M1 — One-pair vertical slice",
       "Working vertical slice for one frame and one lens package",
       "M0; Shopify validation spike; Manual Pilot Queue spike",
-      "Configure → quote → cart → test order → one lab job completes with exact price reconciliation.",
+      "Configure → commitment → cart → test order → one OMS job completes with exact price reconciliation.",
     ],
     [
       "M2 — Pilot catalog and prescription flow",
@@ -244,7 +252,7 @@ Every launch-relevant issue must contain an owner or owning role, acceptance cri
       "M5 — Controlled HyperLight launch",
       "Controlled live traffic with one brand",
       "M4; Store Certification; cross-functional go-live approvals",
-      "Clean production orders, exact totals, zero duplicate lab jobs, and documented go/no-go decision.",
+      "Clean production orders, exact totals, zero duplicate OMS jobs, and documented go/no-go decision.",
     ],
   ]}
 />
@@ -255,47 +263,252 @@ The identifiers below are planning keys, not pre-created Linear issue IDs. Impor
 
 <Table
   id="linear-backlog-table"
-  columns={["Planning key", "Milestone", "Issue", "Blocked by", "Exit evidence"]}
+  columns={[
+    "Planning key",
+    "Milestone",
+    "Issue",
+    "Blocked by",
+    "Exit evidence",
+  ]}
   rows={[
-    ["VZNRX-001", "M0", "Assign HyperLight Pilot Program Owner and all workstream roles", "—", "Role assignments and escalation map approved."],
-    ["VZNRX-002", "M0", "Create and protect vzn-care/vznrx repository", "VZNRX-001", "Repository, branch protection, CI ownership, and environment policy active."],
-    ["VZNRX-003", "M0", "Provision isolated Vercel, Neon, AWS S3/KMS, and SES environments", "VZNRX-001, VZNRX-002", "Dev, staging, and production resource inventory documented."],
-    ["VZNRX-004", "M0", "Execute BAAs and enable HIPAA controls on production providers", "VZNRX-003", "Covered accounts, projects, services, and signed agreements recorded."],
-    ["VZNRX-005", "M0", "Implement Better Auth, organizations, Guest Capability, MFA, and role model", "VZNRX-002, VZNRX-003", "Identity matrix and negative cross-role tests pass."],
-    ["VZNRX-006", "M0", "Obtain HyperLight Shopify development, theme, test-order, refund, and catalog access", "VZNRX-001", "Access checklist and responsible HyperLight contacts approved."],
-    ["VZNRX-007", "M0", "Approve canonical schemas, state machines, field classification, and retention mapping", "VZNRX-001, VZNRX-004", "Schema ADRs and protected-field inventory approved."],
-    ["VZNRX-008", "M0", "Prove fail-closed Shopify cart and checkout validation spike", "VZNRX-002, VZNRX-006, VZNRX-007", "Standard and accelerated checkout tamper tests pass without Mission network access."],
-    ["VZNRX-009", "M0", "Prove Manual Pilot Queue package and acknowledgment spike", "VZNRX-002, VZNRX-007", "One package is accepted, revoked, recommitted, QA-dispositioned, and reconciled idempotently."],
-
-    ["VZNRX-010", "M1", "Implement provider-neutral Rx domain, revisions, rules, and approval bases", "VZNRX-007", "Domain unit and state-transition tests pass."],
-    ["VZNRX-011", "M1", "Implement quote, price protection, cart execution plan, and financial adjustment actions", "VZNRX-010", "Signed quote and adjustment scenarios reconcile exactly."],
-    ["VZNRX-012", "M1", "Build one-frame hosted configurator vertical slice", "VZNRX-005, VZNRX-010, VZNRX-011", "Guest configure-to-quote flow passes mobile and accessibility smoke tests."],
-    ["VZNRX-013", "M1", "Build Shopify theme extension, cart bridge, price validation, order capture, and additional-payment path", "VZNRX-008, VZNRX-011, VZNRX-012", "One native paid order and one accepted higher-price order edit are captured and reconciled exactly once."],
-    ["VZNRX-014", "M1", "Implement Manual Pilot Queue actions and operations UI", "VZNRX-009, VZNRX-010", "One immutable instruction package completes through shipment."],
-    ["VZNRX-015", "M1", "Complete one-pair price and fulfillment reconciliation", "VZNRX-013, VZNRX-014", "Configure, quote, pay, release, produce, QA, and fulfill reconcile with no manual DB edits."],
-
-    ["VZNRX-016", "M2", "Approve HyperLight 12–15-frame allowlist and Frame Optical Profiles", "VZNRX-006, VZNRX-010", "Each enabled variant has inventory, Production Shape, provenance, and compatibility approval."],
-    ["VZNRX-017", "M2", "Implement prescription upload, malware quarantine, manual entry, later submission, and saved reuse", "VZNRX-003, VZNRX-004, VZNRX-005, VZNRX-010", "All four intake methods pass authorization and verification tests."],
-    ["VZNRX-018", "M2", "Implement measurements, estimated fitting height, confidence, and approval policies", "VZNRX-010, VZNRX-016, VZNRX-017", "Progressive and exception matrices pass with versioned evidence."],
-    ["VZNRX-019", "M2", "Implement frame rebase, Change Proposal, reservation, and allocation flows", "VZNRX-011, VZNRX-016", "Compatible and incompatible pre- and post-payment frame-change scenarios pass."],
-    ["VZNRX-020", "M2", "Implement Merchant Program Configuration and pilot administration", "VZNRX-005, VZNRX-011, VZNRX-016", "Draft, validate, approve, publish, and rollback are prospective and audited."],
-    ["VZNRX-021", "M2", "Complete HyperLight catalog and prescription conformance matrix", "VZNRX-016, VZNRX-017, VZNRX-018, VZNRX-019, VZNRX-020", "Every allowed and blocked combination has an expected tested disposition."],
-
-    ["VZNRX-022", "M3", "Implement durable webhook inbox, outbox, retry, replay, and dead-letter processing", "VZNRX-007, VZNRX-013", "Duplicate and out-of-order event suite produces one canonical effect."],
-    ["VZNRX-023", "M3", "Implement authoritative order, refund, cancellation, chargeback, and fulfillment reconciliation", "VZNRX-015, VZNRX-022", "Drift scenarios repair safely without duplicate financial or lab effects."],
-    ["VZNRX-024", "M3", "Implement remake, Replacement Credit, return, and Frame Recovery workflows", "VZNRX-014, VZNRX-019, VZNRX-023", "Responsibility, immutable attempts, credits, and dispositions reconcile."],
-    ["VZNRX-025", "M3", "Run Shopify adapter conformance and fake non-Shopify adapter suite", "VZNRX-021, VZNRX-022, VZNRX-023", "Provider-neutral core passes both adapter implementations."],
-
-    ["VZNRX-026", "M4", "Implement Mission Quality Policy, Critical QA Limits, exceptions, and break-glass publication", "VZNRX-005, VZNRX-014, VZNRX-018", "Role, threshold, audit, and non-overridable failure tests pass."],
-    ["VZNRX-027", "M4", "Complete privacy, security, logging-redaction, and protected-data leak review", "VZNRX-004, VZNRX-005, VZNRX-017, VZNRX-022", "Threat model, access review, PHI leak tests, and incident contacts approved."],
-    ["VZNRX-028", "M4", "Complete theme, mobile, accessibility, performance, and outage compatibility", "VZNRX-012, VZNRX-013, VZNRX-021, VZNRX-025", "Supported storefront and failure-mode matrix passes."],
-    ["VZNRX-029", "M4", "Write and rehearse operations, support, reconciliation, incident, and recovery runbooks", "VZNRX-023, VZNRX-024, VZNRX-026, VZNRX-027", "Operators complete simulations without direct database edits."],
-    ["VZNRX-030", "M4", "Prove database and protected-document recovery objectives", "VZNRX-003, VZNRX-027, VZNRX-029", "Restore drill meets 15-minute RPO and four-hour RTO and reconciles external state."],
-    ["VZNRX-031", "M4", "Certify HyperLight Store Connection and cross-functional go-live record", "VZNRX-025, VZNRX-026, VZNRX-027, VZNRX-028, VZNRX-029, VZNRX-030", "Store Certification and all required owner approvals are current."],
-
-    ["VZNRX-032", "M5", "Run HyperLight shadow-mode orders", "VZNRX-031", "Representative orders complete with no customer-visible or manufacturing side effects."],
-    ["VZNRX-033", "M5", "Enable controlled live traffic and daily reconciliation review", "VZNRX-032", "Pilot owner activates approved cohort and daily evidence remains clean."],
-    ["VZNRX-034", "M5", "Evaluate pilot metrics and decide expand, remediate, or pause", "VZNRX-033", "Signed go/no-go record covers financial, optical, operational, customer, and reliability metrics."],
+    [
+      "VZNRX-001",
+      "M0",
+      "Assign HyperLight Pilot Program Owner and all workstream roles",
+      "—",
+      "Role assignments and escalation map approved.",
+    ],
+    [
+      "VZNRX-002",
+      "M0",
+      "Create and protect vzn-care/vznrx repository",
+      "VZNRX-001",
+      "Repository, branch protection, CI ownership, and environment policy active.",
+    ],
+    [
+      "VZNRX-003",
+      "M0",
+      "Provision isolated Vercel, Neon, AWS S3/KMS, and SES environments",
+      "VZNRX-001, VZNRX-002",
+      "Dev, staging, and production resource inventory documented.",
+    ],
+    [
+      "VZNRX-004",
+      "M0",
+      "Execute BAAs and enable HIPAA controls on production providers",
+      "VZNRX-003",
+      "Covered accounts, projects, services, and signed agreements recorded.",
+    ],
+    [
+      "VZNRX-005",
+      "M0",
+      "Implement Better Auth, organizations, Guest Capability, MFA, and role model",
+      "VZNRX-002, VZNRX-003",
+      "Identity matrix and negative cross-role tests pass.",
+    ],
+    [
+      "VZNRX-006",
+      "M0",
+      "Obtain HyperLight Shopify development, theme, test-order, refund, and catalog access",
+      "VZNRX-001",
+      "Access checklist and responsible HyperLight contacts approved.",
+    ],
+    [
+      "VZNRX-007",
+      "M0",
+      "Pin the accepted OMS PDRs, ADR-0010–0014, canonical schemas, state machines, field classification, retention mapping, and VZN Rx boundary crosswalk",
+      "VZNRX-001, VZNRX-004",
+      "The reviewed OMS artifacts are committed at one recorded revision; protected-field inventory and VZN Rx-to-OMS contract are approved with no unresolved drift.",
+    ],
+    [
+      "VZNRX-008",
+      "M0",
+      "Prove fail-closed Shopify cart and checkout validation spike",
+      "VZNRX-002, VZNRX-006, VZNRX-007",
+      "Standard and accelerated checkout tamper tests pass without Mission network access.",
+    ],
+    [
+      "VZNRX-009",
+      "M0",
+      "Prove Manual Pilot Queue package and acknowledgment spike",
+      "VZNRX-002, VZNRX-007",
+      "One package is accepted, revoked, recommitted, QA-dispositioned, and reconciled idempotently.",
+    ],
+    [
+      "VZNRX-010",
+      "M1",
+      "Implement provider-neutral Rx domain, revisions, rules, and approval bases",
+      "VZNRX-007",
+      "Domain unit and state-transition tests pass.",
+    ],
+    [
+      "VZNRX-011",
+      "M1",
+      "Implement consumer commitment, price protection, cart execution plan, and financial adjustment actions",
+      "VZNRX-010",
+      "Signed commitment and adjustment scenarios reconcile exactly.",
+    ],
+    [
+      "VZNRX-012",
+      "M1",
+      "Build one-frame hosted configurator vertical slice",
+      "VZNRX-005, VZNRX-010, VZNRX-011",
+      "Guest configure-to-commitment flow passes mobile and accessibility smoke tests.",
+    ],
+    [
+      "VZNRX-013",
+      "M1",
+      "Build Shopify theme extension, cart bridge, price validation, order capture, and additional-payment path",
+      "VZNRX-008, VZNRX-011, VZNRX-012",
+      "One native paid order and one accepted higher-price order edit are captured and reconciled exactly once.",
+    ],
+    [
+      "VZNRX-014",
+      "M1",
+      "Implement Manual Pilot Queue actions and operations UI",
+      "VZNRX-009, VZNRX-010",
+      "One immutable instruction package completes through shipment.",
+    ],
+    [
+      "VZNRX-015",
+      "M1",
+      "Complete one-pair price and fulfillment reconciliation",
+      "VZNRX-013, VZNRX-014",
+      "Configure, commit, pay, release, hand off, produce, QA, and fulfill reconcile with no manual DB edits.",
+    ],
+    [
+      "VZNRX-016",
+      "M2",
+      "Approve HyperLight 12–15-frame allowlist and Frame Optical Profiles",
+      "VZNRX-006, VZNRX-010",
+      "Each enabled variant has inventory, Production Shape, provenance, and compatibility approval.",
+    ],
+    [
+      "VZNRX-017",
+      "M2",
+      "Implement prescription upload, malware quarantine, manual entry, later submission, and saved reuse",
+      "VZNRX-003, VZNRX-004, VZNRX-005, VZNRX-010",
+      "All four intake methods pass authorization and verification tests.",
+    ],
+    [
+      "VZNRX-018",
+      "M2",
+      "Implement measurements, estimated fitting height, confidence, and approval policies",
+      "VZNRX-010, VZNRX-016, VZNRX-017",
+      "Progressive and exception matrices pass with versioned evidence.",
+    ],
+    [
+      "VZNRX-019",
+      "M2",
+      "Implement frame rebase, Change Proposal, reservation, and allocation flows",
+      "VZNRX-011, VZNRX-016",
+      "Compatible and incompatible pre- and post-payment frame-change scenarios pass.",
+    ],
+    [
+      "VZNRX-020",
+      "M2",
+      "Implement Merchant Program Configuration and pilot administration",
+      "VZNRX-005, VZNRX-011, VZNRX-016",
+      "Draft, validate, approve, publish, and rollback are prospective and audited.",
+    ],
+    [
+      "VZNRX-021",
+      "M2",
+      "Complete HyperLight catalog and prescription conformance matrix",
+      "VZNRX-016, VZNRX-017, VZNRX-018, VZNRX-019, VZNRX-020",
+      "Every allowed and blocked combination has an expected tested disposition.",
+    ],
+    [
+      "VZNRX-022",
+      "M3",
+      "Implement durable webhook inbox, outbox, retry, replay, and dead-letter processing",
+      "VZNRX-007, VZNRX-013",
+      "Duplicate and out-of-order event suite produces one canonical effect.",
+    ],
+    [
+      "VZNRX-023",
+      "M3",
+      "Implement authoritative order, refund, cancellation, chargeback, and fulfillment reconciliation",
+      "VZNRX-015, VZNRX-022",
+      "Drift scenarios repair safely without duplicate financial or lab effects.",
+    ],
+    [
+      "VZNRX-024",
+      "M3",
+      "Implement remake, Replacement Credit, return, and Frame Recovery workflows",
+      "VZNRX-014, VZNRX-019, VZNRX-023",
+      "Responsibility, immutable attempts, credits, and dispositions reconcile.",
+    ],
+    [
+      "VZNRX-025",
+      "M3",
+      "Run Shopify adapter conformance and fake non-Shopify adapter suite",
+      "VZNRX-021, VZNRX-022, VZNRX-023",
+      "Provider-neutral core passes both adapter implementations.",
+    ],
+    [
+      "VZNRX-026",
+      "M4",
+      "Implement Mission Quality Policy, Critical QA Limits, exceptions, and break-glass publication",
+      "VZNRX-005, VZNRX-014, VZNRX-018",
+      "Role, threshold, audit, and non-overridable failure tests pass.",
+    ],
+    [
+      "VZNRX-027",
+      "M4",
+      "Complete privacy, security, logging-redaction, and protected-data leak review",
+      "VZNRX-004, VZNRX-005, VZNRX-017, VZNRX-022",
+      "Threat model, access review, PHI leak tests, and incident contacts approved.",
+    ],
+    [
+      "VZNRX-028",
+      "M4",
+      "Complete theme, mobile, accessibility, performance, and outage compatibility",
+      "VZNRX-012, VZNRX-013, VZNRX-021, VZNRX-025",
+      "Supported storefront and failure-mode matrix passes.",
+    ],
+    [
+      "VZNRX-029",
+      "M4",
+      "Write and rehearse operations, support, reconciliation, incident, and recovery runbooks",
+      "VZNRX-023, VZNRX-024, VZNRX-026, VZNRX-027",
+      "Operators complete simulations without direct database edits.",
+    ],
+    [
+      "VZNRX-030",
+      "M4",
+      "Prove database and protected-document recovery objectives",
+      "VZNRX-003, VZNRX-027, VZNRX-029",
+      "Restore drill meets 15-minute RPO and four-hour RTO and reconciles external state.",
+    ],
+    [
+      "VZNRX-031",
+      "M4",
+      "Certify HyperLight Store Connection and cross-functional go-live record",
+      "VZNRX-025, VZNRX-026, VZNRX-027, VZNRX-028, VZNRX-029, VZNRX-030",
+      "Store Certification and all required owner approvals are current.",
+    ],
+    [
+      "VZNRX-032",
+      "M5",
+      "Run HyperLight shadow-mode orders",
+      "VZNRX-031",
+      "Representative orders complete with no customer-visible or manufacturing side effects.",
+    ],
+    [
+      "VZNRX-033",
+      "M5",
+      "Enable controlled live traffic and daily reconciliation review",
+      "VZNRX-032",
+      "Pilot owner activates approved cohort and daily evidence remains clean.",
+    ],
+    [
+      "VZNRX-034",
+      "M5",
+      "Evaluate pilot metrics and decide expand, remediate, or pause",
+      "VZNRX-033",
+      "Signed go/no-go record covers financial, optical, operational, customer, and reliability metrics.",
+    ],
   ]}
 />
 
@@ -307,9 +520,9 @@ The identifiers below are planning keys, not pre-created Linear issue IDs. Impor
 
 ### Committed financial comparison basis
 
-Mission quote lines represent gross frame/lens/service merchandise amounts in the checkout currency **before Shopify discounts, tax, and shipping**. The adapter compares each bound commercial component SKU, quantity, and gross unit amount to the signed execution plan. Shopify remains authoritative for discount allocation, tax allocation, shipping, payment fees, refunds, and final captured total; Mission records those allocations separately rather than requiring the whole Shopify order total to equal the pre-tax quote.
+Consumer commitment lines represent gross frame/lens/service merchandise amounts in the checkout currency **before Shopify discounts, tax, and shipping**. The adapter compares each bound commercial component SKU, quantity, and gross unit amount to the signed execution plan. Shopify remains authoritative for discount allocation, tax allocation, shipping, payment fees, refunds, and final captured total; Mission records those allocations separately rather than requiring the whole Shopify order total to equal the pre-tax commitment.
 
-An issued Rx Quote protects its base component prices until expiration. Merchant catalog changes affect only newly issued quotes; the adapter must honor an unexpired quote's locked prices, while approved Shopify discounts, tax, and shipping remain separate platform calculations. If a platform cannot safely honor the locked prices, checkout fails closed rather than charging different base amounts.
+An issued `ConsumerCartCommitment` protects its shopper-facing base component prices until expiration. Merchant catalog changes affect only newly issued commitments; the adapter must honor an unexpired commitment's locked prices, while approved Shopify discounts, tax, and shipping remain separate platform calculations. If a platform cannot safely honor the locked prices, checkout fails closed rather than charging different base amounts. This artifact is not the OMS `OmsBrandQuote`, which snapshots the wholesale amount Mission charges the Brand.
 
 When the customer checks out before prescription approval, HyperLight collects the full quoted frame and selected lens-package price through Conditional Full Payment rather than a deposit. The customer sees that production is conditional on verification. A verified prescription that fits the paid package proceeds unchanged; a required higher-priced package creates a Change Proposal, and a lower-priced or unsupported outcome creates a Financial Adjustment Request for the commerce channel. Mission does not implement a separate deposit-collection workflow per platform.
 
@@ -317,13 +530,13 @@ For the HyperLight pilot, an accepted higher-price Change Proposal uses Shopify 
 
 For a lower-priced approved revision, the purchaser accepts the revised configuration before Mission sends a pair-specific Financial Adjustment Request. The commerce channel issues a partial refund to the original payment method by default and recalculates authoritative tax, discount, and payment allocations. Store credit is available only by explicit purchaser choice under approved merchant policy. Mission records the completed adjustment before Financial Clearance and Production Release; the price difference cannot be silently retained.
 
-Rx Quotes expire after seven days by default. Merchants may choose a shorter approved window; longer windows require an approved commercial policy and remain bounded by a Mission maximum. Expiration is shown before cart creation, and the configurator attempts seamless re-quoting when the configuration and commercial terms have not changed.
+Consumer cart commitments expire after seven days by default. Merchants may choose a shorter approved window; longer windows require an approved commercial policy and remain bounded by a Mission maximum. Expiration is shown before cart creation, and the configurator attempts seamless recommitment when the configuration and commercial terms have not changed.
 
 ### Committed Shopify catalog ownership
 
-The Mission app provisions or verifies a finite set of hidden lens/service products and variants per merchant. Mission owns the intended SKU mapping, component role, expected price, shipping requirement, configuration digest, and approved promotion eligibility. Lens and service components are non-discountable by default; the merchant may enable only promotions permitted by its commercial agreement. A scheduled health check detects edits, deletions, publication mistakes, or price drift and disables new quote issuance until repaired without invalidating price protection for already-issued unexpired quotes.
+The Mission app provisions or verifies a finite set of hidden lens/service products and variants per merchant. Mission owns the intended SKU mapping, component role, expected price, shipping requirement, configuration digest, and approved promotion eligibility. Lens and service components are non-discountable by default; the merchant may enable only promotions permitted by its commercial agreement. A scheduled health check detects edits, deletions, publication mistakes, or price drift and disables new commitment issuance until repaired without invalidating price protection for already-issued unexpired commitments.
 
-Merchant operating choices are governed by a versioned Merchant Program Configuration containing the lens offering, price book, promotion rules, deadlines, communications, Delivery Policy, and permitted automated approvals. Draft changes pass sandbox validation before prospective publication. Mission approves optical, production, access, and safety-sensitive changes; merchants may publish permitted branding and commercial changes. Existing configurations, quotes, orders, and attempts remain pinned to their original effective version unless explicitly re-evaluated, and rollback republishes a known-good version without rewriting history.
+Merchant operating choices are governed by a versioned Merchant Program Configuration containing the lens offering, price book, promotion rules, deadlines, communications, Delivery Policy, and permitted automated approvals. Draft changes pass sandbox validation before prospective publication. Mission approves optical, production, access, and safety-sensitive changes; merchants may publish permitted branding and commercial changes. Existing configurations, consumer commitments, OMS Brand quotes, orders, and attempts remain pinned to their original effective version unless explicitly re-evaluated, and rollback republishes a known-good version without rewriting history.
 
 Live Rx selling requires Store Certification. The connection must pass automated sandbox coverage and at least one end-to-end order through the merchant's real theme and enabled accelerated checkout paths, with catalog bindings, validation controls, permissions, webhooks, fulfillment, refunds, and reconciliation verified. Mission records its approval, merchant acceptance, and the certified capability fingerprint. Later drift that removes a required safety control suspends new configurations while preserving service for existing paid orders.
 
@@ -335,7 +548,7 @@ Live Rx selling requires Store Certification. The connection must pass automated
     {
       id: "w0-terminology",
       label: "Approve canonical terminology and states",
-      note: "RxConfiguration, PrescriptionCase, RxQuote, CartBinding, OrderBinding, FulfillmentCase, RemakeCase.",
+      note: "RxConfiguration, PrescriptionCase, ConsumerCartCommitment, CartBinding, CommerceOrderMirror, OrderPackageBinding, ProductionReleaseCase, OmsPairHandoff, OmsBrandQuote, Job, FulfillmentUnit, and ProductionAttempt.",
     },
     {
       id: "w0-options",
@@ -351,15 +564,13 @@ Live Rx selling requires Store Certification. The connection must pass automated
       id: "w0-frame-optical-profile",
       label:
         "Approve a versioned Frame Optical Profile for every Rx-enabled pilot frame",
-      note:
-        "Capture geometry, lens shape, dimensions, construction, materials, production constraints, provenance, confidence, and optional digital-twin reference. Verify production-critical data across manufacturer CAD or trace, Mission measurements, inspected samples, or scan reconstruction; lens cutting uses an approved Production Shape, never ecommerce or rendering geometry. A Frame Profile Correction creates a new revision, automatically revalidates every dependent case before Production Commitment, and preserves the exact historical revision used by committed or completed attempts.",
+      note: "Capture geometry, lens shape, dimensions, construction, materials, production constraints, provenance, confidence, and optional digital-twin reference. Verify production-critical data across manufacturer CAD or trace, Mission measurements, inspected samples, or scan reconstruction; lens cutting uses an approved Production Shape, never ecommerce or rendering geometry. A Frame Profile Correction creates a new revision, automatically revalidates every dependent case before Production Commitment, and preserves the exact historical revision used by committed or completed attempts.",
     },
     {
       id: "w0-frame-inventory",
       label:
         "Create a SKU-level Frame Reservation after authoritative paid-order acceptance, then assign an inspected Frame Unit as a Frame Allocation only at Production Release",
-      note:
-        "Keep paid-order inventory protection separate from the unit-level traceability required for manufacturing.",
+      note: "Keep paid-order inventory protection separate from the unit-level traceability required for manufacturing.",
     },
     {
       id: "w0-pricing",
@@ -369,7 +580,7 @@ Live Rx selling requires Store Certification. The connection must pass automated
     {
       id: "w0-exceptions",
       label: "Define fail-closed and quarantine policies",
-      note: "Expired quote, missing prescription, incompatible frame, altered cart, unsupported Rx, order edit, refund, cancellation, and remake.",
+      note: "Expired commitment, missing prescription, incompatible frame, altered cart, unsupported Rx, order edit, refund, cancellation, and remake.",
     },
     {
       id: "w0-pilot",
@@ -384,7 +595,11 @@ Live Rx selling requires Store Certification. The connection must pass automated
 
 ## Canonical data model
 
-Merchant operational records are tenant-scoped. A Merchant Organization is the canonical contracted tenant and may own multiple Store Connections across commerce platforms. Each connection has separate credentials, certification, capabilities, market, currency, catalog bindings, and external order namespace. Mission-owned Prescription Subjects, Subject Claims, Prescription Records, Measurement Records, and subject authorizations live in a separate subject security domain and never become merchant-owned rows. A merchant-scoped Prescription Case references those records only through an active, purpose-bound authorization for that pair. Organization-level templates may feed store-specific published configurations with permitted overrides. Authorized organization roles may receive cross-store commercial and operational reporting, but organization membership never grants protected optical access. Platform identifiers remain external bindings. Configuration, prescription, quote, cart, order, and fulfillment keep separate state machines and revisions. The schema is additive and provider-neutral.
+Merchant operational records are organization-scoped. A Merchant Organization is the commerce-facing profile of one framework-managed organization and one contracted OMS Brand; it is not a second tenancy root or a replacement for OMS party roles and accounts. It may own multiple Store Connections across commerce platforms. Each connection has separate credentials, certification, capabilities, market, currency, catalog bindings, and external order namespace. Mission-owned Prescription Subjects, Subject Claims, Prescription Records, Measurement Records, and subject authorizations live in a separate subject security domain and never become merchant-owned rows. An organization-scoped Prescription Case references those records only through an active, purpose-bound authorization for that pair. Organization-level templates may feed store-specific published configurations with permitted overrides. Authorized organization roles may receive cross-store commercial and operational reporting, but organization membership never grants protected optical access. Platform identifiers remain external bindings. Configuration, prescription, commitment, cart, commerce mirror, release, OMS order, and production keep separate state machines and revisions. The schema is additive and provider-neutral.
+
+The commerce and fulfillment contexts are complementary, not competing canonical models. VZN Rx retains `StoreConnection`, `CartBinding`, `CommerceOrderMirror`, `OrderPackageBinding`, the prescription subject-security domain, and the signed `ConsumerCartCommitment`. The accepted mapping is `CommerceOrderMirror → OrderPackageBinding → OMS inbound_order/order_line/job`. OMS owns the granular lens catalog, offer mappings, immutable price-book versions, `OmsBrandQuote`, canonical order and line, build spec, submit snapshot, job, fulfillment unit, lens instance, lab assignment, shipment, production transitions, QA, and remake history. VZN Rx keeps only a `ProductionReleaseCase` projection for pre-production holds and the current customer-safe OMS status; it does not duplicate OMS production state.
+
+The financial model has four explicitly separate planes: (1) the `ConsumerCartCommitment` binds shopper-facing component quantities, currency, and gross unit amounts; (2) Shopify owns payment, discount, tax, refund, and consumer order-edit state; (3) `OmsBrandQuote` and the billing projection own Mission-to-Brand wholesale authorization, dispatch deposit, delivery remainder, adjustments, and receivable state; and (4) lab-assignment route cost feeds Prizma valuation. No artifact is reused across planes merely because the amounts happen to match.
 
 Mission and merchant workforce users authenticate through Agent Native's Better Auth integration and framework-managed organizations. Anonymous shoppers begin through a short-lived Guest Capability derived from a verified HyperLight storefront context and bound to one store, configuration, and protected upload scope. A Mission Account is required only for ongoing subject access, saved-prescription reuse, or later record management, and guest data joins it only through an explicit Subject Claim. No request falls back to a shared anonymous account, and merchant membership never establishes subject authorization.
 
@@ -418,21 +633,47 @@ A single `RxConfiguration` represents **one physical pair** and cart quantity mu
 
 Rules, price books, manufacturing instructions, and customer-safe summaries are stored as immutable append-only snapshots or content-addressed artifacts—not mutable records labeled with an old version.
 
-Required database constraints include unique provider delivery per store, one canonical Commerce Order per external order reference within a Store Connection, one active cart binding per quote revision, one Order Package Binding per captured pair package, one fulfillment case per Order Package Binding, one lab-job effect per fulfillment revision, and one outbox event per aggregate revision/event type. A Commerce Order may contain many pair-level Order Package Bindings. Idempotency records also bind request key to body digest and original result.
+Required database constraints include unique provider delivery per store, one `CommerceOrderMirror` per external order reference within a Store Connection, one active cart binding per commitment revision, one `OrderPackageBinding` per captured pair package, one `ProductionReleaseCase` and one accepted `OmsPairHandoff` per binding/release revision, and one outbox event per aggregate revision/event type. A `CommerceOrderMirror` may contain many pair-level bindings. Each accepted Shopify Rx binding has quantity one and produces exactly one OMS order line with quantity one and exactly one initial OMS job; OMS retains quantity-N support for non-Shopify channels. Idempotency records bind scope and key to the canonical request digest and original result, and the same key with a different digest fails as an integrity conflict.
+
+The `OmsPairHandoff` contains only Mission identifiers and immutable revision references: Merchant/Brand and Store Connection, Order Package Binding, configuration, purpose-bound prescription-case authorization, frame/profile, offer mapping, catalog/price-book, consumer commitment, financial-clearance evidence, shipping-destination snapshot, optical/production approvals, release revision/time, and canonical request digest. When retained source evidence is required, the handoff carries an opaque protected payload handle rather than bytes. It never contains a Shopify wire body, prescription value, subject identifier, document, customer text, provider credential, or ordinary-log-safe rendering. After acceptance, an OMS PHI-gated action may resolve the purpose-bound authorization and freeze only the production-required optical values in the restricted OMS production snapshot; that snapshot is not a reusable subject record and never enters ordinary OMS events, logs, portals, or commerce writeback.
 
 </RichText>
+
+<Callout id="oms-source-crosswalk" tone="info">
+
+**OMS source-of-truth crosswalk.** The reviewed OMS working tree dated
+2026-07-27 marks all seven PDRs and ADR-0010 through ADR-0014 accepted, with the
+boundary recorded in `docs/architecture/commerce-fulfillment-context-map.md`.
+This block visualizes only VZN Rx-owned persistence and its OMS handoff ledger.
+OMS-owned tables and transitions remain authoritative in
+`docs/architecture/data-model/order-context.md`, `catalog-pricing-context.md`,
+`routing-fulfillment-context.md`, `platform-context.md`, and
+`parties-context.md`; governance lives in `docs/pdr/README.md` and
+`docs/architecture/decision-map.md`. Because those OMS changes are currently
+uncommitted, M0 must commit them and replace these working-tree references with
+one pinned, portable revision before implementation approval.
+
+</Callout>
 
 <DataModel
   id="data-model"
   entities={[
     {
-      id: "tenants",
-      name: "tenants",
+      id: "merchant_organizations",
+      name: "merchant_organizations",
       fields: [
         {
           name: "id",
           type: "uuid",
           pk: true,
+        },
+        {
+          name: "organization_id",
+          type: "uuid",
+        },
+        {
+          name: "oms_brand_ref",
+          type: "text",
         },
         {
           name: "name",
@@ -454,9 +695,9 @@ Required database constraints include unique provider delivery per store, one ca
           pk: true,
         },
         {
-          name: "tenant_id",
+          name: "merchant_organization_id",
           type: "uuid",
-          fk: "tenants.id",
+          fk: "merchant_organizations.id",
         },
         {
           name: "provider",
@@ -623,9 +864,9 @@ Required database constraints include unique provider delivery per store, one ca
           pk: true,
         },
         {
-          name: "tenant_id",
+          name: "merchant_organization_id",
           type: "uuid",
-          fk: "tenants.id",
+          fk: "merchant_organizations.id",
         },
         {
           name: "subject_authorization_id",
@@ -669,9 +910,9 @@ Required database constraints include unique provider delivery per store, one ca
           pk: true,
         },
         {
-          name: "tenant_id",
+          name: "merchant_organization_id",
           type: "uuid",
-          fk: "tenants.id",
+          fk: "merchant_organizations.id",
         },
         {
           name: "store_connection_id",
@@ -707,8 +948,8 @@ Required database constraints include unique provider delivery per store, one ca
       ],
     },
     {
-      id: "rx_quotes",
-      name: "rx_quotes",
+      id: "consumer_cart_commitments",
+      name: "consumer_cart_commitments",
       fields: [
         {
           name: "id",
@@ -755,8 +996,8 @@ Required database constraints include unique provider delivery per store, one ca
       ],
     },
     {
-      id: "quote_lines",
-      name: "quote_lines",
+      id: "consumer_commitment_lines",
+      name: "consumer_commitment_lines",
       fields: [
         {
           name: "id",
@@ -764,9 +1005,9 @@ Required database constraints include unique provider delivery per store, one ca
           pk: true,
         },
         {
-          name: "quote_id",
+          name: "commitment_id",
           type: "uuid",
-          fk: "rx_quotes.id",
+          fk: "consumer_cart_commitments.id",
         },
         {
           name: "mission_sku",
@@ -796,9 +1037,9 @@ Required database constraints include unique provider delivery per store, one ca
           pk: true,
         },
         {
-          name: "quote_id",
+          name: "commitment_id",
           type: "uuid",
-          fk: "rx_quotes.id",
+          fk: "consumer_cart_commitments.id",
         },
         {
           name: "store_connection_id",
@@ -824,8 +1065,8 @@ Required database constraints include unique provider delivery per store, one ca
       ],
     },
     {
-      id: "commerce_orders",
-      name: "commerce_orders",
+      id: "commerce_order_mirrors",
+      name: "commerce_order_mirrors",
       fields: [
         {
           name: "id",
@@ -865,9 +1106,9 @@ Required database constraints include unique provider delivery per store, one ca
           pk: true,
         },
         {
-          name: "commerce_order_id",
+          name: "commerce_order_mirror_id",
           type: "uuid",
-          fk: "commerce_orders.id",
+          fk: "commerce_order_mirrors.id",
         },
         {
           name: "cart_binding_id",
@@ -889,8 +1130,8 @@ Required database constraints include unique provider delivery per store, one ca
       ],
     },
     {
-      id: "fulfillment_cases",
-      name: "fulfillment_cases",
+      id: "production_release_cases",
+      name: "production_release_cases",
       fields: [
         {
           name: "id",
@@ -901,11 +1142,6 @@ Required database constraints include unique provider delivery per store, one ca
           name: "order_package_binding_id",
           type: "uuid",
           fk: "order_package_bindings.id",
-        },
-        {
-          name: "lab_job_ref",
-          type: "text",
-          nullable: true,
         },
         {
           name: "configuration_revision",
@@ -923,6 +1159,49 @@ Required database constraints include unique provider delivery per store, one ca
           name: "quarantine_reason",
           type: "text",
           nullable: true,
+        },
+      ],
+    },
+    {
+      id: "oms_pair_handoffs",
+      name: "oms_pair_handoffs",
+      fields: [
+        {
+          name: "id",
+          type: "uuid",
+          pk: true,
+        },
+        {
+          name: "production_release_case_id",
+          type: "uuid",
+          fk: "production_release_cases.id",
+        },
+        {
+          name: "release_revision",
+          type: "integer",
+        },
+        {
+          name: "request_digest",
+          type: "text",
+        },
+        {
+          name: "oms_inbound_order_id",
+          type: "uuid",
+          nullable: true,
+        },
+        {
+          name: "oms_order_line_id",
+          type: "uuid",
+          nullable: true,
+        },
+        {
+          name: "oms_job_id",
+          type: "uuid",
+          nullable: true,
+        },
+        {
+          name: "status",
+          type: "text",
         },
       ],
     },
@@ -998,7 +1277,7 @@ Required database constraints include unique provider delivery per store, one ca
   relations={[
     {
       from: "store_connections",
-      to: "tenants",
+      to: "merchant_organizations",
       kind: "1-n",
     },
     {
@@ -1023,7 +1302,7 @@ Required database constraints include unique provider delivery per store, one ca
     },
     {
       from: "prescription_cases",
-      to: "tenants",
+      to: "merchant_organizations",
       kind: "1-n",
     },
     {
@@ -1043,7 +1322,7 @@ Required database constraints include unique provider delivery per store, one ca
     },
     {
       from: "rx_configurations",
-      to: "tenants",
+      to: "merchant_organizations",
       kind: "1-n",
     },
     {
@@ -1057,18 +1336,18 @@ Required database constraints include unique provider delivery per store, one ca
       kind: "1-1",
     },
     {
-      from: "rx_quotes",
+      from: "consumer_cart_commitments",
       to: "rx_configurations",
       kind: "1-n",
     },
     {
-      from: "quote_lines",
-      to: "rx_quotes",
+      from: "consumer_commitment_lines",
+      to: "consumer_cart_commitments",
       kind: "1-n",
     },
     {
       from: "cart_bindings",
-      to: "rx_quotes",
+      to: "consumer_cart_commitments",
       kind: "1-n",
     },
     {
@@ -1077,13 +1356,13 @@ Required database constraints include unique provider delivery per store, one ca
       kind: "1-n",
     },
     {
-      from: "commerce_orders",
+      from: "commerce_order_mirrors",
       to: "store_connections",
       kind: "1-n",
     },
     {
       from: "order_package_bindings",
-      to: "commerce_orders",
+      to: "commerce_order_mirrors",
       kind: "1-n",
     },
     {
@@ -1092,8 +1371,13 @@ Required database constraints include unique provider delivery per store, one ca
       kind: "1-1",
     },
     {
-      from: "fulfillment_cases",
+      from: "production_release_cases",
       to: "order_package_bindings",
+      kind: "1-1",
+    },
+    {
+      from: "oms_pair_handoffs",
+      to: "production_release_cases",
       kind: "1-1",
     },
     {
@@ -1128,13 +1412,13 @@ Implement application operations once. The configurator, merchant UI, support UI
       "Never trust options supplied by the browser.",
     ],
     [
-      "quote-rx-configuration",
-      "Create immutable commercial lines and total",
+      "issue-consumer-cart-commitment",
+      "Create immutable shopper-facing component lines and total",
       "Bind configuration revision, rules version, market, currency, expiry, and signature.",
     ],
     [
       "create-cart-execution-plan",
-      "Translate quote lines into provider-neutral cart instructions",
+      "Translate commitment lines into provider-neutral cart instructions",
       "Return only opaque refs and safe summaries.",
     ],
     [
@@ -1158,9 +1442,9 @@ Implement application operations once. The configurator, merchant UI, support UI
       "Expected order revision, idempotency digest, purchaser acceptance, and authoritative payment result.",
     ],
     [
-      "release-fulfillment-case",
-      "Create one lab job or quarantine",
-      "Require prescription, quote, order, and rule-version checks.",
+      "release-pair-to-oms",
+      "Create one digested OMS pair handoff or quarantine",
+      "Require prescription, commitment, order, inventory, approval, and rule-version checks.",
     ],
     [
       "record-shipment",
@@ -1221,7 +1505,7 @@ Before calling the core platform-neutral, implement an executable fake non-Shopi
 
 ## Proposed implementation structure
 
-The production implementation belongs in the new `vzn-care/vznrx` Agent Native repository. This `agent-native` repository remains the planning and design source. The implementation is a TypeScript monorepo using SQL through Drizzle for governed state and shared actions as the canonical operation surface. It initially deploys to Vercel with an isolated Neon Postgres database and separate development, staging, and production environments. Before production PHI enters either provider, Mission executes and retains the applicable BAAs, enables HIPAA on the exact covered team and projects, documents covered services and shared-responsibility controls, verifies access, audit, and incident procedures, and passes security/privacy review. PHI is prohibited from logs, traces, analytics, build artifacts, schema descriptions, and provider metadata. Shopify extensions and validation functions remain dedicated packages; custom routes are restricted to Shopify OAuth, signed embed sessions, protected uploads, raw webhook verification, and other unavoidable integration boundaries. Protected document bytes reside in a dedicated private Amazon S3 production bucket under an AWS BAA, with public access blocked, short-lived signed access, dedicated KMS encryption, malware-scan quarantine, versioning, access logging, retention, backup, and governed deletion. Neon stores only opaque object references and authorization metadata. Repository creation, access controls, branch protections, environments, CI, deployment ownership, and secret provisioning are explicit blocking issues in Linear milestone M0 rather than hidden prerequisites.
+The production implementation belongs in the new `vzn-care/vznrx` Agent Native repository. This `agent-native` repository remains the planning and design source. The implementation is a TypeScript monorepo using SQL through Drizzle for governed state and shared actions as the canonical operation surface. Web and action runtimes deploy to Vercel, durable `pg-boss` workers deploy as AWS ECS/Fargate services, and each development, staging, and production environment has an isolated Neon Postgres project and separate runtime/task identities. Before production PHI enters any provider, Mission executes and retains the applicable agreements, confirms the exact covered services and teams/projects, enables required healthcare controls, documents shared responsibility, verifies access/audit/incident procedures, and passes security/privacy review. PHI is prohibited from logs, traces, analytics, build artifacts, schema descriptions, and provider metadata. Shopify extensions and validation functions remain dedicated packages; custom routes are restricted to Shopify OAuth, signed embed sessions, protected uploads, raw webhook verification, and other unavoidable integration boundaries. Protected document bytes reside in a dedicated private Amazon S3 production bucket under an applicable AWS agreement, with public access blocked, short-lived signed access, dedicated KMS encryption, malware-scan quarantine, versioning, access logging, retention, backup, and governed deletion. Neon stores only opaque object references and authorization metadata. Repository creation, access controls, branch protections, environments, CI, deployment ownership, and secret provisioning are explicit blocking issues in Linear milestone M0 rather than hidden prerequisites.
 
 <FileTree
   id="filemap"
@@ -1244,7 +1528,7 @@ The production implementation belongs in the new `vzn-care/vznrx` Agent Native r
     {
       path: "actions/rx",
       change: "added",
-      note: "Canonical configuration, validation, quoting, and prescription actions.",
+      note: "Canonical configuration, validation, consumer commitment, and prescription actions.",
     },
     {
       path: "actions/commerce",
@@ -1252,19 +1536,29 @@ The production implementation belongs in the new `vzn-care/vznrx` Agent Native r
       note: "Cart binding, order capture, adapter capability, and reconciliation actions.",
     },
     {
-      path: "actions/fulfillment",
+      path: "actions/oms",
       change: "added",
-      note: "Release, lab-job, shipment, cancellation, and remake actions.",
+      note: "Pair release, OMS handoff, projected status, cancellation, and reconciliation actions.",
     },
     {
       path: "packages/rx-domain",
       change: "added",
-      note: "Provider-neutral types, state machines, rule evaluation, and quote integrity.",
+      note: "Provider-neutral Rx types, state machines, rule evaluation, and consumer commitment integrity.",
     },
     {
       path: "packages/rx-contracts",
       change: "added",
       note: "Versioned action/event/embed schemas and generated SDK types.",
+    },
+    {
+      path: "packages/oms-domain",
+      change: "added",
+      note: "Canonical order, OmsBrandQuote, build snapshot, job, unit, routing, assignment, production, QA, shipment, and remake models adopted from OMS.",
+    },
+    {
+      path: "packages/oms-handoff",
+      change: "added",
+      note: "Versioned sanitized pair-translation contract, digest validation, protected Rx resolution, and idempotent result binding.",
     },
     {
       path: "packages/commerce-adapter",
@@ -1287,9 +1581,14 @@ The production implementation belongs in the new `vzn-care/vznrx` Agent Native r
       note: "Idempotent processing, retry, dead-letter, and replay.",
     },
     {
+      path: "workers/oms-events",
+      change: "added",
+      note: "OMS handoff normalization, job/unit creation, outbox relay, lab dispatch, and projection updates.",
+    },
+    {
       path: "workers/reconciliation",
       change: "added",
-      note: "Scheduled Shopify/order/fulfillment drift repair.",
+      note: "Scheduled Shopify/VZN Rx/OMS/lab/value-plane drift repair.",
     },
     {
       path: "db/schema",
@@ -1317,7 +1616,7 @@ Use one Mission-hosted configurator with a small versioned embedding SDK. The ho
 
 Merchants customize the experience only through a validated Configurator Policy covering theme, approved content, merchandising, offerings, support contacts, and permitted optional flows. Mission retains domain semantics, compatibility and pricing execution, required disclosures and consent, validation and safety states, protected-data handling, and accessibility behavior; arbitrary scripts and removal of required steps are prohibited.
 
-Only a commercially complete, quoted Rx Configuration may enter the cart. If the shopper selects another frame, a Configuration Rebase retains the lens choices and evaluates them against the candidate frame: compatible choices produce a new configuration revision and quote, while incompatibility leaves the current configuration unchanged and returns customer-safe blocking reasons and corrective options.
+Only an Rx Configuration with a valid `ConsumerCartCommitment` may enter the cart. If the shopper selects another frame, a Configuration Rebase retains the lens choices and evaluates them against the candidate frame: compatible choices produce a new configuration revision and commitment, while incompatibility leaves the current configuration unchanged and returns customer-safe blocking reasons and corrective options.
 
 Before payment, a compatible Configuration Rebase is immediate. After payment but before Production Commitment, a purchaser-initiated change within the same Frame Style may rebase after re-quoting, commerce synchronization, and renewed approvals; a different Frame Style uses a Change Proposal. After Production Commitment, the original attempt remains unchanged and no return is required: one pair-bound Replacement Credit may fund one new order and configuration, with the Purchaser paying any amount above the credit. The credit is non-cash and non-transferable, and any unapplied balance expires when the replacement order completes. Each credit records cause, evidence, amount, approval, and Responsibility Allocation across Mission, merchant, manufacturer or warranty, customer-policy budget, or manual review.
 
@@ -1341,15 +1640,13 @@ Before payment, a compatible Configuration Rebase is immediate. After payment bu
       id: "cfg-rebase",
       label:
         "Preserve lens selections across frame changes through an atomic Configuration Rebase",
-      note:
-        "Auto-accept compatible frames with a new revision and quote; reject incompatible frames without mutating the active configuration.",
+      note: "Auto-accept compatible frames with a new revision and commitment; reject incompatible frames without mutating the active configuration.",
     },
     {
       id: "cfg-prescription",
       label:
         "Support upload-now, send-later, saved-record, and manually entered prescription paths",
-      note:
-        "Manual entry may prefill the record but requires independent Prescription Verification before Optical Approval.",
+      note: "Manual entry may prefill the record but requires independent Prescription Verification before Optical Approval.",
     },
     {
       id: "cfg-review",
@@ -1359,29 +1656,24 @@ Before payment, a compatible Configuration Rebase is immediate. After payment bu
       id: "cfg-measurement-confidence",
       label:
         "Capture customer-supplied PD with method, provenance, date, and Measurement Confidence",
-      note:
-        "Optical Approval determines whether the record is sufficient for the selected frame and lens; high-risk cases require stronger evidence.",
+      note: "Optical Approval determines whether the record is sufficient for the selected frame and lens; high-risk cases require stronger evidence.",
     },
     {
       id: "cfg-estimated-fitting-height",
       label:
         "Support merchant-enabled Estimated Fitting Height for progressive offerings",
-      note:
-        "Require frame geometry, lens-design data, and subject-specific wearing-position input; preserve model version, inputs, confidence, approval, and outcome without representing the estimate as a direct measurement. Model upgrades apply prospectively unless a case is explicitly re-estimated and re-approved.",
+      note: "Require frame geometry, lens-design data, and subject-specific wearing-position input; preserve model version, inputs, confidence, approval, and outcome without representing the estimate as a direct measurement. Model upgrades apply prospectively unless a case is explicitly re-estimated and re-approved.",
     },
     {
       id: "cfg-automated-optical-approval",
       label:
         "Evaluate estimated progressive cases with a versioned Optical Approval Policy",
-      note:
-        "Automatically approve only configurations inside Mission-approved bounds; route exceptions to manual Optical Review and record policy version plus Approval Basis.",
+      note: "Automatically approve only configurations inside Mission-approved bounds; route exceptions to manual Optical Review and record policy version plus Approval Basis.",
     },
     {
       id: "cfg-outcome-governance",
-      label:
-        "Monitor automated approval outcomes with alert-first governance",
-      note:
-        "Outcome drift alerts Mission optical leadership by default; policies may opt into scoped automatic suspension, while objective integrity failures always fail closed.",
+      label: "Monitor automated approval outcomes with alert-first governance",
+      note: "Outcome drift alerts Mission optical leadership by default; policies may opt into scoped automatic suspension, while objective integrity failures always fail closed.",
     },
     {
       id: "cfg-errors",
@@ -1396,7 +1688,7 @@ Before payment, a compatible Configuration Rebase is immediate. After payment bu
     {
       id: "cfg-telemetry",
       label:
-        "Instrument start, step completion, validation failure, quote, add-to-cart, abandonment, and recovery without clinical values",
+        "Instrument start, step completion, validation failure, commitment issuance, add-to-cart, abandonment, and recovery without clinical values",
     },
   ]}
 />
@@ -1413,7 +1705,7 @@ Checkout enforcement must not depend on a live call to Mission. The Cart and Che
 
 **Outage policy:** if Mission is unavailable, shoppers cannot start or change a configuration. A cart with an already-issued unexpired valid token can still pass Shopify’s local validation. Any paid order not yet captured by Mission remains quarantined and is recovered through webhook retry/reconciliation. Manufacturing never fails open.
 
-**Uninstall policy:** app uninstall or Store Connection revocation immediately disables new configurations and unpaid Rx checkout. Already-paid orders remain Mission fulfillment obligations; required records and optical workflows are preserved, and lost Shopify synchronization proceeds through reconnection or an approved manual merchant handoff.
+**Uninstall policy:** app uninstall or Store Connection revocation immediately disables new configurations and unpaid Rx checkout. Already-paid orders remain Mission obligations fulfilled through OMS; required records and optical workflows are preserved, and lost Shopify synchronization proceeds through reconnection or an approved manual merchant handoff.
 
 </RichText>
 
@@ -1480,7 +1772,7 @@ Checkout enforcement must not depend on a live call to Mission. The Cart and Che
     {
       id: "shop-routing",
       label:
-        "Register/configure Mission fulfillment-service locations and document frame-versus-lens routing",
+        "Register/configure OMS-backed fulfillment-service locations and document frame-versus-lens routing",
       note: "Handle split fulfillment orders, multiple locations, partial shipments, and cancellation requests explicitly.",
     },
     {
@@ -1571,8 +1863,9 @@ Checkout enforcement must not depend on a live call to Mission. The Cart and Che
         "Classify every field as public commerce, internal operational, restricted optical, or prescription/document data",
     },
     {
-      id: "sec-tenant",
-      label: "Enforce tenant/store access at every read and write boundary",
+      id: "sec-organization",
+      label:
+        "Enforce organization/Brand and store access at every read and write boundary",
     },
     {
       id: "sec-encrypt",
@@ -1597,7 +1890,7 @@ Checkout enforcement must not depend on a live call to Mission. The Cart and Che
     {
       id: "sec-audit",
       label:
-        "Audit configuration changes, prescription review, quote creation, order capture, quarantine release, remakes, and operator replay",
+        "Audit configuration changes, prescription review, commitment creation, OMS Brand quoting, order capture, quarantine release, remakes, and operator replay",
     },
     {
       id: "sec-retention",
@@ -1613,8 +1906,7 @@ Checkout enforcement must not depend on a live call to Mission. The Cart and Che
       id: "sec-learning-data",
       label:
         "Govern de-identified cross-merchant Learning Datasets for quality and model improvement",
-      note:
-        "Remove direct subject, purchaser, merchant, and order identifiers; prohibit cross-merchant reporting and preserve lineage, purpose, consent, jurisdiction, deletion, and retention controls.",
+      note: "Remove direct subject, purchaser, merchant, and order identifiers; prohibit cross-merchant reporting and preserve lineage, purpose, consent, jurisdiction, deletion, and retention controls.",
     },
   ]}
 />
@@ -1625,13 +1917,13 @@ Checkout enforcement must not depend on a live call to Mission. The Cart and Che
 
 **Owners:** fulfillment engineer, optical lead, lab operations, and support lead. **Linear milestones:** M1 vertical slice through M4 operational readiness.
 
-A lab job may be created only when all release predicates are true: the authoritative Shopify order exists; the merchant-approved financial state is satisfied; fraud/risk and cancellation holds are clear; bound commercial lines match the signed plan; the prescription case is approved; the optical configuration is approved; frame/lens availability is confirmed; the latest order edit/refund/cancellation has been processed; and the manufacturing release policy permits work to begin. Otherwise the fulfillment case remains quarantined with an explicit reason.
+VZN Rx may release a pair to OMS only when all release predicates are true: the authoritative Shopify order exists; the merchant-approved financial state is satisfied; fraud/risk and cancellation holds are clear; bound commercial lines match the signed commitment; the prescription case is approved; the optical configuration is approved; frame/lens availability is confirmed; the latest order edit/refund/cancellation has been processed; and the manufacturing release policy permits work to begin. Otherwise the `ProductionReleaseCase` remains quarantined with an explicit reason. Release creates exactly one sanitized, content-digested `OmsPairHandoff`; OMS alone creates the canonical order line, immutable submit/build snapshot, initial job, fulfillment units, lens instances, and lab assignments.
 
 The architecture represents that financial predicate as Financial Clearance. During the Shopify pilot, an authorized operator confirms it manually against a refreshed authoritative order revision and the system records the approver, time, evidence, and decision. Configurable automated clearance policies are post-pilot scope.
 
 An authoritative payment reversal, fraud hold, chargeback, or comparable Financial Risk Event revokes Financial Clearance and blocks release when received before Production Commitment. After commitment, it opens an audited financial incident but does not automatically interrupt, discard, or rewrite the Production Attempt; the lab completes or safely dispositions the work under policy. The customer optical workflow remains separate from the merchant dispute, and merchant responsibility for properly committed production is governed by the commercial agreement. Exceptional manual risk holds are reason-bound and audited.
 
-Inventory follows two distinct commitments. An authoritative paid-order acceptance creates a SKU-level Frame Reservation while the pair awaits optical readiness. Production Release assigns an inspected Frame Unit and converts that reservation into a Frame Allocation. Merchant-configurable reservation deadlines operate within Mission bounds; expiration creates an explicit extend, substitute, backorder, or cancellation decision and never silently releases stock from a paid obligation. A frame change transfers inventory protection only after compatibility, price, and availability checks succeed.
+Inventory follows two distinct commitments owned by OMS. An authoritative paid-order acceptance creates an OMS SKU-level Frame Reservation while the pair awaits optical readiness. Production Release requires OMS to assign an inspected Frame Unit and convert that reservation into a Frame Allocation. VZN Rx requests and projects those facts but never maintains a competing stock balance or physical-unit lifecycle. Merchant-configurable reservation deadlines operate within Mission bounds; expiration creates an explicit extend, substitute, backorder, or cancellation decision and never silently releases stock from a paid obligation. A frame change transfers inventory protection only after compatibility, price, and availability checks succeed.
 
 Paid pairs that still need prescription information, measurements, approvals, or corrections receive configurable reminders before a Customer Action Deadline bounded by Mission policy. Expiration creates an Expired Customer Action Hold, suspends the delivery estimate, and notifies the customer and merchant. The default never auto-cancels a paid order: the merchant explicitly extends the deadline, selects an approved substitution or backorder treatment, or cancels and refunds through the order-owning channel. A future auto-cancellation policy may be configurable only within Mission limits.
 
@@ -1643,21 +1935,21 @@ The HyperLight pilot sends merchant-branded Optical Action Requests by email thr
 
 The commerce platform also owns return authorization and financial refunds. Mission inspects returns involving optical quality, defects, remakes, warranties, or production investigations. Prescription lenses never re-enter inventory. A returned Frame Unit may become usable only through a traceable Frame Recovery process covering lens removal, identity-safe handling, inspection, disposition approval, and preserved unit history; otherwise it is quarantined, returned, or responsibly disposed of. Physical receipt never automatically creates a refund, remake, Replacement Credit, or other financial effect.
 
-The pilot requires two distinct identities: an Optical Reviewer grants Optical Approval for the current prescription, measurements, frame, lens, and manufacturing interpretation; a Release Operator grants Production Release after independently confirming Financial Clearance, quote integrity, Frame Allocation, approvals, and holds against those same revisions. Release emits an immutable, content-digested Production Instruction Package bound to one Production Attempt and every exact approved input revision. The lab explicitly accepts or rejects it using an idempotent acknowledgment. Break-glass release is reason-bound and requires retrospective second review.
+The pilot requires two distinct identities: an Optical Reviewer grants Optical Approval for the current prescription, measurements, frame, lens, and manufacturing interpretation; a Release Operator grants Production Release after independently confirming Financial Clearance, commitment integrity, Frame Allocation, approvals, and holds against those same revisions. Release emits an immutable, content-digested OMS handoff bound to the exact approved revisions. After OMS normalization, routing, and snapshotting, OMS emits the immutable Production Instruction Package for one Production Attempt. Its canonical semantics must be lossless to the accepted OMS DCS/OMA production contract; any non-DCS/OMA adapter requires an explicit, versioned mapping and conformance tests proving no manufacturing-significant field or acknowledgment is dropped. The lab explicitly accepts or rejects the package using an idempotent acknowledgment. Break-glass release is reason-bound and requires retrospective second review.
 
 Every approval records an immutable Approval Basis containing the exact dependent revisions. A consequential input change automatically invalidates all downstream approvals and instructions that depend on it; operators cannot manually carry stale approvals forward. A replacement within a Mission-validated Frame Equivalence Class may preserve Optical Approval but still requires renewed operational release. Merchants may disable or narrow approved equivalence, never broaden it to an unvalidated or customer-visible difference.
 
 Frame Profile Corrections are prospective revisions, never in-place edits. New configurations use the corrected profile; every uncommitted dependent case is automatically revalidated and is quarantined with approvals invalidated when the result is incompatible or materially changed. Production-Committed and completed attempts retain their original profile revision. A correction that exposes a safety or quality concern in committed work opens a traceable incident or recall workflow rather than rewriting production history.
 
-Accepted Production Instruction Packages are never edited in place. Before Production Commitment, a correction requires the lab to acknowledge revocation of the prior package before Mission releases a new package revision. After Production Commitment, corrective work creates a new Production Attempt, remake, or incident workflow. Mission records both its own timestamps and the lab's acknowledgment timestamps; the lab's explicit commitment response establishes the manufacturing cutoff.
+Accepted Production Instruction Packages are never edited in place. Before Production Commitment, a correction requires the lab to acknowledge revocation of the prior package before OMS releases a new package revision. After Production Commitment, corrective work creates a new Production Attempt, remake, or incident workflow. OMS records both its own timestamps and the lab's acknowledgment timestamps; the lab's explicit commitment response establishes the manufacturing cutoff.
 
-Lab connectivity is isolated behind one provider-neutral Lab Adapter contract covering package submission, acceptance or rejection, revocation, Production Commitment, status, QA, shipment, and remake events. API, SFTP or file exchange, and audited manual portal implementations share the same digest, idempotency, acknowledgment, reconciliation, and audit guarantees. The pilot may use a manual adapter, but lab-specific identifiers, statuses, and formats never enter the canonical Rx or fulfillment core.
+Lab connectivity is isolated inside OMS behind one provider-neutral Lab Adapter contract covering package submission, acceptance or rejection, revocation, Production Commitment, status, QA, shipment, and remake events. DCS/OMA, API, SFTP or file exchange, and audited manual portal implementations share the same canonical production semantics, digest, idempotency, acknowledgment, reconciliation, and audit guarantees. The pilot may use a manual adapter, but lab-specific identifiers, statuses, and formats never enter VZN Rx or alter the OMS canonical fulfillment model.
 
-HyperLight uses a Mission-operated Manual Pilot Queue as its first Lab Adapter. Authorized operators receive immutable Production Instruction Packages and explicitly record acceptance or rejection, revocation, Production Commitment, status, QA, shipment, and remake events. The queue is an audited action surface with the same digest, idempotency, acknowledgment, timestamps, role separation, and reconciliation guarantees as a later automated lab integration; email, spreadsheets, and undocumented portal handoffs are not production authority.
+HyperLight uses an OMS-operated Manual Pilot Queue as its first Lab Adapter. Authorized operators receive immutable Production Instruction Packages and explicitly record acceptance or rejection, revocation, Production Commitment, status, QA, shipment, and remake events. The queue is an audited action surface with the same DCS/OMA-lossless semantics, digest, idempotency, acknowledgment, timestamps, role separation, and reconciliation guarantees as a later automated lab integration; email, spreadsheets, and undocumented portal handoffs are not production authority.
 
 Every Production Attempt receives a QA Inspection under a versioned Mission-controlled Quality Policy. Mission's optical and quality governance process owns the specific numeric and categorical Critical QA Limits and required measurement methods; no pair-level role, merchant, or lab may broaden or waive them. Ordinary policy publication requires both a Mission Optical or Clinical Lead and a Mission Lab or Quality Lead. A narrowly assigned Mission System Administrator may publish any policy or limit change without secondary approval through an Administrative Break-Glass Publication: fresh step-up authentication, stated reason and evidence, policy and affected-case preview, immutable audit, and immediate post-publication notification to optical, quality, and security leads. Notification is not approval and cannot block the change. Merchant administrators never receive this authority. A configured QA Manager may approve only results within documented noncritical tolerance bands, with the check, measured result, allowed tolerance, reason, approver, and attempt recorded. Critical failures require rework, a new attempt, or incident disposition.
 
-Post-payment edits never mutate the original configuration or quote. They create a new revision and require revalidation; cancellation, partial refund, chargeback, frame substitution, production cutoff, and remake transitions are defined in the state machine and runbook.
+Post-payment edits never mutate the original configuration, consumer commitment, or OMS Brand quote. They create a new revision and require revalidation; cancellation, partial refund, chargeback, frame substitution, production cutoff, and remake transitions are defined in the state machine and runbook.
 
 Direct merchant edits to Mission-bound frame, lens, or service lines invalidate reconciliation and Production Release and quarantine the affected pair. Merchants resolve them through a Mission-controlled change workflow; unrelated order lines remain independently editable.
 
@@ -1684,9 +1976,9 @@ Mission does not directly mutate the channel's financial order. It creates a pai
       label: "Implement quarantine reasons and operator resolution paths",
     },
     {
-      id: "ops-lab-idempotent",
+      id: "ops-oms-idempotent",
       label:
-        "Make lab-job creation idempotent and record the external lab reference",
+        "Make the pair handoff idempotent; let OMS create exactly one initial job and retain lab bindings",
     },
     {
       id: "ops-cancel",
@@ -1709,7 +2001,7 @@ Mission does not directly mutate the channel's financial order. It creates a pai
     {
       id: "ops-runbook",
       label:
-        "Write runbooks for missing Rx, mismatch, frame unavailable, quote divergence, lab rejection, duplicate event, and tracking failure",
+        "Write runbooks for missing Rx, mismatch, frame unavailable, commitment/OMS quote divergence, lab rejection, duplicate event, and tracking failure",
     },
   ]}
 />
@@ -1724,7 +2016,7 @@ Mission does not directly mutate the channel's financial order. It creates a pai
   rows={[
     [
       "Domain unit tests",
-      "Rule evaluation, option dependencies, price book, quote expiry/signature, state transitions, and revision conflicts.",
+      "Rule evaluation, option dependencies, price book, commitment expiry/signature, OMS quote pinning, state transitions, and revision conflicts.",
     ],
     [
       "Optical matrix",
@@ -1744,11 +2036,11 @@ Mission does not directly mutate the channel's financial order. It creates a pai
     ],
     [
       "Security",
-      "Tenant isolation, authorization, upload abuse, secret rotation, sensitive-data egress, log redaction, and audit completeness.",
+      "Organization/Brand isolation, authorization, upload abuse, secret rotation, sensitive-data egress, log redaction, and audit completeness.",
     ],
     [
       "Experience",
-      "Mobile, accessibility, loading, resume, quote expiry, unsupported Rx, upload failure, and customer correction.",
+      "Mobile, accessibility, loading, resume, commitment expiry, unsupported Rx, upload failure, and customer correction.",
     ],
     [
       "End-to-end",
@@ -1782,7 +2074,7 @@ The suite must include quantity greater than one, configuration cloning per phys
     {
       id: "conf-three",
       label:
-        "Change product, currency, market, or configuration revision; stale quote is rejected.",
+        "Change product, currency, market, or configuration revision; stale commitment is rejected.",
     },
     {
       id: "conf-four",
@@ -1831,7 +2123,7 @@ The suite must include quantity greater than one, configuration cloning per phys
     [
       "Backend/platform engineers",
       "2.0",
-      "Canonical service, SQL, rules/quotes, integrations, reliability, security, and observability.",
+      "Canonical service, SQL, rules/commitments, OMS integration, reliability, security, and observability.",
     ],
     [
       "Shopify engineer",
@@ -1877,7 +2169,7 @@ The suite must include quantity greater than one, configuration cloning per phys
     ],
     [
       "Idempotency",
-      "Zero duplicate Commerce Orders, Order Package Bindings, cart packages, fulfillment cases, lab jobs, or outbound fulfillment effects.",
+      "Zero duplicate CommerceOrderMirrors, OrderPackageBindings, cart packages, ProductionReleaseCases, OMS inbound orders/lines/jobs, or outbound fulfillment effects.",
     ],
     [
       "Reliability",
@@ -1885,7 +2177,7 @@ The suite must include quantity greater than one, configuration cloning per phys
     ],
     [
       "Performance",
-      "Quote p95 under 750 ms after rule data is loaded; lab-job creation p95 within two minutes of all release predicates becoming true.",
+      "Consumer commitment p95 under 750 ms after rule data is loaded; OMS job creation p95 within two minutes of all release predicates becoming true.",
     ],
     [
       "Cart execution",
@@ -1924,7 +2216,7 @@ The suite must include quantity greater than one, configuration cloning per phys
     {
       id: "launch-financial",
       label:
-        "Quote, native cart, captured order, refund, and Mission records reconcile exactly.",
+        "Consumer commitment, native cart, captured order, refund, OMS Brand quote, and Mission records reconcile exactly.",
     },
     {
       id: "launch-reliability",
@@ -1934,7 +2226,7 @@ The suite must include quantity greater than one, configuration cloning per phys
     {
       id: "launch-security",
       label:
-        "Sensitive-field egress scan passes; tenant/auth/upload/audit reviews are complete.",
+        "Sensitive-field egress scan passes; organization/Brand, auth, upload, and audit reviews are complete.",
     },
     {
       id: "launch-fulfillment",
@@ -1949,7 +2241,7 @@ The suite must include quantity greater than one, configuration cloning per phys
     {
       id: "launch-experience",
       label:
-        "Mobile, accessibility, slow-network, expired quote, prescription-later, and accelerated checkout paths pass.",
+        "Mobile, accessibility, slow-network, expired commitment, prescription-later, and accelerated checkout paths pass.",
     },
     {
       id: "launch-operations",

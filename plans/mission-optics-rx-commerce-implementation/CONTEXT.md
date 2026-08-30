@@ -44,13 +44,21 @@ _Avoid_: Rx cart, prescription order
 The application of an Rx Configuration's existing lens selections to a different frame, producing a new configuration revision after full compatibility and pricing evaluation.
 _Avoid_: Frame swap, lens reselection
 
-**Commercial Order**:
-The merchant commerce platform's record of a completed purchase, which may group multiple independently managed Rx Configurations. A Commercial Order is not evidence that any prescription or manufacturing requirement has been approved.
-_Avoid_: Rx order, production order
+**Commerce Order Mirror**:
+VZN Rx's current representation of the authoritative consumer order re-fetched from the merchant commerce platform. It may group multiple independently managed Rx Configurations and is not the OMS canonical operational order or evidence that manufacturing is approved.
+_Avoid_: OMS order, production order, webhook payload
 
 **Order Package Binding**:
-Mission's pair-level assignment of one Cart Execution Plan and its bound commerce lines, financial allocations, and revisions within a Commercial Order.
-_Avoid_: Commercial Order, cart line, Fulfillment Case
+VZN Rx's pair-level assignment of one Cart Execution Plan and its bound commerce lines, financial allocations, and revisions within a Commerce Order Mirror.
+_Avoid_: Commerce Order Mirror, cart line, OMS Job
+
+**OMS Canonical Order**:
+The operational order accepted and normalized by OMS from one or more inbound order packages. OMS owns its order lines, submit snapshots, build specifications, jobs, fulfillment units, routing, QA, remakes, and shipment history.
+_Avoid_: Shopify order, Commerce Order Mirror, Rx Configuration
+
+**OMS Pair Handoff**:
+The sanitized, content-digested VZN Rx command that submits exactly one released Shopify prescription pair to OMS with immutable references and a purpose-bound protected payload handle. One accepted handoff creates one quantity-one OMS order line and one initial OMS Job.
+_Avoid_: Webhook body, prescription record, production snapshot
 
 **Conditional Full Payment**:
 Collection of the complete quoted frame and selected lens-package price through the commerce channel before prescription approval, with production explicitly conditional on later verification and any price difference handled through governed adjustment workflows.
@@ -97,32 +105,36 @@ A versioned Mission-approved rule set that determines which configurations may r
 _Avoid_: Estimation model, merchant optical rule
 
 **Production Release**:
-The Release Operator's final authorization to begin manufacturing after confirming Financial Clearance, quote integrity, Frame Allocation, approvals, and unresolved holds against the current revisions.
+The Release Operator's final VZN Rx authorization to hand one pair to OMS after confirming Financial Clearance, commitment integrity, inventory readiness, approvals, and unresolved holds against the current revisions.
 _Avoid_: Optical approval, paid status
 
 **Approval Basis**:
-The immutable set of prescription, measurement, frame, lens, quote, order, financial, and instruction revisions to which an approval applies.
+The immutable set of prescription, measurement, frame, lens, Consumer Cart Commitment, OMS Brand Quote, order, financial, and instruction revisions to which an approval applies.
 _Avoid_: Current data, latest version
 
 **Change Proposal**:
 A proposed post-checkout change to the agreed optical configuration or commercial amount that has no effect until the required party explicitly accepts it.
 _Avoid_: Automatic upgrade, price correction, substitution
 
-**Rx Quote**:
-An immutable, expiring commitment to the base commercial components and prices for one Rx Configuration; approved discounts, tax, and shipping remain outside the quoted base amounts.
-_Avoid_: Cart total, estimate
+**Consumer Cart Commitment**:
+VZN Rx's immutable, expiring commitment to the base shopper-facing commercial components, quantities, currency, and gross unit amounts for one Rx Configuration; Shopify remains authoritative for discounts, tax, shipping, payment, and refunds.
+_Avoid_: OMS Brand Quote, cart total, payment authorization
+
+**OMS Brand Quote**:
+The OMS-controlled Mission-to-Brand wholesale authorization for a production order, including immutable catalog and price-book revisions, dispatch deposit, delivery remainder, adjustments, and receivable projection.
+_Avoid_: Consumer Cart Commitment, Shopify payment, lab route cost
 
 **Cart Authorization**:
-A signed, expiring authorization for one commerce store to purchase a specific currency, component set, quantity, and locked gross unit amount for an Rx Configuration without exposing prescription information.
-_Avoid_: Prescription token, checkout approval, Rx Quote
+A signed, expiring, self-contained materialization of one Consumer Cart Commitment that authorizes one commerce store to purchase its specific currency, component set, quantity, and locked gross unit amount without exposing prescription information.
+_Avoid_: Prescription token, payment authorization, OMS Brand Quote
 
 **Commerce Snapshot**:
 The current authoritative representation of a cart, order, adjustment, or fulfillment retrieved from the order-owning commerce channel.
 _Avoid_: Webhook payload, cached order
 
 **Merchant Organization**:
-The Mission tenant representing one contracted merchant business that may own multiple Store Connections and shared program templates without making any commerce-platform identifier the canonical tenant identity.
-_Avoid_: Shopify store, customer account, prescription-access group
+The commerce-facing profile linking one framework-managed organization to one contracted OMS Brand. It may own multiple Store Connections and shared program templates, but it is not a second tenancy root or a replacement for OMS party roles and accounts.
+_Avoid_: Shopify store, customer account, prescription-access group, independent tenant
 
 **Pilot Program Owner**:
 The assignable Mission role accountable for coordinating a pilot's product, engineering, optical, lab, support, merchant, readiness, and go-live work without automatically receiving protected optical access or approval authority.
@@ -157,11 +169,11 @@ The validated merchant-specific theme, content, offering, support, and permitted
 _Avoid_: Custom storefront code, merchant optical rules
 
 **Cart Execution Plan**:
-Mission's provider-neutral instruction for creating the exact commercial component package associated with an Rx Quote and Rx Configuration.
+VZN Rx's provider-neutral instruction for creating the exact commercial component package associated with a Consumer Cart Commitment and Rx Configuration.
 _Avoid_: Shopify cart, Cart Authorization
 
 **Bound Commercial Component**:
-A frame, lens, or service line in a Commercial Order that is assigned to an Rx Configuration and covered by its Cart Authorization and Rx Quote.
+A frame, lens, or service line in a Commerce Order Mirror that is assigned to an Rx Configuration and covered by its Cart Authorization and Consumer Cart Commitment.
 _Avoid_: Ordinary order line, prescription data
 
 **Lens Specification**:
@@ -217,7 +229,7 @@ The recorded assignment of the cost of a replacement, remake, or adjustment to M
 _Avoid_: Customer-facing blame, automatic Mission liability
 
 **Financial Clearance**:
-The recorded determination that a Fulfillment Case has an acceptable payment and financial-risk state under the applicable channel policy and has no unresolved financial hold preventing production.
+The recorded VZN Rx determination that a Production Release Case has an acceptable Shopify payment and financial-risk state under the applicable channel policy and has no unresolved financial hold preventing OMS handoff.
 _Avoid_: Paid status, payment authorization
 
 **Financial Risk Event**:
@@ -276,16 +288,16 @@ _Avoid_: Product silhouette, rendering mesh, unverified trace
 A Mission-validated set of Frame Units or variants that share the geometry, lens shape, size, material, and manufacturing characteristics required for safe substitution.
 _Avoid_: Merchant substitution group, similar frame
 
-**Fulfillment Case**:
-Mission's operational record for producing and delivering one Rx Configuration arising from a Commercial Order.
-_Avoid_: Commercial order, lab job
+**Production Release Case**:
+VZN Rx's pre-production projection for one Rx Configuration and Order Package Binding. It records holds, approvals, Financial Clearance, and the current customer-safe OMS status without duplicating OMS production state.
+_Avoid_: OMS Canonical Order, OMS Job, Commerce Order Mirror
 
 **Production Attempt**:
-An immutable record of one manufacturing run within a Fulfillment Case, including the instructions, inputs, result, and disposition for that run.
-_Avoid_: Mutable lab job, fulfillment case
+The OMS-owned immutable record of one manufacturing run within an OMS Job, including the instructions, inputs, result, and disposition for that run.
+_Avoid_: Mutable lab job, Production Release Case
 
 **Production Instruction Package**:
-The immutable, content-digested manufacturing command for one Production Attempt, bound to the exact approved configuration, prescription, measurements, frame profile, Production Shape, lens specification, and authorization revisions.
+The OMS-owned immutable, content-digested manufacturing command for one Production Attempt, bound to the exact approved configuration, restricted production snapshot, frame profile, Production Shape, lens specification, and authorization revisions. Its canonical semantics are lossless to the accepted DCS/OMA production contract; every adapter either preserves that representation or supplies an approved, conformance-tested mapping.
 _Avoid_: Editable lab notes, current order data, generic work ticket
 
 **Lab Acknowledgment**:
@@ -293,11 +305,11 @@ The lab's explicit, timestamped acceptance, rejection, revocation confirmation, 
 _Avoid_: Webhook delivery, assumed receipt, Mission timestamp
 
 **Lab Adapter**:
-The provider-specific boundary that translates canonical Production Instruction Packages and lab events to and from API, SFTP, file-exchange, or audited manual workflows without exposing lab-specific identifiers, statuses, or formats to the Rx core.
-_Avoid_: Lab business logic in the Rx core, untracked portal work
+The OMS-owned provider-specific boundary that translates canonical Production Instruction Packages and lab events to and from API, DCS/OMA, SFTP, file-exchange, or audited manual workflows without exposing lab-specific identifiers, statuses, or formats to VZN Rx.
+_Avoid_: Lab business logic in VZN Rx, untracked portal work
 
 **Manual Pilot Queue**:
-The audited Mission-operated Lab Adapter used for the HyperLight pilot, where authorized operators receive immutable Production Instruction Packages and explicitly record acceptance, rejection, revocation, Production Commitment, QA, shipment, and remake events.
+The audited OMS-operated Lab Adapter used for the HyperLight pilot, where authorized operators receive immutable Production Instruction Packages and explicitly record acceptance, rejection, revocation, Production Commitment, QA, shipment, and remake events.
 _Avoid_: Shared inbox, spreadsheet handoff, undocumented lab portal
 
 **Quality Policy**:
@@ -329,7 +341,7 @@ The recorded point in a Production Attempt after which cancellation can no longe
 _Avoid_: Production start, shipment, cancellation deadline
 
 **Delivery Policy**:
-The merchant-selected rule determining whether Mission-managed pairs from a Commercial Order ship independently when ready or wait for the other Mission-managed pairs.
+The merchant-selected rule determining whether OMS-managed pairs from a Commerce Order Mirror ship independently when ready or wait for the other Mission-managed pairs.
 _Avoid_: Fulfillment status, shipping method
 
 **Fulfillment Destination Snapshot**:
