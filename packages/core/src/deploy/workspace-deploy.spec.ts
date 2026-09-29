@@ -1758,6 +1758,392 @@ describe("durable-background Netlify function emit (workspace, flag-gated)", () 
   });
 });
 
+describe("workspace deploy build concurrency", () => {
+  function trackedBuilds(options: { failApp?: string } = {}) {
+    const started: string[] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const runAppBuild = vi.fn(
+      async (build: { app: string; env: NodeJS.ProcessEnv }) => {
+        started.push(build.app);
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        inFlight--;
+        if (build.app === options.failApp) {
+          throw new Error(
+            `pnpm --filter ${build.app} build exited with code 1`,
+          );
+        }
+        writeVercelAppBuildOutput(tmpDir, build.app);
+      },
+    );
+    return { runAppBuild, started, maxInFlight: () => maxInFlight };
+  }
+
+  it("builds sequentially through execFile by default", async () => {
+    makeWorkspaceApp(tmpDir, "dispatch");
+    makeWorkspaceApp(tmpDir, "starter");
+    const { runAppBuild } = trackedBuilds();
+
+    await runWorkspaceDeploy({
+      workspaceRoot: tmpDir,
+      args: ["--preset=vercel", "--build-only"],
+      execFile: execFile as typeof execFileSync,
+      runAppBuild,
+    });
+
+    expect(execFile.mock.calls).toHaveLength(2);
+    expect(runAppBuild).not.toHaveBeenCalled();
+  });
+
+  it("runs up to --concurrency builds at once and assembles every app", async () => {
+    for (const app of ["dispatch", "mail", "plan", "starter"]) {
+      makeWorkspaceApp(tmpDir, app);
+    }
+    const builds = trackedBuilds();
+
+    await runWorkspaceDeploy({
+      workspaceRoot: tmpDir,
+      args: ["--preset=vercel", "--build-only", "--concurrency", "2"],
+      execFile: execFile as typeof execFileSync,
+      runAppBuild: builds.runAppBuild,
+    });
+
+    expect(execFile).not.toHaveBeenCalled();
+    expect(builds.maxInFlight()).toBe(2);
+    expect([...builds.started].sort()).toEqual([
+      "dispatch",
+      "mail",
+      "plan",
+      "starter",
+    ]);
+    expect(builds.runAppBuild.mock.calls[0][0].env).toMatchObject({
+      NITRO_PRESET: "vercel",
+      APP_BASE_PATH: `/${builds.started[0]}`,
+    });
+    for (const app of ["dispatch", "mail", "plan", "starter"]) {
+      expect(
+        fs.existsSync(
+          path.join(
+            tmpDir,
+            ".vercel",
+            "output",
+            "static",
+            app,
+            "assets",
+            "app.js",
+          ),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("reads AGENT_NATIVE_DEPLOY_CONCURRENCY when no option or flag is set", async () => {
+    makeWorkspaceApp(tmpDir, "dispatch");
+    makeWorkspaceApp(tmpDir, "starter");
+    const builds = trackedBuilds();
+    process.env.AGENT_NATIVE_DEPLOY_CONCURRENCY = "2";
+    try {
+      await runWorkspaceDeploy({
+        workspaceRoot: tmpDir,
+        args: ["--preset=vercel", "--build-only"],
+        execFile: execFile as typeof execFileSync,
+        runAppBuild: builds.runAppBuild,
+      });
+    } finally {
+      delete process.env.AGENT_NATIVE_DEPLOY_CONCURRENCY;
+    }
+
+    expect(execFile).not.toHaveBeenCalled();
+    expect(builds.maxInFlight()).toBe(2);
+  });
+
+  it("reads deployment.workspace.buildConcurrency from agent-native config", async () => {
+    for (const app of ["dispatch", "mail", "plan"]) {
+      makeWorkspaceApp(tmpDir, app);
+    }
+    fs.writeFileSync(
+      path.join(tmpDir, "agent-native.mts"),
+      "export default { deployment: { workspace: { buildConcurrency: 3 } } };\n",
+    );
+    const builds = trackedBuilds();
+
+    await runWorkspaceDeploy({
+      workspaceRoot: tmpDir,
+      args: ["--preset=vercel", "--build-only"],
+      execFile: execFile as typeof execFileSync,
+      runAppBuild: builds.runAppBuild,
+    });
+    expect(builds.maxInFlight()).toBe(3);
+
+    // The flag overrides the config file.
+    const flagged = trackedBuilds();
+    await runWorkspaceDeploy({
+      workspaceRoot: tmpDir,
+      args: ["--preset=vercel", "--build-only", "--concurrency=1"],
+      execFile: execFile as typeof execFileSync,
+      runAppBuild: flagged.runAppBuild,
+    });
+    expect(flagged.runAppBuild).not.toHaveBeenCalled();
+  });
+
+  it("logs a timing summary for concurrent builds", async () => {
+    makeWorkspaceApp(tmpDir, "dispatch");
+    makeWorkspaceApp(tmpDir, "starter");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await runWorkspaceDeploy({
+        workspaceRoot: tmpDir,
+        args: ["--preset=vercel", "--build-only", "--concurrency=2"],
+        execFile: execFile as typeof execFileSync,
+        runAppBuild: trackedBuilds().runAppBuild,
+      });
+      expect(log.mock.calls.flat().join("\n")).toMatch(
+        /Built 2 app\(s\): [\d.]+s of build time at concurrency 2; slowest (dispatch|starter)/,
+      );
+      for (const app of ["dispatch", "starter"]) {
+        expect(log).toHaveBeenCalledWith(
+          expect.stringMatching(
+            new RegExp(`^\\[workspace-deploy\\] {3}${app}: [\\d.]+s$`),
+          ),
+        );
+      }
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("names the failed build and skips builds that had not started", async () => {
+    for (const app of ["dispatch", "mail", "plan"]) {
+      makeWorkspaceApp(tmpDir, app);
+    }
+    const builds = trackedBuilds({ failApp: "dispatch" });
+
+    await expect(
+      runWorkspaceDeploy({
+        workspaceRoot: tmpDir,
+        args: ["--preset=vercel", "--build-only"],
+        concurrency: 2,
+        execFile: execFile as typeof execFileSync,
+        runAppBuild: builds.runAppBuild,
+      }),
+    ).rejects.toThrow(
+      /1 app build\(s\) failed \(dispatch: pnpm --filter dispatch build exited with code 1\)/,
+    );
+    expect(builds.started).toHaveLength(2);
+    expect(builds.started).not.toContain("plan");
+  });
+
+  it("keeps a skipped app's previous outputs and logs completed build times after a failure", async () => {
+    for (const app of ["dispatch", "mail", "plan"]) {
+      makeWorkspaceApp(tmpDir, app);
+    }
+    const previousOutput = path.join(tmpDir, "apps", "plan", "dist");
+    fs.mkdirSync(previousOutput, { recursive: true });
+    fs.writeFileSync(path.join(previousOutput, "index.html"), "previous");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await expect(
+        runWorkspaceDeploy({
+          workspaceRoot: tmpDir,
+          args: ["--preset=vercel", "--build-only"],
+          concurrency: 2,
+          execFile: execFile as typeof execFileSync,
+          runAppBuild: trackedBuilds({ failApp: "dispatch" }).runAppBuild,
+        }),
+      ).rejects.toThrow(/1 app build\(s\) failed/);
+      expect(
+        fs.readFileSync(path.join(previousOutput, "index.html"), "utf8"),
+      ).toBe("previous");
+      expect(log.mock.calls.flat().join("\n")).toMatch(
+        /Built 1 app\(s\)[^\n]*\n\[workspace-deploy\] {3}mail: [\d.]+s/,
+      );
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("sizes auto concurrency by cores, memory, and container limits", async () => {
+    for (const app of ["dispatch", "mail", "plan", "starter"]) {
+      makeWorkspaceApp(tmpDir, app);
+    }
+    const gib = 1024 ** 3;
+    vi.spyOn(os, "availableParallelism").mockReturnValue(4);
+    vi.spyOn(os, "totalmem").mockReturnValue(8 * gib);
+    const constrained = vi
+      .spyOn(process, "constrainedMemory")
+      .mockReturnValue(0);
+    try {
+      const builds = trackedBuilds();
+      await runWorkspaceDeploy({
+        workspaceRoot: tmpDir,
+        args: ["--preset=vercel", "--build-only", "--concurrency=auto"],
+        execFile: execFile as typeof execFileSync,
+        runAppBuild: builds.runAppBuild,
+      });
+      // 4 cores leave 3 builds; 8 GiB of memory allows 2.
+      expect(builds.maxInFlight()).toBe(2);
+
+      constrained.mockReturnValue(4 * gib);
+      const capped = trackedBuilds();
+      execFile.mockClear();
+      await runWorkspaceDeploy({
+        workspaceRoot: tmpDir,
+        args: ["--preset=vercel", "--build-only", "--concurrency=auto"],
+        execFile: execFile as typeof execFileSync,
+        runAppBuild: capped.runAppBuild,
+      });
+      // A 4 GiB container limit fits one build, so builds stay sequential.
+      expect(capped.runAppBuild).not.toHaveBeenCalled();
+      expect(execFile.mock.calls).toHaveLength(4);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("rejects a concurrency that is not a positive integer or auto", async () => {
+    makeWorkspaceApp(tmpDir, "dispatch");
+
+    await expect(
+      runWorkspaceDeploy({
+        workspaceRoot: tmpDir,
+        args: ["--preset=vercel", "--build-only", "--concurrency=0"],
+        execFile: execFile as typeof execFileSync,
+      }),
+    ).rejects.toThrow('--concurrency must be a positive integer or "auto"');
+  });
+
+  it("rejects --concurrency without a value instead of falling back to config", async () => {
+    makeWorkspaceApp(tmpDir, "dispatch");
+    fs.writeFileSync(
+      path.join(tmpDir, "agent-native.mts"),
+      "export default { deployment: { workspace: { buildConcurrency: 3 } } };\n",
+    );
+
+    await expect(
+      runWorkspaceDeploy({
+        workspaceRoot: tmpDir,
+        args: ["--preset=vercel", "--build-only", "--concurrency"],
+        execFile: execFile as typeof execFileSync,
+      }),
+    ).rejects.toThrow('--concurrency must be a positive integer or "auto"');
+  });
+});
+
+describe.skipIf(process.platform === "win32")(
+  "workspace deploy concurrent build subprocesses",
+  () => {
+    let previousPath: string | undefined;
+
+    beforeEach(() => {
+      previousPath = process.env.PATH;
+    });
+
+    afterEach(() => {
+      restoreEnv("PATH", previousPath);
+    });
+
+    function installFakePnpm(script: string): void {
+      const binDir = path.join(tmpDir, "fake-bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      const pnpm = path.join(binDir, "pnpm");
+      fs.writeFileSync(pnpm, `#!/bin/sh\n${script}\n`);
+      fs.chmodSync(pnpm, 0o755);
+      process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
+    }
+
+    it("runs pnpm per app and prefixes its output with the app name", async () => {
+      // The deploy clears stale app output before building, so the fake pnpm
+      // restores a prepared output the way a real build would emit one.
+      for (const app of ["dispatch", "starter"]) {
+        makeWorkspaceApp(tmpDir, app);
+        writeVercelAppBuildOutput(tmpDir, app);
+        fs.mkdirSync(path.join(tmpDir, "prebuilt"), { recursive: true });
+        fs.renameSync(
+          path.join(tmpDir, "apps", app, ".vercel"),
+          path.join(tmpDir, "prebuilt", app),
+        );
+      }
+      installFakePnpm(
+        [
+          'cp -R "prebuilt/$2" "apps/$2/.vercel"',
+          'echo "built $2 via $1 $3"',
+          'echo "warn $2" >&2',
+        ].join("\n"),
+      );
+      const stdout = vi
+        .spyOn(process.stdout, "write")
+        .mockImplementation(() => true);
+      const stderr = vi
+        .spyOn(process.stderr, "write")
+        .mockImplementation(() => true);
+      try {
+        await runWorkspaceDeploy({
+          workspaceRoot: tmpDir,
+          args: ["--preset=vercel", "--build-only", "--concurrency=2"],
+        });
+        const out = stdout.mock.calls.map(([chunk]) => String(chunk));
+        const err = stderr.mock.calls.map(([chunk]) => String(chunk));
+        expect(out).toContain("[dispatch] built dispatch via --filter build\n");
+        expect(out).toContain("[starter] built starter via --filter build\n");
+        expect(err).toContain("[dispatch] warn dispatch\n");
+        expect(err).toContain("[starter] warn starter\n");
+      } finally {
+        stdout.mockRestore();
+        stderr.mockRestore();
+      }
+    });
+
+    it("reports nonzero exits, signals, and likely out-of-memory kills", async () => {
+      for (const app of ["exits", "oom", "killed"]) {
+        makeWorkspaceApp(tmpDir, app);
+      }
+      installFakePnpm(
+        [
+          'case "$2" in',
+          "  exits) exit 3 ;;",
+          "  oom) exit 137 ;;",
+          "  killed) kill -9 $$ ;;",
+          "esac",
+        ].join("\n"),
+      );
+
+      const result = runWorkspaceDeploy({
+        workspaceRoot: tmpDir,
+        args: ["--preset=vercel", "--build-only", "--concurrency=3"],
+      });
+      await expect(result).rejects.toThrow(/^3 app build\(s\) failed/);
+      await expect(result).rejects.toThrow(
+        "exits: pnpm --filter exits build exited with code 3",
+      );
+      await expect(result).rejects.toThrow(
+        "oom: pnpm --filter oom build exited with code 137 (likely out of memory: lower --concurrency)",
+      );
+      await expect(result).rejects.toThrow(
+        "killed: pnpm --filter killed build was killed by SIGKILL (likely out of memory: lower --concurrency)",
+      );
+    });
+
+    it("reports a pnpm that cannot be started", async () => {
+      makeWorkspaceApp(tmpDir, "dispatch");
+      makeWorkspaceApp(tmpDir, "starter");
+      const emptyBin = path.join(tmpDir, "empty-bin");
+      fs.mkdirSync(emptyBin);
+      process.env.PATH = emptyBin;
+
+      await expect(
+        runWorkspaceDeploy({
+          workspaceRoot: tmpDir,
+          args: ["--preset=vercel", "--build-only", "--concurrency=2"],
+        }),
+      ).rejects.toThrow(
+        /dispatch: could not start pnpm --filter dispatch build: spawn pnpm ENOENT/,
+      );
+    });
+  },
+);
+
 function makeWorkspaceApp(
   workspaceRoot: string,
   app: string,
