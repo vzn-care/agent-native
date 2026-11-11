@@ -1,3 +1,4 @@
+import { VZN_CODE_IDENTITY } from "@shared/product-identity";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -50,6 +51,57 @@ function createDependencies(
 }
 
 describe("initializeDesktopStartup", () => {
+  it.each([
+    [true, "/application-support/VZN Code"],
+    [false, "/application-support/VZN Code Dev"],
+  ])(
+    "isolates the VZN profile with packaged=%s even when legacy data exists",
+    (isPackaged, expectedPath) => {
+      const { dependencies, events } = createDependencies({
+        isPackaged,
+        version: "1.0.0",
+        productIdentity: VZN_CODE_IDENTITY,
+        pathExists: vi.fn(() => true),
+      });
+
+      initializeDesktopStartup(dependencies);
+
+      expect(dependencies.setUserDataPath).toHaveBeenCalledWith(expectedPath);
+      expect(dependencies.pathExists).not.toHaveBeenCalled();
+      expect(events).toEqual([
+        "create-directory",
+        "set-user-data",
+        "sentry",
+        "logger",
+      ]);
+    },
+  );
+
+  it("honors an explicitly requested VZN test profile", () => {
+    const { dependencies } = createDependencies({
+      productIdentity: VZN_CODE_IDENTITY,
+      requestedUserDataPath: "/tmp/vzn-smoke-profile",
+    });
+    initializeDesktopStartup(dependencies);
+    expect(dependencies.setUserDataPath).toHaveBeenCalledWith(
+      "/tmp/vzn-smoke-profile",
+    );
+  });
+
+  it("does not fall back into the stock profile when VZN development isolation fails", () => {
+    const failure = new Error("Profile is not writable");
+    const { dependencies } = createDependencies({
+      isPackaged: false,
+      productIdentity: VZN_CODE_IDENTITY,
+      createDirectory: vi.fn(() => {
+        throw failure;
+      }),
+    });
+    expect(() => initializeDesktopStartup(dependencies)).toThrow(failure);
+    expect(dependencies.initializeSentry).not.toHaveBeenCalled();
+    expect(dependencies.initializeLogger).not.toHaveBeenCalled();
+  });
+
   it("keeps local broker state inside the active Desktop profile", () => {
     expect(resolveDesktopSsoBrokerStatePath("/isolated-canary-profile")).toBe(
       "/isolated-canary-profile/desktop-sso.json",

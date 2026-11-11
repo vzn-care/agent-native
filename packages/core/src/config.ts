@@ -62,6 +62,8 @@ export interface AgentNativeWorkspaceDeploymentConfig {
   appsDirectory?: string;
   authMode?: AgentNativeWorkspaceAuthMode;
   rootPage?: AgentNativeWorkspaceRootPage;
+  /** Maximum parallel app builds; "auto" sizes the pool by CPU and memory. */
+  buildConcurrency?: number | "auto";
 }
 
 export interface AgentNativeDiagnosticsConfig {
@@ -185,6 +187,11 @@ const AGENT_NATIVE_CONFIG_ENV_NODES: readonly AgentNativeConfigEnvNode[] = [
   { path: ["deployment", "workspace", "appsDirectory"], kind: "string" },
   { path: ["deployment", "workspace", "authMode"], kind: "string" },
   { path: ["deployment", "workspace", "rootPage"], kind: "string" },
+  {
+    path: ["deployment", "workspace", "buildConcurrency"],
+    kind: "string",
+    aliases: ["AGENT_NATIVE_DEPLOY_CONCURRENCY"],
+  },
   { path: ["diagnostics"], kind: "object" },
   { path: ["diagnostics", "failOnBuild"], kind: "boolean" },
   { path: ["instructions"], kind: "object" },
@@ -934,6 +941,10 @@ function normalizeDeploymentConfig(
     const appsDirectory = workspace.appsDirectory;
     const authMode = workspace.authMode;
     const rootPage = workspace.rootPage;
+    const buildConcurrency = normalizeBuildConcurrency(
+      workspace.buildConcurrency,
+      `${source}.workspace.buildConcurrency`,
+    );
     if (appsDirectory !== undefined && typeof appsDirectory !== "string") {
       throw new Error(`${source}.workspace.appsDirectory must be a string`);
     }
@@ -966,6 +977,7 @@ function normalizeDeploymentConfig(
           }),
       ...(authMode === undefined ? {} : { authMode }),
       ...(rootPage === undefined ? {} : { rootPage }),
+      ...(buildConcurrency === undefined ? {} : { buildConcurrency }),
     };
   }
 
@@ -976,6 +988,27 @@ function normalizeDeploymentConfig(
       ? {}
       : { workspace: normalizedWorkspace }),
   };
+}
+
+export function normalizeBuildConcurrency(
+  value: unknown,
+  source: string,
+): number | "auto" | undefined {
+  if (value === undefined) return undefined;
+  const normalized = typeof value === "string" ? value.trim() : value;
+  if (normalized === "auto") return "auto";
+  const parsed =
+    typeof normalized === "string" && normalized !== ""
+      ? Number(normalized)
+      : normalized;
+  if (
+    typeof parsed !== "number" ||
+    !Number.isSafeInteger(parsed) ||
+    parsed < 1
+  ) {
+    throw new Error(`${source} must be a positive integer or "auto"`);
+  }
+  return parsed;
 }
 
 function normalizeDiagnosticsConfig(

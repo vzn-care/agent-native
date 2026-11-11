@@ -66,6 +66,7 @@ vi.mock("electron", () => ({
 vi.mock("electron-updater", () => ({ autoUpdater: updaterState }));
 
 import { IPC } from "@shared/ipc-channels";
+import { VZN_CODE_IDENTITY } from "@shared/product-identity";
 
 let checkForAppUpdates: typeof import("./updates.js").checkForAppUpdates;
 let getCurrentUpdateStatus: typeof import("./updates.js").getCurrentUpdateStatus;
@@ -97,6 +98,26 @@ describe("desktop updates", () => {
       requestQuitAfterUpdatePreparation,
       registerUpdatesIpc,
     } = await import("./updates.js"));
+  });
+
+  it("never configures or contacts an updater for the internal VZN product", async () => {
+    vi.stubGlobal("__DESKTOP_PRODUCT_IDENTITY__", VZN_CODE_IDENTITY);
+    vi.stubGlobal("__AGENT_NATIVE_DESKTOP_BUILD_CHANNEL__", "release");
+    vi.resetModules();
+    const updates = await import("./updates.js");
+    updates.registerUpdatesIpc({
+      refreshApplicationMenu: vi.fn(),
+      focusMainWindow: vi.fn(),
+    });
+
+    await expect(updates.checkForAppUpdates()).resolves.toMatchObject({
+      state: "unsupported",
+    });
+    await updates.installDownloadedUpdate();
+    expect(updaterState.setFeedURL).not.toHaveBeenCalled();
+    expect(updaterState.checkForUpdates).not.toHaveBeenCalled();
+    expect(updaterState.downloadUpdate).not.toHaveBeenCalled();
+    expect(updaterState.quitAndInstall).not.toHaveBeenCalled();
   });
 
   it("shows a clear result when a manual check finds no update", async () => {

@@ -168,6 +168,7 @@ existing documented family or be added as an exact entry here.
 | `AGENT_NATIVE_MCP_*` / `MCP_*`                     | MCP catalog, hub, client, OAuth, server, and debug behavior.                                                                                    |
 | `AGENT_NATIVE_REALTIME_*`                          | Realtime gateway, transport, and public connection configuration.                                                                               |
 | `AGENT_NATIVE_CODE_*`                              | Code-agent profile, usage-file, home-directory, and test-response controls.                                                                     |
+| `VZN_CODE_SSH_CONFIG`                              | Optional absolute SSH configuration path used by the private VZN Code checkpoint transport's Git SSH adapter.                                  |
 | `AGENT_NATIVE_OM_*`                                | Observational-memory thresholds and recent-message limits.                                                                                      |
 | `AGENT_NATIVE_BUILD_*`                             | Build/deploy metadata and public analytics identifiers.                                                                                         |
 | `WORKSPACE_*`                                      | Local workspace runner, proxy, prewarm, app lifecycle, OAuth, and shared-vault controls.                                                        |

@@ -1,4 +1,5 @@
 import { IPC, type UpdateStatus } from "@shared/ipc-channels";
+import { DESKTOP_PRODUCT_IDENTITY } from "@shared/product-identity";
 import { DESKTOP_RELEASE_CHANNEL } from "@shared/release-channel";
 import { app, BrowserWindow, ipcMain, Notification } from "electron";
 import { autoUpdater } from "electron-updater";
@@ -10,9 +11,11 @@ declare const __AGENT_NATIVE_DESKTOP_BUILD_CHANNEL__: string | undefined;
 const UPDATE_SUPPORT = resolveDesktopUpdateSupport(
   app.isPackaged,
   app.getVersion(),
-  typeof __AGENT_NATIVE_DESKTOP_BUILD_CHANNEL__ === "string"
-    ? __AGENT_NATIVE_DESKTOP_BUILD_CHANNEL__
-    : "release",
+  DESKTOP_PRODUCT_IDENTITY
+    ? "internal"
+    : typeof __AGENT_NATIVE_DESKTOP_BUILD_CHANNEL__ === "string"
+      ? __AGENT_NATIVE_DESKTOP_BUILD_CHANNEL__
+      : "release",
 );
 
 const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;

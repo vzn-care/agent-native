@@ -10,6 +10,7 @@ import {
   MIGRATION_APP_ID,
   getCodeAgentGoal,
 } from "@shared/code-agents";
+import { DESKTOP_PRODUCT_IDENTITY } from "@shared/product-identity";
 import { isDesktopSettingsShortcut } from "@shared/desktop-shortcuts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
@@ -502,7 +503,9 @@ export default function App() {
           </div>
         </div>
         <DesktopIdentityGate
-          appName="Agent-Native Desktop"
+          appName={
+            DESKTOP_PRODUCT_IDENTITY?.productName ?? "Agent-Native Desktop"
+          }
           status={desktopIdentityStatus}
           onSignIn={() => window.electronAPI?.identity?.signIn() ?? false}
           onAuthenticate={(request) =>

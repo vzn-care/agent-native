@@ -6,6 +6,7 @@ import { defineConfig } from "electron-vite";
 import type { Plugin } from "vite";
 
 import desktopPackage from "./package.json";
+import type { DesktopProductIdentity } from "./shared/product-identity";
 
 function desktopDependencyExternal(
   exclude: string[],
@@ -225,94 +226,104 @@ const desktopDefines = {
   __AGENT_NATIVE_DESKTOP_BUILD_CHANNEL__: JSON.stringify(desktopBuildChannel),
 };
 
-export default defineConfig({
-  main: {
-    define: desktopDefines,
-    plugins: [assertElectronIsExternalPlugin()],
-    resolve: {
-      alias: {
-        "@shared": resolve("shared"),
+export function createDesktopConfig(
+  productIdentity: DesktopProductIdentity | null = null,
+) {
+  const productDefines = {
+    ...desktopDefines,
+    __DESKTOP_PRODUCT_IDENTITY__: JSON.stringify(productIdentity),
+  };
+  return defineConfig({
+    main: {
+      define: productDefines,
+      plugins: [assertElectronIsExternalPlugin()],
+      resolve: {
+        alias: {
+          "@shared": resolve("shared"),
+        },
       },
-    },
-    build: {
-      externalizeDeps: false,
-      rolldownOptions: {
-        external: desktopDependencyExternal(
-          [
-            "@agent-native/code-agents-ui",
-            "@agent-native/code-agents-ui/code-agents",
-            "@agent-native/shared-app-config",
-            "@modelcontextprotocol/core",
-            "@modelcontextprotocol/node",
-            "@modelcontextprotocol/server",
-            "@sentry/electron",
-            "electron-updater",
-            "zod",
-          ],
-          ["electron", "node-pty"],
-        ),
-        input: {
-          index: resolve("src/main/index.ts"),
-          "browser-control-host": resolve(
-            "src/native-host/browser-control-host.ts",
+      build: {
+        externalizeDeps: false,
+        rolldownOptions: {
+          external: desktopDependencyExternal(
+            [
+              "@agent-native/code-agents-ui",
+              "@agent-native/code-agents-ui/code-agents",
+              "@agent-native/shared-app-config",
+              "@modelcontextprotocol/core",
+              "@modelcontextprotocol/node",
+              "@modelcontextprotocol/server",
+              "@sentry/electron",
+              "electron-updater",
+              "zod",
+            ],
+            ["electron", "node-pty"],
           ),
-        },
-        output: {
-          format: "cjs",
-          entryFileNames: "[name].js",
-        },
-      },
-    },
-  },
-  preload: {
-    define: desktopDefines,
-    plugins: [inlinePreloadChunksPlugin()],
-    resolve: {
-      alias: {
-        "@shared": resolve("shared"),
-      },
-    },
-    build: {
-      externalizeDeps: false,
-      rolldownOptions: {
-        external: desktopDependencyExternal(
-          [
-            "@agent-native/code-agents-ui",
-            "@agent-native/code-agents-ui/code-agents",
-            "@agent-native/shared-app-config",
-          ],
-          ["electron"],
-        ),
-        input: {
-          index: resolve("src/preload/index.ts"),
-          webview: resolve("src/preload/webview.ts"),
-          "webview-chat": resolve("src/preload/webview-chat.ts"),
-        },
-        output: {
-          format: "cjs",
-          entryFileNames: "[name].js",
+          input: {
+            index: resolve("src/main/index.ts"),
+            "browser-control-host": resolve(
+              "src/native-host/browser-control-host.ts",
+            ),
+          },
+          output: {
+            format: "cjs",
+            entryFileNames: "[name].js",
+          },
         },
       },
     },
-  },
-  renderer: {
-    define: desktopDefines,
-    optimizeDeps: {
-      exclude: workspaceRendererPackages,
-    },
-    resolve: {
-      alias: {
-        "@shared": resolve("shared"),
-        "@renderer": resolve("src/renderer"),
-        react: resolve("node_modules/react"),
-        "react-dom": resolve("node_modules/react-dom"),
-        "react/jsx-dev-runtime": resolve(
-          "node_modules/react/jsx-dev-runtime.js",
-        ),
-        "react/jsx-runtime": resolve("node_modules/react/jsx-runtime.js"),
+    preload: {
+      define: productDefines,
+      plugins: [inlinePreloadChunksPlugin()],
+      resolve: {
+        alias: {
+          "@shared": resolve("shared"),
+        },
       },
-      dedupe: ["react", "react-dom", "@tanstack/react-query"],
+      build: {
+        externalizeDeps: false,
+        rolldownOptions: {
+          external: desktopDependencyExternal(
+            [
+              "@agent-native/code-agents-ui",
+              "@agent-native/code-agents-ui/code-agents",
+              "@agent-native/shared-app-config",
+            ],
+            ["electron"],
+          ),
+          input: {
+            index: resolve("src/preload/index.ts"),
+            webview: resolve("src/preload/webview.ts"),
+            "webview-chat": resolve("src/preload/webview-chat.ts"),
+          },
+          output: {
+            format: "cjs",
+            entryFileNames: "[name].js",
+          },
+        },
+      },
     },
-    plugins: [react(), tailwindcss({ optimize: false })],
-  },
-});
+    renderer: {
+      define: productDefines,
+      optimizeDeps: {
+        exclude: workspaceRendererPackages,
+      },
+      resolve: {
+        alias: {
+          "@shared": resolve("shared"),
+          "@renderer": resolve("src/renderer"),
+          react: resolve("node_modules/react"),
+          "react-dom": resolve("node_modules/react-dom"),
+          "react/jsx-dev-runtime": resolve(
+            "node_modules/react/jsx-dev-runtime.js",
+          ),
+          "react/jsx-runtime": resolve("node_modules/react/jsx-runtime.js"),
+        },
+        dedupe: ["react", "react-dom", "@tanstack/react-query"],
+      },
+      plugins: [react(), tailwindcss({ optimize: false })],
+    },
+  });
+}
+
+export default createDesktopConfig();

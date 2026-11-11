@@ -8,6 +8,7 @@ import {
   sortDesktopApps,
   type AppConfig,
 } from "@shared/app-registry";
+import { DESKTOP_PRODUCT_IDENTITY } from "@shared/product-identity";
 import {
   normalizeDesktopShortcutAccelerator,
   type DesktopShortcutBehavior,
@@ -125,10 +126,45 @@ function defaultRemoteConnectorSettings(): RemoteConnectorSettings {
 }
 
 function defaultApps(): AppConfig[] {
-  return DESKTOP_DEFAULT_APPS.map((def) => ({
+  const apps = DESKTOP_DEFAULT_APPS.map((def) => ({
     ...def,
     mode: def.mode ?? "prod",
   }));
+  if (DESKTOP_PRODUCT_IDENTITY?.appId !== "care.vzn.code") return apps;
+  const configuredUrl = process.env.VZN_CODE_APP_URL?.trim();
+  if (!configuredUrl) return apps;
+  let url: URL;
+  try {
+    url = new URL(configuredUrl);
+  } catch {
+    throw new Error("VZN_CODE_APP_URL must be an absolute web URL");
+  }
+  if (
+    url.toString() !== configuredUrl ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    (url.protocol !== "https:" &&
+      !(
+        url.protocol === "http:" &&
+        ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+      ))
+  )
+    throw new Error("VZN_CODE_APP_URL must use HTTPS or local HTTP");
+  apps.push({
+    id: "vzn-code",
+    name: "VZN Code",
+    icon: "Code",
+    description: "Coding projects and tasks on your Studio host",
+    url: configuredUrl,
+    devPort: 0,
+    isBuiltIn: false,
+    enabled: true,
+    mode: "prod",
+    workspaceSso: false,
+  });
+  return apps;
 }
 
 function canonicalizeDefaultApp(appConfig: AppConfig, def: AppConfig) {
