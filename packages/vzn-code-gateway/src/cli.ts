@@ -6,17 +6,22 @@ import { startControlGateway } from "./control.ts";
 const [
   stateDirectory,
   tokenPath,
-  browserOrigin,
+  browserOriginsText,
   portText = "45840",
   publicOrigin,
   taskControl,
 ] = process.argv.slice(2);
-if (!stateDirectory || !tokenPath || !browserOrigin) {
+if (!stateDirectory || !tokenPath || !browserOriginsText) {
   console.error(
-    "Usage: node src/cli.ts <host-state-directory> <owner-token-file> <browser-origin> [port] [public-origin-or-dash] [allow-task-control]",
+    "Usage: node src/cli.ts <host-state-directory> <owner-token-file> <comma-separated-browser-origins> [port] [public-origin-or-dash] [allow-task-control]",
   );
   process.exitCode = 1;
 } else {
+  const allowedOrigins = browserOriginsText.split(",");
+  if (allowedOrigins.some((origin) => !origin || origin !== origin.trim()))
+    throw new Error(
+      "Browser origins must be a comma-separated list of exact origins",
+    );
   const tokenInfo = await stat(tokenPath);
   if (
     !tokenInfo.isFile() ||
@@ -32,7 +37,7 @@ if (!stateDirectory || !tokenPath || !browserOrigin) {
   const gateway = await startControlGateway({
     socketPath: resolve(stateDirectory, "host.sock"),
     token: (await readFile(tokenPath, "utf8")).trim(),
-    allowedOrigins: [browserOrigin],
+    allowedOrigins,
     port,
     publicOrigin: publicOrigin === "-" ? undefined : publicOrigin,
     allowTaskControl: taskControl === "allow-task-control",

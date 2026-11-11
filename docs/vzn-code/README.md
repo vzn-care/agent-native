@@ -14,16 +14,16 @@ See [baseline.md](baseline.md) for reconciliation of the fork's existing build-c
 
 ## Components
 
-| Component        | Location                               | Implemented behavior                                                                                                |
-| ---------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Electron desktop | `packages/desktop-app`                 | Separate VZN app ID, URL scheme, profile, build configuration, and disabled upstream updater                        |
-| Host             | `packages/vzn-code-host`               | Private Unix IPC, SQLite ownership and operations journal, project catalog, task controller, event replay           |
-| Runtime          | `packages/vzn-code-runtime`            | Existing Agent-Native CLI execution, process-group cancellation, native session association, transcript replay      |
+| Component        | Location                               | Implemented behavior                                                                                                                    |
+| ---------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Electron desktop | `packages/desktop-app`                 | Separate VZN app ID, URL scheme, profile, build configuration, and disabled upstream updater                                            |
+| Host             | `packages/vzn-code-host`               | Private Unix IPC, SQLite ownership and operations journal, project catalog, task controller, event replay                               |
+| Runtime          | `packages/vzn-code-runtime`            | Existing Agent-Native CLI execution, process-group cancellation, native session association, transcript replay                          |
 | Browser gateway  | `packages/vzn-code-gateway`            | Loopback HTTP bridge, exact RPC origin and authority checks, owner-token enrollment with HttpOnly session cookie, optional task control |
-| Web app          | sibling `vzn-code-workspace/apps/code` | Studio connection, projects/workspaces, task controls and transcript; capability-gated unavailable states           |
-| Gitea            | `packages/vzn-code-gitea`              | Idempotent private repo enrollment, deploy-key identity binding, revocation API, checkpoint protection readback     |
-| Checkpoints      | `packages/vzn-code-workspace`          | Separate index/worktree/untracked layers, digest verification, isolated restore, explicit immutable-ref transport   |
-| Preview          | `packages/vzn-code-preview`            | Separate-origin private HTTP/WebSocket routing component; integration gate remains open                             |
+| Web app          | sibling `vzn-code-workspace/apps/code` | Studio connection, projects/workspaces, task controls and transcript; capability-gated unavailable states                               |
+| Gitea            | `packages/vzn-code-gitea`              | Idempotent private repo enrollment, deploy-key identity binding, revocation API, checkpoint protection readback                         |
+| Checkpoints      | `packages/vzn-code-workspace`          | Separate index/worktree/untracked layers, digest verification, isolated restore, explicit immutable-ref transport                       |
+| Preview          | `packages/vzn-code-preview`            | Separate-origin private HTTP/WebSocket routing component; integration gate remains open                                                 |
 
 ## Development commands
 
@@ -61,7 +61,9 @@ The browser bridge needs a locally generated, private owner-token file. It never
 node packages/vzn-code-gateway/src/cli.ts /tmp/vzn-code-host /absolute/private/owner-token http://localhost:PORT 45840 - allow-task-control
 ```
 
-Replace `PORT` with the actual web gateway origin (no path or trailing slash). The final argument explicitly enables task-control RPCs; omit it for a read-only gateway. The owner opens the gateway's `/connect` page and enters the token there. The gateway issues a private HttpOnly browser session; the Code app never handles the owner token. This is a single-owner development enrollment flow, not completed multi-device identity management. For remote HTTPS, the cookie uses `Secure; SameSite=None`; third-party-cookie restrictions and private device ingress still need physical-browser validation.
+Replace `PORT` with the actual web gateway origin (no path or trailing slash). The browser-origin argument accepts a comma-separated list of **exact** origins, for example `http://127.0.0.1:8417,https://code-preview.example`. Do not use a wildcard or a shared Vercel suffix; add each preview deployment origin explicitly. The final argument explicitly enables task-control RPCs; omit it for a read-only gateway. The owner opens the gateway's `/connect` page and enters the token there. The gateway issues a private HttpOnly browser session; the Code app never handles the owner token. This is a single-owner development enrollment flow, not completed multi-device identity management.
+
+An HTTPS preview page must connect to a private HTTPS gateway origin, such as a Tailscale Serve address, configured as the fifth CLI argument. Keep the gateway listener on `127.0.0.1`, retain exact browser-origin checks, and use Tailscale Serve rather than Funnel. The preview browser may request local-network access before it can reach a tailnet address; grant it only for the trusted preview origin. The remote gateway cookie uses `Secure; SameSite=None`, so browser third-party-cookie policy must be verified in the intended browser. A local Code page may continue using a separate loopback gateway and cookie. Browser connection state is scoped to each Code page origin.
 
 For another physical device, use an approved private HTTPS tunnel such as Tailscale Serve, preserve the configured public Host header, and configure that HTTPS origin as the gateway's fifth argument. The gateway itself always binds to 127.0.0.1. No public exposure or Tailscale configuration was performed by this implementation.
 

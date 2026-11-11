@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -49,6 +50,76 @@ test("gateway rejects unsafe credentials and non-TLS remote origins before openi
     }),
     /without a path/,
   );
+});
+
+test("private HTTPS gateway admits exact local and preview origins", async (t) => {
+  const localOrigin = "http://127.0.0.1:8417";
+  const previewOrigin = "https://code-preview.example";
+  const publicOrigin = "https://studio.example";
+  const token = randomBytes(32).toString("base64url");
+  const gateway = await startControlGateway({
+    socketPath: "/unavailable-vzn-host.sock",
+    token,
+    allowedOrigins: [localOrigin, previewOrigin],
+    publicOrigin,
+  });
+  t.after(() => gateway.close());
+  const request = (
+    path: string,
+    method: string,
+    origin: string,
+    body?: string,
+  ) =>
+    new Promise<{
+      status: number;
+      headers: Record<string, string | string[] | undefined>;
+    }>((resolve, reject) => {
+      const call = httpRequest(
+        `${gateway.url}${path}`,
+        {
+          method,
+          headers: {
+            Host: new URL(publicOrigin).host,
+            Origin: origin,
+            ...(body
+              ? { "Content-Type": "application/x-www-form-urlencoded" }
+              : { "Access-Control-Request-Method": "POST" }),
+          },
+        },
+        (response) => {
+          response.resume();
+          response.on("end", () =>
+            resolve({
+              status: response.statusCode ?? 0,
+              headers: response.headers,
+            }),
+          );
+        },
+      );
+      call.on("error", reject);
+      call.end(body);
+    });
+  const enrollment = await request(
+    "/v1/enroll",
+    "POST",
+    publicOrigin,
+    new URLSearchParams({ token }).toString(),
+  );
+  assert.equal(enrollment.status, 200);
+  assert.match(
+    String(enrollment.headers["set-cookie"] ?? ""),
+    /SameSite=None; Secure/,
+  );
+  const preflight = (origin: string) => request("/v1/rpc", "OPTIONS", origin);
+  for (const origin of [localOrigin, previewOrigin]) {
+    const response = await preflight(origin);
+    assert.equal(response.status, 204);
+    assert.equal(response.headers["access-control-allow-origin"], origin);
+    assert.equal(response.headers["access-control-allow-credentials"], "true");
+  }
+  const rejected = await preflight("https://other-preview.example");
+  assert.equal(rejected.status, 403);
+  assert.equal(rejected.headers["access-control-allow-origin"], undefined);
 });
 
 test("HTTP admission rejects unauthenticated origins and disabled mutations before touching host IPC", async (t) => {
