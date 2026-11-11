@@ -79,7 +79,7 @@ The actual built upstream CLI has been exercised through its explicit fixture en
 
 The implementation supplies substantial source for C01–C12 and C17, with working local component tests. The milestone acceptance gates are still incomplete. In particular:
 
-1. Connect the branded desktop and browser to the same supervised Studio host; establish persistent service startup and real authenticated device enrollment. The new web app currently uses a small custom task interface; integration of the shared CodeAgentsApp surface remains open.
+1. Connect the branded desktop and browser to the same Studio host; install the included Mac LaunchAgent in a durable checkout, verify login-after-reboot, and establish real authenticated device enrollment. A disposable LaunchAgent passed install, health, crash restart, and uninstall checks on Studio. The new web app currently uses a small custom task interface; integration of the shared CodeAgentsApp surface remains open.
 2. Run the host/gateway integrations with Unix socket access and a second physical device. The local web UI and HTTP/WebSocket preview component have been exercised separately. Preview registration must still be wired to durable workspace ownership and private HTTPS ingress.
 3. Install and pin Gitea privately on Studio; prove real SSH key isolation and protected immutable refs. API readback and a temporary bare Git repository do not establish Gitea server enforcement.
 4. Implement native/Dev Container environment recipes and readiness, then the complete **Run here**, **Work here**, and **Return to Studio** transactions and conflict review.

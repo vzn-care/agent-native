@@ -20,9 +20,28 @@ node packages/vzn-code-host/src/cli.ts list-projects
 The default state directory is `~/.vzn-code-host`. Every command accepts
 `--state-dir /absolute/private/directory`; keep it short enough for a Unix socket
 path (100 bytes maximum). State must live on a local disk, outside cloud-sync
-folders. A user supervisor may launch `serve`; this package does not install a
-launch agent or startup task. SIGTERM/SIGINT explicitly stop the host and request
-cancellation of managed work. Closing a client connection does not stop work.
+folders. On macOS, the included user LaunchAgent installer starts the host at
+login and restarts it after a crash. SIGTERM/SIGINT explicitly stop the host and
+request cancellation of managed work. Closing a client connection does not stop
+work.
+
+```sh
+node packages/vzn-code-host/src/launchd-cli.ts install --runtime-executable "$PWD/packages/core/bin/agent-native.js"
+node packages/vzn-code-host/src/launchd-cli.ts status
+node packages/vzn-code-host/src/cli.ts health
+node packages/vzn-code-host/src/launchd-cli.ts uninstall
+```
+
+Installation writes a private `~/Library/LaunchAgents/care.vzn.code.host.plist`
+and starts it in the current user's GUI domain. It uses the current absolute
+Node and CLI paths. Reinstall after moving this checkout or changing the Node
+installation. The default state is `~/.vzn-code-host`; `install` also accepts
+`--state-dir` for a different local, private directory. Keep it off synced
+storage. `uninstall` boots the service out and removes only the installer-owned
+plist; it stops managed work as a deliberate host shutdown. The service is
+independent of the Desktop window. `status` reports whether the plist exists
+and launchd has loaded the service; `health` verifies that the host answers.
+The installer does not set up Gitea or the browser gateway.
 
 To opt into the existing CLI runtime:
 
@@ -150,10 +169,11 @@ key reuse, the real runtime adapter against a test CLI, cancellation during CLI
 readiness, and protocol validation. Separate socket and CLI subprocess tests
 exercise the actual IPC boundary when local socket binding is allowed.
 
-The current managed execution sandbox rejects Unix socket bind with `EPERM`.
-Those transport tests remain enabled and fail visibly in this environment; they
-must pass on the target Mac before claiming background-host acceptance. The
-subprocess runtime fixture proves lifecycle wiring, not a real provider task.
-Closing/reopening Desktop, launch-at-login/crash recovery under an OS supervisor,
-real provider execution, cross-device controls, Windows, and verified
+The earlier cloud sandbox rejected Unix socket bind with `EPERM`. On Mac,
+host and gateway IPC tests passed. A disposable LaunchAgent was installed in a
+temporary home, answered health, restarted with a new PID after `SIGKILL`, and
+was uninstalled. This proves launchd supervision on Studio without installing
+a permanent service. The subprocess runtime fixture proves lifecycle wiring,
+not a real provider task. Login-after-reboot, closing/reopening the branded
+Desktop, real provider execution, cross-device controls, Windows, and verified
 checkout/return remain separate acceptance gates.
