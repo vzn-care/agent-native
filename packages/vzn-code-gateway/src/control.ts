@@ -242,12 +242,13 @@ export async function startControlGateway(options: {
       }
       if (
         envelope.kind === "hello" &&
-        !options.allowTaskControl &&
-        envelope.capabilities.includes("task-control")
+        (envelope.capabilities.includes("repository-provisioning") ||
+          (!options.allowTaskControl &&
+            envelope.capabilities.includes("task-control")))
       )
         throw new HostError(
           "FORBIDDEN",
-          "Task control is disabled on this gateway",
+          "This capability is not exposed on this gateway",
         );
       const client = new HostClient(options.socketPath);
       try {
@@ -263,7 +264,6 @@ export async function startControlGateway(options: {
         const { protocolVersion: _version, requestId: _id, ...body } = envelope;
         let result = await client.request(body);
         if (
-          !options.allowTaskControl &&
           (envelope.kind === "hello" || envelope.kind === "health") &&
           result !== null &&
           typeof result === "object"
@@ -271,12 +271,16 @@ export async function startControlGateway(options: {
           const hostResult = result as Record<string, unknown>;
           result = {
             ...hostResult,
-            executionAvailable: false,
-            remoteControlAvailable: false,
+            ...(!options.allowTaskControl
+              ? { executionAvailable: false, remoteControlAvailable: false }
+              : {}),
             ...(Array.isArray(hostResult.capabilities)
               ? {
                   capabilities: hostResult.capabilities.filter(
-                    (capability) => capability !== "task-control",
+                    (capability) =>
+                      capability !== "repository-provisioning" &&
+                      (options.allowTaskControl ||
+                        capability !== "task-control"),
                   ),
                 }
               : {}),

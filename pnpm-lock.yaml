@@ -4284,6 +4284,9 @@ importers:
       '@vzn-care/code-runtime':
         specifier: workspace:*
         version: link:../vzn-code-runtime
+      '@vzn-code/gitea':
+        specifier: workspace:*
+        version: link:../vzn-code-gitea
     devDependencies:
       '@types/node':
         specifier: ^24.2.1

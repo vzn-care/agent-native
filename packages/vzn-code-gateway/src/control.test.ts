@@ -220,6 +220,17 @@ test("HTTP admission rejects unauthenticated origins and disabled mutations befo
   });
   assert.equal(mutation.status, 403);
   assert.equal((await mutation.json()).error.code, "FORBIDDEN");
+  const provisioning = await call({
+    kind: "enroll-repository",
+    projectId: "pilot",
+  });
+  assert.equal(provisioning.status, 403);
+  assert.equal((await provisioning.json()).error.code, "FORBIDDEN");
+  const provisionCapability = await call({
+    kind: "hello",
+    capabilities: ["repository-provisioning"],
+  });
+  assert.equal(provisionCapability.status, 403);
   const capability = await call({
     kind: "hello",
     capabilities: ["task-control"],

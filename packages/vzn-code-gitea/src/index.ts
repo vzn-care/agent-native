@@ -86,7 +86,7 @@ function fail(code: GiteaErrorCode): never {
   throw new GiteaError(code);
 }
 
-function segment(value: string): string {
+export function validateGiteaSegment(value: string): string {
   if (
     !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(value) ||
     value.endsWith(".git")
@@ -95,6 +95,7 @@ function segment(value: string): string {
   }
   return value;
 }
+const segment = validateGiteaSegment;
 
 function positiveId(value: unknown): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
@@ -110,7 +111,7 @@ function object(value: unknown): JsonObject {
   return value as JsonObject;
 }
 
-function publicKey(value: string): string {
+export function normalizePublicKey(value: string): string {
   // Only public SSH keys; strip comments so identity cannot change with a label.
   const match =
     /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521)) ([A-Za-z0-9+/]+={0,2})(?: [^\r\n]*)?$/.exec(
@@ -192,7 +193,7 @@ function apiKey(value: unknown): ApiKey {
   }
   let normalized: string;
   try {
-    normalized = publicKey(key.key);
+    normalized = normalizePublicKey(key.key);
   } catch {
     fail("invalid_response");
   }
@@ -466,7 +467,7 @@ export class GiteaAdapter {
     },
   ): Promise<DeviceDeployKey> {
     const title = keyTitle(repository.projectId, input.deviceId);
-    const key = publicKey(input.publicKey);
+    const key = normalizePublicKey(input.publicKey);
     if (typeof input.readOnly !== "boolean") fail("invalid_input");
     const path = await this.#verifyRepository(repository);
     let claimed: boolean;
@@ -532,7 +533,7 @@ export class GiteaAdapter {
       fail("identity_conflict");
     positiveId(key.keyId);
     const title = keyTitle(repository.projectId, key.deviceId);
-    const expectedKey = publicKey(key.publicKey);
+    const expectedKey = normalizePublicKey(key.publicKey);
     const path = await this.#verifyRepository(repository);
     const found = (await this.#keys(path)).find(
       (entry) => entry.id === key.keyId,

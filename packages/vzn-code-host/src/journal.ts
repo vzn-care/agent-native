@@ -1,9 +1,27 @@
+// guard:allow-unscoped — this OS-owner-only host journal's workspaces table is not a framework ownable resource.
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
 import { HostError, identifier } from "./protocol.ts";
 
 export type Project = { id: string; root: string; repository: string };
+export type RepositoryIntent = {
+  projectId: string;
+  instanceId: string;
+  enrollmentId: string;
+  owner: string;
+  name: string;
+  repositoryId: number | null;
+  protectionVerified: boolean;
+};
+export type DeployKeyIntent = {
+  projectId: string;
+  deviceId: string;
+  publicKey: string;
+  readOnly: boolean;
+  keyId: number | null;
+  state: "enroll-intent" | "active" | "revoke-intent" | "revoked";
+};
 export type Workspace = {
   id: string;
   projectId: string;
@@ -52,7 +70,7 @@ export class Journal {
       "PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;",
     );
     const version = this.db.prepare("PRAGMA user_version").get();
-    if (version?.user_version !== 0 && version?.user_version !== 1) {
+    if (![0, 1, 2].includes(Number(version?.user_version))) {
       this.db.close();
       throw new HostError(
         "INCOMPATIBLE_JOURNAL",
@@ -70,7 +88,10 @@ export class Journal {
       CREATE TABLE IF NOT EXISTS events (cursor INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, source_device TEXT NOT NULL, segment_id TEXT NOT NULL, sequence INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(source_device, segment_id, sequence));
       CREATE INDEX IF NOT EXISTS session_event_cursor ON events(session_id, cursor);
       CREATE TABLE IF NOT EXISTS key_identities (public_key TEXT PRIMARY KEY, instance_id TEXT NOT NULL, project_id TEXT NOT NULL, device_id TEXT NOT NULL);
-      PRAGMA user_version = 1;
+      CREATE TABLE IF NOT EXISTS repository_intents (project_id TEXT PRIMARY KEY REFERENCES projects(id), instance_id TEXT NOT NULL, enrollment_id TEXT NOT NULL UNIQUE, owner TEXT NOT NULL, name TEXT NOT NULL, repository_id INTEGER, protection_verified INTEGER NOT NULL DEFAULT 0);
+      CREATE UNIQUE INDEX IF NOT EXISTS one_project_per_repo ON repository_intents(instance_id, owner, name);
+      CREATE TABLE IF NOT EXISTS deploy_key_intents (project_id TEXT NOT NULL REFERENCES repository_intents(project_id), device_id TEXT NOT NULL, public_key TEXT NOT NULL, read_only INTEGER NOT NULL, key_id INTEGER, state TEXT NOT NULL CHECK(state IN ('enroll-intent', 'active', 'revoke-intent', 'revoked')), PRIMARY KEY(project_id, device_id));
+      PRAGMA user_version = 2;
     `);
   }
   claimKeyIdentity(identity: {
@@ -179,6 +200,258 @@ export class Journal {
         "Project catalog requires pagination beyond 1000 projects",
       );
     return rows.map((row) => ({ ...row }) as Project);
+  }
+
+  repositoryIntent(projectId: string): RepositoryIntent | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT project_id AS projectId, instance_id AS instanceId, enrollment_id AS enrollmentId, owner, name, repository_id AS repositoryId, protection_verified AS protectionVerified FROM repository_intents WHERE project_id = ?",
+      )
+      .get(projectId);
+    if (!row) return undefined;
+    return {
+      ...row,
+      protectionVerified: row.protectionVerified === 1,
+    } as RepositoryIntent;
+  }
+  beginRepositoryIntent(
+    input: Omit<RepositoryIntent, "repositoryId" | "protectionVerified">,
+  ): RepositoryIntent {
+    return this.transaction(() => {
+      const project = this.project(input.projectId);
+      if (project.repository !== input.name)
+        throw new HostError(
+          "REPOSITORY_CONFLICT",
+          "Project repository identity differs from enrollment",
+        );
+      const previous = this.repositoryIntent(input.projectId);
+      if (previous) {
+        if (
+          previous.instanceId !== input.instanceId ||
+          previous.owner !== input.owner ||
+          previous.name !== input.name
+        )
+          throw new HostError(
+            "REPOSITORY_CONFLICT",
+            "Repository intent differs from persisted identity",
+          );
+        return previous;
+      }
+      const reserved = this.db
+        .prepare(
+          "SELECT project_id FROM repository_intents WHERE instance_id = ? AND owner = ? AND name = ?",
+        )
+        .get(input.instanceId, input.owner, input.name);
+      if (reserved)
+        throw new HostError(
+          "REPOSITORY_CONFLICT",
+          "Repository is already bound to another project",
+        );
+      this.db
+        .prepare(
+          "INSERT INTO repository_intents (project_id, instance_id, enrollment_id, owner, name) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run(
+          input.projectId,
+          input.instanceId,
+          input.enrollmentId,
+          input.owner,
+          input.name,
+        );
+      const created = this.repositoryIntent(input.projectId);
+      if (!created)
+        throw new HostError(
+          "JOURNAL_WRITE_FAILED",
+          "Repository intent was not persisted",
+        );
+      return created;
+    });
+  }
+  bindRepository(projectId: string, repositoryId: number): RepositoryIntent {
+    return this.transaction(() => {
+      const intent = this.repositoryIntent(projectId);
+      if (
+        !intent ||
+        (intent.repositoryId !== null && intent.repositoryId !== repositoryId)
+      )
+        throw new HostError(
+          "REPOSITORY_CONFLICT",
+          "Repository ID differs from persisted identity",
+        );
+      this.db
+        .prepare(
+          "UPDATE repository_intents SET repository_id = ? WHERE project_id = ?",
+        )
+        .run(repositoryId, projectId);
+      const bound = this.repositoryIntent(projectId);
+      if (!bound)
+        throw new HostError(
+          "JOURNAL_WRITE_FAILED",
+          "Repository binding was not persisted",
+        );
+      return bound;
+    });
+  }
+  verifyRepositoryProtection(
+    projectId: string,
+    repositoryId: number,
+  ): RepositoryIntent {
+    return this.transaction(() => {
+      const intent = this.repositoryIntent(projectId);
+      if (!intent || intent.repositoryId !== repositoryId)
+        throw new HostError(
+          "REPOSITORY_CONFLICT",
+          "Repository ID is not bound",
+        );
+      this.db
+        .prepare(
+          "UPDATE repository_intents SET protection_verified = 1 WHERE project_id = ?",
+        )
+        .run(projectId);
+      const verified = this.repositoryIntent(projectId);
+      if (!verified)
+        throw new HostError(
+          "JOURNAL_WRITE_FAILED",
+          "Protection result was not persisted",
+        );
+      return verified;
+    });
+  }
+  deployKeyIntent(
+    projectId: string,
+    deviceId: string,
+  ): DeployKeyIntent | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT project_id AS projectId, device_id AS deviceId, public_key AS publicKey, read_only AS readOnly, key_id AS keyId, state FROM deploy_key_intents WHERE project_id = ? AND device_id = ?",
+      )
+      .get(projectId, deviceId);
+    if (!row) return undefined;
+    return { ...row, readOnly: row.readOnly === 1 } as DeployKeyIntent;
+  }
+  beginDeployKeyIntent(
+    input: Omit<DeployKeyIntent, "keyId" | "state">,
+  ): DeployKeyIntent {
+    return this.transaction(() => {
+      const repository = this.repositoryIntent(input.projectId);
+      if (!repository?.protectionVerified)
+        throw new HostError(
+          "REPOSITORY_NOT_READY",
+          "Repository protection must be verified first",
+        );
+      const previous = this.deployKeyIntent(input.projectId, input.deviceId);
+      if (previous) {
+        if (
+          previous.publicKey !== input.publicKey ||
+          previous.readOnly !== input.readOnly ||
+          previous.state === "revoke-intent" ||
+          previous.state === "revoked"
+        )
+          throw new HostError(
+            "DEVICE_KEY_CONFLICT",
+            "Device key identity or revocation differs",
+          );
+        return previous;
+      }
+      this.db
+        .prepare(
+          "INSERT INTO deploy_key_intents (project_id, device_id, public_key, read_only, state) VALUES (?, ?, ?, ?, 'enroll-intent')",
+        )
+        .run(
+          input.projectId,
+          input.deviceId,
+          input.publicKey,
+          input.readOnly ? 1 : 0,
+        );
+      const created = this.deployKeyIntent(input.projectId, input.deviceId);
+      if (!created)
+        throw new HostError(
+          "JOURNAL_WRITE_FAILED",
+          "Device key intent was not persisted",
+        );
+      return created;
+    });
+  }
+  bindDeployKey(
+    projectId: string,
+    deviceId: string,
+    keyId: number,
+  ): DeployKeyIntent {
+    return this.transaction(() => {
+      const intent = this.deployKeyIntent(projectId, deviceId);
+      if (
+        !intent ||
+        (intent.keyId !== null && intent.keyId !== keyId) ||
+        (intent.state !== "enroll-intent" && intent.state !== "active")
+      )
+        throw new HostError(
+          "DEVICE_KEY_CONFLICT",
+          "Deploy key differs from persisted intent",
+        );
+      this.db
+        .prepare(
+          "UPDATE deploy_key_intents SET key_id = ?, state = 'active' WHERE project_id = ? AND device_id = ?",
+        )
+        .run(keyId, projectId, deviceId);
+      const bound = this.deployKeyIntent(projectId, deviceId);
+      if (!bound)
+        throw new HostError(
+          "JOURNAL_WRITE_FAILED",
+          "Device key binding was not persisted",
+        );
+      return bound;
+    });
+  }
+  beginDeployKeyRevocation(
+    projectId: string,
+    deviceId: string,
+  ): DeployKeyIntent {
+    return this.transaction(() => {
+      const intent = this.deployKeyIntent(projectId, deviceId);
+      if (!intent)
+        throw new HostError("NOT_FOUND", "Device key does not exist");
+      if (intent.state !== "revoked")
+        this.db
+          .prepare(
+            "UPDATE deploy_key_intents SET state = 'revoke-intent' WHERE project_id = ? AND device_id = ?",
+          )
+          .run(projectId, deviceId);
+      const pending = this.deployKeyIntent(projectId, deviceId);
+      if (!pending)
+        throw new HostError(
+          "JOURNAL_WRITE_FAILED",
+          "Revocation intent was not persisted",
+        );
+      return pending;
+    });
+  }
+  finishDeployKeyRevocation(
+    projectId: string,
+    deviceId: string,
+  ): DeployKeyIntent {
+    return this.transaction(() => {
+      const intent = this.deployKeyIntent(projectId, deviceId);
+      if (
+        !intent ||
+        (intent.state !== "revoke-intent" && intent.state !== "revoked")
+      )
+        throw new HostError(
+          "DEVICE_KEY_CONFLICT",
+          "Revocation intent was not recorded",
+        );
+      this.db
+        .prepare(
+          "UPDATE deploy_key_intents SET state = 'revoked' WHERE project_id = ? AND device_id = ?",
+        )
+        .run(projectId, deviceId);
+      const revoked = this.deployKeyIntent(projectId, deviceId);
+      if (!revoked)
+        throw new HostError(
+          "JOURNAL_WRITE_FAILED",
+          "Revocation result was not persisted",
+        );
+      return revoked;
+    });
   }
 
   createWorkspace(

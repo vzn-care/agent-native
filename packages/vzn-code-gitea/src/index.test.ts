@@ -496,6 +496,7 @@ test("malformed provider results fail closed", async () => {
 test("private key material and mismatched SSH wire types are rejected before provisioning", async () => {
   const h = harness([]);
   for (const key of [
+    // guard:allow-secret-literal — this is malformed fake input for a private-key rejection test.
     "-----BEGIN OPENSSH PRIVATE KEY-----\nFAKE",
     publicKey.replace("ssh-ed25519 ", "ssh-rsa "),
     "ssh-ed25519 invalid",

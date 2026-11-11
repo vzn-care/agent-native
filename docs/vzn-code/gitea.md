@@ -1,10 +1,10 @@
 # Private Gitea adapter and rollout gates
 
-`packages/vzn-code-gitea` is a private, dependency-free TypeScript provisioning package for Studio. It does not install Gitea, change Studio configuration, read credentials from the environment, execute Git, or enable handoff. No live server has been validated by these offline tests.
+`packages/vzn-code-gitea` is a private, dependency-free TypeScript provisioning package for Studio. It does not install Gitea, change Studio configuration, read credentials from the environment, execute Git, or enable handoff. A separate Mac pilot validated selected operations against Gitea 28.3.0; the offline tests alone do not prove server enforcement.
 
 ## Host integration
 
-Construct `GiteaAdapter` in the trusted Studio host with a pinned `instanceId`, the configured private HTTPS `serviceUrl`, a credential-store `resolveToken` callback, and a durable `keyIdentities` registry. The instance URL is administrator-controlled configuration: do not accept it from a model, browser, task, or remote request. Private-network destinations are intentional for this transport. TLS verification stays enabled. Redirects, URL credentials, query strings, fragments, traversal, and HTTP are rejected. Subpath installations are supported.
+The trusted Studio host now constructs `GiteaAdapter` from a private `gitea.json` file with a pinned `instanceId`, private HTTPS `serviceUrl`, token-file resolver, and durable journal-backed `keyIdentities` registry. The instance URL is administrator-controlled configuration: do not accept it from a model, browser, task, or remote request. Private-network destinations are intentional for this transport. TLS verification stays enabled. Redirects, URL credentials, query strings, fragments, traversal, and HTTP are rejected. Subpath installations are supported. See [host.md](host.md) for the configuration and local-owner CLI.
 
 Provisioning credentials stay inside the callback and Authorization header. Errors contain a fixed classification and optional HTTP status, never URLs, response bodies, token values, or underlying exception causes. This is an internal server package; do not expose its constructor or credential callback through agent actions. The host must authorize the current caller's project/device before using the adapter.
 

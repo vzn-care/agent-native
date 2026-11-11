@@ -27,6 +27,16 @@ export type Request = Envelope &
         root: string;
         repository: string;
       }
+    | { kind: "enroll-repository"; projectId: string }
+    | { kind: "repository-status"; projectId: string }
+    | {
+        kind: "ensure-deploy-key";
+        projectId: string;
+        deviceId: string;
+        publicKey: string;
+        readOnly: boolean;
+      }
+    | { kind: "revoke-deploy-key"; projectId: string; deviceId: string }
     | {
         kind: "create-workspace";
         operationId: string;
@@ -134,6 +144,34 @@ export function parseRequest(input: unknown): Request {
         projectId: identifier(r.projectId, "projectId"),
         root: string(r.root, "root"),
         repository: string(r.repository, "repository"),
+      };
+      break;
+    case "enroll-repository":
+    case "repository-status":
+      result = {
+        ...common,
+        kind: r.kind,
+        projectId: identifier(r.projectId, "projectId"),
+      };
+      break;
+    case "ensure-deploy-key":
+      if (typeof r.readOnly !== "boolean")
+        throw new HostError("INVALID_REQUEST", "Invalid readOnly");
+      result = {
+        ...common,
+        kind: r.kind,
+        projectId: identifier(r.projectId, "projectId"),
+        deviceId: identifier(r.deviceId, "deviceId"),
+        publicKey: string(r.publicKey, "publicKey"),
+        readOnly: r.readOnly,
+      };
+      break;
+    case "revoke-deploy-key":
+      result = {
+        ...common,
+        kind: r.kind,
+        projectId: identifier(r.projectId, "projectId"),
+        deviceId: identifier(r.deviceId, "deviceId"),
       };
       break;
     case "create-workspace":

@@ -4,6 +4,7 @@ import type {
   AgentNativeRuntime,
   RuntimeEvent,
 } from "../../vzn-code-runtime/src/index.ts";
+import type { HostGitea } from "./gitea.ts";
 import { Journal } from "./journal.ts";
 import type { Run } from "./journal.ts";
 import { CAPABILITIES, HostError, identifier } from "./protocol.ts";
@@ -13,11 +14,16 @@ export type HostRuntime = Pick<
   AgentNativeRuntime,
   "start" | "inspect" | "cancel" | "transcript" | "readiness"
 >;
-export type HostOptions = { runtime?: HostRuntime; deviceId?: string };
+export type HostOptions = {
+  runtime?: HostRuntime;
+  deviceId?: string;
+  gitea?: HostGitea;
+};
 export class HostController {
   readonly journal: Journal;
   readonly deviceId: string;
   readonly runtime: HostRuntime | undefined;
+  readonly gitea: HostGitea | undefined;
   private active = new Set<Promise<void>>();
   private persistenceFailure = false;
   private starting = new Set<Promise<unknown>>();
@@ -27,9 +33,14 @@ export class HostController {
     this.journal = journal;
     this.deviceId = identifier(options.deviceId ?? "studio", "deviceId");
     this.runtime = options.runtime;
+    this.gitea = options.gitea;
   }
   get capabilities(): string[] {
-    return [...CAPABILITIES, ...(this.runtime ? ["task-control"] : [])];
+    return [
+      ...CAPABILITIES,
+      ...(this.runtime ? ["task-control"] : []),
+      ...(this.gitea ? ["repository-provisioning"] : []),
+    ];
   }
   async reconcile(): Promise<void> {
     const runs = this.journal.activeRuns();
@@ -83,7 +94,7 @@ export class HostController {
         return {
           status: this.persistenceFailure ? "degraded" : "ready",
           protocolVersion: 1,
-          schemaVersion: 1,
+          schemaVersion: 2,
           pid: process.pid,
           deviceId: this.deviceId,
           executionAvailable: Boolean(this.runtime),
@@ -92,6 +103,33 @@ export class HostController {
         };
       case "list-projects":
         return { projects: this.journal.listProjects() };
+      case "repository-status":
+        return this.journal.repositoryIntent(request.projectId) ?? null;
+      case "enroll-repository":
+        if (!this.gitea)
+          throw new HostError(
+            "GITEA_UNAVAILABLE",
+            "Private Git is not configured",
+          );
+        return this.gitea.enrollProject(request.projectId);
+      case "ensure-deploy-key":
+        if (!this.gitea)
+          throw new HostError(
+            "GITEA_UNAVAILABLE",
+            "Private Git is not configured",
+          );
+        return this.gitea.ensureDeviceKey(request);
+      case "revoke-deploy-key":
+        if (!this.gitea)
+          throw new HostError(
+            "GITEA_UNAVAILABLE",
+            "Private Git is not configured",
+          );
+        await this.gitea.revokeDeviceKey(request.projectId, request.deviceId);
+        return this.journal.deployKeyIntent(
+          request.projectId,
+          request.deviceId,
+        );
       case "create-workspace":
         return this.journal.createWorkspace(
           request.operationId,

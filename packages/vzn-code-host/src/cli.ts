@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import { AgentNativeRuntime } from "../../vzn-code-runtime/src/index.ts";
 import { HostClient } from "./client.ts";
@@ -69,15 +70,25 @@ async function main(): Promise<void> {
   if (
     command !== "health" &&
     command !== "list-projects" &&
-    command !== "register-project"
+    command !== "register-project" &&
+    command !== "gitea-enroll" &&
+    command !== "gitea-status" &&
+    command !== "gitea-key-add" &&
+    command !== "gitea-key-revoke"
   )
     throw new HostError(
       "USAGE",
-      "Commands: serve, health, list-projects, register-project <id> <absolute-root> <repository-identity> [operation-id]; all accept --state-dir <absolute-directory>",
+      "Commands: serve, health, list-projects, register-project <id> <absolute-root> <repository-identity> [operation-id], gitea-enroll <project-id>, gitea-status <project-id>, gitea-key-add <project-id> <device-id> <absolute-public-key-file> <read|write>, gitea-key-revoke <project-id> <device-id>; all accept --state-dir <absolute-directory>",
     );
   const client = new HostClient(join(stateDir, "host.sock"));
   try {
-    await client.request({ kind: "hello", capabilities: ["project-catalog"] });
+    const provisioning = command.startsWith("gitea-");
+    await client.request({
+      kind: "hello",
+      capabilities: [
+        provisioning ? "repository-provisioning" : "project-catalog",
+      ],
+    });
     if (command === "register-project") {
       const [projectId, root, repository, operationId = randomUUID()] = args;
       if (!projectId || !root || !repository || args.length > 4)
@@ -96,6 +107,63 @@ async function main(): Promise<void> {
           }),
         ),
       );
+    } else if (command === "gitea-enroll" || command === "gitea-status") {
+      const [projectId] = args;
+      if (!projectId || args.length !== 1)
+        throw new HostError("USAGE", `${command} requires a project ID`);
+      console.log(
+        JSON.stringify(
+          await client.request({
+            kind:
+              command === "gitea-enroll"
+                ? "enroll-repository"
+                : "repository-status",
+            projectId,
+          }),
+        ),
+      );
+    } else if (command === "gitea-key-add") {
+      const [projectId, deviceId, publicKeyFile, access] = args;
+      if (
+        !projectId ||
+        !deviceId ||
+        !publicKeyFile ||
+        !isAbsolute(publicKeyFile) ||
+        (access !== "read" && access !== "write") ||
+        args.length !== 4
+      )
+        throw new HostError(
+          "USAGE",
+          "gitea-key-add requires project ID, device ID, absolute public-key file, and read or write",
+        );
+      const key = (await client.request({
+        kind: "ensure-deploy-key",
+        projectId,
+        deviceId,
+        publicKey: readFileSync(publicKeyFile, "utf8").trim(),
+        readOnly: access === "read",
+      })) as { keyId: number; readOnly: boolean };
+      console.log(
+        JSON.stringify({
+          projectId,
+          deviceId,
+          keyId: key.keyId,
+          readOnly: key.readOnly,
+        }),
+      );
+    } else if (command === "gitea-key-revoke") {
+      const [projectId, deviceId] = args;
+      if (!projectId || !deviceId || args.length !== 2)
+        throw new HostError(
+          "USAGE",
+          "gitea-key-revoke requires project ID and device ID",
+        );
+      const result = await client.request({
+        kind: "revoke-deploy-key",
+        projectId,
+        deviceId,
+      });
+      console.log(JSON.stringify(result));
     } else {
       if (args.length)
         throw new HostError("USAGE", `${command} accepts only --state-dir`);

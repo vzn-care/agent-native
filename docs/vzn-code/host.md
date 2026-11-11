@@ -55,6 +55,44 @@ is explicitly unverified until a real task succeeds. Tasks default to the runtim
 select `full-auto` for files and commands. Verified terminated provider failures
 are `errored`; paused approvals and unverified process states remain `uncertain`.
 
+## Private Gitea provisioning
+
+To enable local-owner Gitea operations, save a mode `0600` `gitea.json` in the
+host state directory before starting the host. Use an existing private Gitea
+instance and a separate mode `0600` token file. The configuration stores the
+token **path**, never the token value:
+
+```json
+{
+  "instanceId": "private-git",
+  "serviceUrl": "https://git.example.test",
+  "owner": "studio",
+  "studioUsername": "studio",
+  "tokenFile": "/absolute/private/path/to/token"
+}
+```
+
+The host rejects a shared, linked, or wrong-owner configuration/token file and
+an invalid HTTPS service URL. Restart the host after changing the configuration.
+Register the project with its intended Gitea repository **name** in the
+`repository` field, then use the local CLI:
+
+```sh
+node packages/vzn-code-host/src/cli.ts gitea-enroll my-project
+node packages/vzn-code-host/src/cli.ts gitea-status my-project
+node packages/vzn-code-host/src/cli.ts gitea-key-add my-project child-a /absolute/path/to/child-a.pub read
+node packages/vzn-code-host/src/cli.ts gitea-key-revoke my-project child-a
+```
+
+The CLI is the trusted local-owner operation. The browser gateway rejects all
+repository provisioning requests and hides that capability. The host records
+enrollment and key intents before calling Gitea, pins the returned repository
+and key IDs, verifies the protected `handoff/**` rule before key operations,
+and persists revocation intent before deletion. A revoked device identity
+cannot be silently reenrolled. Private keys stay on the device; only public
+keys enter the host journal. These operations do not yet grant a child checkout
+or publish checkpoints.
+
 Windows deliberately returns `UNSUPPORTED_PLATFORM`: a protected named pipe and
 Windows process-tree ownership are not implemented. An insecure default-DACL
 pipe is not used as a fallback.
@@ -88,6 +126,10 @@ records. Idle connections close; callers reconnect and negotiate again.
 | `health`           | negotiated connection  | none                                                                           | Status, PID, schema/protocol version, device, runtime availability           |
 | `register-project` | `project-catalog`      | `operationId,projectId,root,repository`                                        | `{id,root,repository}` with canonical existing root                          |
 | `list-projects`    | `project-catalog`      | none                                                                           | `{projects}`                                                                 |
+| `enroll-repository` | `repository-provisioning` | `projectId` | Private Gitea repository binding after protection readback |
+| `repository-status` | `repository-provisioning` | `projectId` | Persisted enrollment/protection intent |
+| `ensure-deploy-key` | `repository-provisioning` | `projectId,deviceId,publicKey,readOnly` | Verified device deploy key binding |
+| `revoke-deploy-key` | `repository-provisioning` | `projectId,deviceId` | Persisted revoked key record |
 | `create-workspace` | `project-catalog`      | `operationId,workspaceId,projectId`                                            | `{id,projectId,owner,epoch}`                                                 |
 | `list-workspaces`  | `project-catalog`      | `projectId`                                                                    | `{workspaces}`                                                               |
 | `session-events`   | `session-event-replay` | `sessionId,after,limit`                                                        | `{events,nextCursor}`                                                        |
@@ -115,8 +157,9 @@ an assumption that provider sessions move between machines.
   `BEGIN EXCLUSIVE` lock prevents two service instances from owning one state
   directory. The OS releases that lock on process death; PID reuse is irrelevant.
 - The journal uses WAL, `synchronous=FULL`, foreign keys, and immediate
-  transactions. Schema versions newer than this host are rejected. The initial
-  schema is additive; future versions require coordinated backup/migration.
+  transactions. Schema versions newer than this host are rejected. Schema v2
+  adds repository and deploy-key intents without changing prior records;
+  future versions require coordinated backup/migration.
 - Project IDs and canonical roots are unique. Until isolated worktrees exist,
   one project may have only one workspace, so alternate workspace IDs cannot
   launch competing writers into the same root.
@@ -149,6 +192,9 @@ an assumption that provider sessions move between machines.
 - `claimKeyIdentity()` permanently binds a canonical SSH public key to one Gitea
   instance/project/device tuple. Identical claims succeed; reuse for another
   identity fails, including after restart. The Gitea adapter normalizes keys.
+- Repository and key intents survive ambiguous API failures. Retrying a project
+  reuses its enrollment ID and expected repository ID. A revocation intent
+  survives restart and fences stale key enrollment until deletion is verified.
 
 These are fail-safe reservation semantics, not a claim of exactly-once external
 process side effects. A crash between spawn and durable acknowledgement requires
@@ -170,10 +216,8 @@ readiness, and protocol validation. Separate socket and CLI subprocess tests
 exercise the actual IPC boundary when local socket binding is allowed.
 
 The earlier cloud sandbox rejected Unix socket bind with `EPERM`. On Mac,
-host and gateway IPC tests passed. A disposable LaunchAgent was installed in a
-temporary home, answered health, restarted with a new PID after `SIGKILL`, and
-was uninstalled. This proves launchd supervision on Studio without installing
-a permanent service. The subprocess runtime fixture proves lifecycle wiring,
-not a real provider task. Login-after-reboot, closing/reopening the branded
-Desktop, real provider execution, cross-device controls, Windows, and verified
-checkout/return remain separate acceptance gates.
+host and gateway IPC tests passed. The durable host and gateway LaunchAgents
+restarted after forced termination. A read-only Codex CLI task completed from
+the branded Desktop, and an isolated host completed the live private Gitea
+enrollment/revocation path. Login-after-reboot, cross-device controls, Windows,
+backup/restore, and verified checkout/return remain separate acceptance gates.

@@ -11,6 +11,7 @@ import { isAbsolute, join } from "node:path";
 
 import { HostController } from "./controller.ts";
 import type { HostOptions } from "./controller.ts";
+import { loadHostGitea } from "./gitea.ts";
 import { Journal } from "./journal.ts";
 import { HostLease } from "./lease.ts";
 import { HostError, MAX_FRAME_BYTES, parseRequest } from "./protocol.ts";
@@ -94,7 +95,11 @@ export async function startHost(
       "journal.sqlite-shm",
     ])
       privateFile(join(stateDir, name));
-    controller = new HostController(journal, options);
+    const gitea = options.gitea ?? loadHostGitea(stateDir, journal);
+    controller = new HostController(journal, {
+      ...options,
+      ...(gitea ? { gitea } : {}),
+    });
     await controller.reconcile();
     const activeController = controller;
     const activeJournal = journal;
@@ -184,8 +189,14 @@ export async function startHost(
                 "NEGOTIATION_REQUIRED",
                 "Send hello before other requests",
               );
-            const required =
-              request.kind === "session-events"
+            const required = [
+              "enroll-repository",
+              "repository-status",
+              "ensure-deploy-key",
+              "revoke-deploy-key",
+            ].includes(request.kind)
+              ? "repository-provisioning"
+              : request.kind === "session-events"
                 ? "session-event-replay"
                 : request.kind === "health"
                   ? undefined

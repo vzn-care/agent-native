@@ -26,7 +26,15 @@ Gitea 28.3.0 was installed through Homebrew and started as a user LaunchAgent wi
 
 Against that live instance, the adapter created two disposable private repositories and repeated enrollment with identical repository IDs. It refused to adopt an unrelated existing repository. It registered separate write and read-only keys for project A and a separate write key for B. A's write key could push an explicit `incoming/child/probe` ref, while A's read-only key could fetch but not push. A's key could not fetch B, and B's key could fetch B. A's key could not create a nested `handoff/task/probe` ref. After the Studio user created an accepted ref, A's key could not fast-forward, force-update, or delete it; the Studio user could not make a non-fast-forward force update. The accepted object ID remained unchanged. The adapter rejected A's key under B, revoked A's write key, confirmed a second revocation was safe, and observed the old key denied over a new SSH connection while A's other key still worked. The denial persisted after a Gitea restart; the host journal rejected cross-project reuse after reopening.
 
-These are disposable Mac-only probes. The pilot did not test child HTTPS/API credentials, interrupted transfer reconciliation, a coordinated off-Studio backup and isolated restore, or a real child checkout. Host integration must persist enrollment and revocation intent before enabling handoff. No checkpoint refs were sent to GitHub.
+These are disposable Mac-only probes. The pilot did not test child HTTPS/API credentials, interrupted transfer reconciliation, a coordinated off-Studio backup and isolated restore, or a real child checkout. No checkpoint refs were sent to GitHub.
+
+### Trusted-host Gitea integration
+
+The host now loads an owner-controlled private `gitea.json` and token file on startup. Schema v2 durably records enrollment, protection, device-key, and revocation state. The owner-only IPC capability and CLI can enroll and inspect a repository, add a public deploy key, and revoke it; the browser gateway rejects these requests. An interrupted API-call test reopened the journal and recovered the same enrollment identity, key intent, and revocation fence. A second test rejected a shared configuration file before the host opened IPC.
+
+An isolated copy of the durable host's version-1 journal migrated to version 2 and retained its registered project count. The test copy was removed afterward; the running durable host was not restarted or migrated during the preview sign-in wait.
+
+An isolated host process connected to the private Gitea instance, enrolled a fourth disposable repository through the new CLI, and read back its protected binding. It added a device key, observed a successful pinned-SSH fetch, revoked the key, and observed the next fetch denied. After restarting that host process, enrollment returned the same repository ID and stale key enrollment failed with `DEVICE_KEY_CONFLICT`. The durable Studio host remains on its current configuration until the preview task finishes; this test did not enable live checkout or checkpoint transfer.
 
 ## Results
 
@@ -36,7 +44,7 @@ These are disposable Mac-only probes. The pilot did not test child HTTPS/API cre
 | Core prerequisite packages       | Built agentkit, recap-cli, shared-app-config, toolkit, core and code-agents-ui                   | Local generated exports available                                                                                                                                     |
 | Fork concurrency compatibility   | 136 tests passed; core typecheck and full build passed                                           | Public config/CLI/env behavior restored on upstream implementation                                                                                                    |
 | Desktop identity                 | Earlier 66 tests and 22 focused Desktop tests passed; typecheck and `build:vzn` passed           | Isolated VZN profile, embedded Code workflow, same-session sign-in, host connection, and completed read-only task were observed                                       |
-| Host                             | 16 passed on Mac; no skipped tests; disposable LaunchAgent restart passed                        | SQLite transactions, durable grants, retry/cancel races, event replay, process-controller integration, SIGKILL lease recovery, live private IPC, and launchd restart  |
+| Host                             | 18 passed on Mac; no skipped tests; disposable LaunchAgent restart passed                        | SQLite transactions, durable grants and provisioning intents, retry/cancel races, event replay, live private IPC, and launchd restart                                  |
 | Runtime adapter                  | 6 real-subprocess tests passed; typecheck passed                                                 | Owned process cancellation, session linkage, transcript replay, orphan uncertainty, failed-exit recovery and credential-gap retry                                     |
 | Existing upstream runtime        | Actual built CLI fixture and one read-only Codex CLI task completed                              | Existing Mac owner sign-in completed one real provider request; browser and second-device provider flow remain open                                                   |
 | Gitea API adapter                | 20 tests passed; strict typecheck passed; live Mac pilot passed selected gates                   | Private repository enrollment, key isolation/revocation, and protected-ref enforcement on Gitea 28.3.0; backup, transfer, and second-device proof remain open         |
@@ -92,4 +100,4 @@ The branded desktop has not been launched as an installed application, signed or
 
 ## Next acceptance gate
 
-Verify login-after-reboot and reconnect after a gateway restart. Complete private Gitea host integration and backup. Physical-device access and provider execution from the remote preview browser remain separate gates before handoff and environment milestones.
+Verify login-after-reboot and reconnect after a gateway restart. Enable the tested Gitea integration on the durable host and complete a coordinated backup. Physical-device access and provider execution from the remote preview browser remain separate gates before handoff and environment milestones.

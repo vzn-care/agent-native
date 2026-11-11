@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@vzn-care/code-runtime": "workspace:*"
+    "@vzn-care/code-runtime": "workspace:*",
+    "@vzn-code/gitea": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.2.1",
