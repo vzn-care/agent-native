@@ -26,7 +26,7 @@ These results distinguish source/build validation from deployment and two-device
 | Gitea API adapter                | 20 tests passed; strict typecheck passed                                                        | HTTP contract/policy handling against controlled responses; not live SSH enforcement                                                                                  |
 | Checkpoint capture and transport | 18 real-Git tests passed; strict typecheck passed                                               | Staged/unstaged/untracked/binary/mode/symlink fidelity, source preservation, immutable refs, bare-remote transfer, retry, origin protection and URL-rewrite isolation |
 | Browser gateway                  | 3 tests passed on Mac; typecheck passed                                                         | Real HTTP origin/authentication/mutation rejection and successful host transport                                                                                      |
-| Web app                          | 9 tests passed; app typecheck and production compilation passed; local browser task flow passed | Isolated PGlite with default development auto-login; connection, task start, transcript, reconnect, and cancellation verified against a disposable local host         |
+| Web app                          | 10 tests passed; app typecheck and production compilation passed; local browser task flow passed | Isolated PGlite with default development auto-login; connection, task start, transcript, reconnect, and cancellation verified against a disposable local host         |
 | Workspace doctor                 | 1,049 existing findings, zero assigned to new Code app                                          | Existing workspace health is not represented as a clean doctor pass                                                                                                   |
 | Preview gateway                  | 14 tests passed, including 4 real TCP HTTP/WebSocket cases; typecheck passed                    | Authentication, cookies/headers, bidirectional WebSocket buffers and live revocation proved locally; host registration, ingress and physical-device proof remain open |
 
@@ -35,6 +35,10 @@ The earlier cloud run produced **41 passing tests and 3 Unix-socket-dependent fa
 All six new private packages pass their normal package `typecheck` scripts with the pinned root dependencies. Final frozen offline installation succeeds without changing existing external dependency resolutions.
 
 The browser screenshot is saved in the sibling workspace at `docs/evidence/code-disconnected-preview.png`. It deliberately shows the tested connection-error state, not a simulated successful Studio connection.
+
+### PR review continuation
+
+The owner token is now entered only on the gateway's `/connect` page. Enrollment issues an HttpOnly session cookie; browser RPC requires that cookie and the exact configured Code origin. The embedded Mac browser sent `Origin: null` for its top-level sign-in form, so enrollment accepts that form origin only with the owner token. RPC never accepts an opaque origin. The isolated Mac browser signed in, connected, started a read-only fixture task, and displayed its completed transcript. It restored the same run after navigating to Settings and after a full page reload. Windows and physical remote-browser checks were deferred at the user's request.
 
 ## Review findings repaired
 

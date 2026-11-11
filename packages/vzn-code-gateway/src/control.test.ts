@@ -9,6 +9,22 @@ import { HostClient } from "../../vzn-code-host/src/client.ts";
 import { startHost } from "../../vzn-code-host/src/service.ts";
 import { startControlGateway } from "./control.ts";
 
+async function enroll(url: string, token: string): Promise<string> {
+  const response = await fetch(`${url}/v1/enroll`, {
+    method: "POST",
+    headers: {
+      Origin: url,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({ token }),
+  });
+  assert.equal(response.status, 200);
+  const cookie = response.headers.get("set-cookie") ?? "";
+  assert.match(cookie, /HttpOnly/);
+  assert.doesNotMatch(cookie, new RegExp(token));
+  return cookie.split(";")[0]!;
+}
+
 test("gateway rejects unsafe credentials and non-TLS remote origins before opening a listener", async () => {
   const valid = {
     socketPath: "/unused.sock",
@@ -44,12 +60,67 @@ test("HTTP admission rejects unauthenticated origins and disabled mutations befo
     allowedOrigins: [origin],
   });
   t.after(() => gateway.close());
+  assert.equal((await fetch(`${gateway.url}/connect`)).status, 200);
+  assert.equal(
+    (
+      await fetch(`${gateway.url}/v1/enroll`, {
+        method: "POST",
+        headers: {
+          Origin: "https://untrusted.example",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({ token }),
+      })
+    ).status,
+    403,
+  );
+  const cookie = await enroll(gateway.url, token);
+  const opaqueEnrollment = await fetch(`${gateway.url}/v1/enroll`, {
+    method: "POST",
+    headers: {
+      Origin: "null",
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({ token }),
+  });
+  assert.equal(opaqueEnrollment.status, 200);
+  assert.equal(
+    (
+      await fetch(`${gateway.url}/v1/enroll`, {
+        method: "POST",
+        headers: {
+          Origin: "null",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({ token: "invalid" }),
+      })
+    ).status,
+    401,
+  );
+  assert.equal(
+    (
+      await fetch(`${gateway.url}/v1/rpc`, {
+        method: "POST",
+        headers: {
+          Origin: origin,
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          protocolVersion: 1,
+          requestId: "without-cookie",
+          kind: "health",
+        }),
+      })
+    ).status,
+    401,
+  );
   const call = (body: object, overrides: Record<string, string> = {}) =>
     fetch(`${gateway.url}/v1/rpc`, {
       method: "POST",
       headers: {
         Origin: origin,
-        Authorization: `Bearer ${token}`,
+        Cookie: cookie,
         "Content-Type": "application/json",
         ...overrides,
       },
@@ -60,7 +131,7 @@ test("HTTP admission rejects unauthenticated origins and disabled mutations befo
       }),
     });
   assert.equal(
-    (await call({ kind: "health" }, { Authorization: "Bearer wrong" })).status,
+    (await call({ kind: "health" }, { Cookie: "vzn_code_owner=wrong" })).status,
     401,
   );
   const forbidden = await call(
@@ -87,6 +158,16 @@ test("HTTP admission rejects unauthenticated origins and disabled mutations befo
   const unavailable = await call({ kind: "health" });
   assert.equal(unavailable.status, 503);
   assert.equal((await unavailable.json()).error.code, "HOST_UNAVAILABLE");
+  assert.equal(
+    (
+      await fetch(`${gateway.url}/v1/disconnect`, {
+        method: "POST",
+        headers: { Origin: origin, Cookie: cookie },
+      })
+    ).status,
+    200,
+  );
+  assert.equal((await call({ kind: "health" })).status, 401);
 });
 
 test("browser gateway reads the real IPC catalog and rejects cross-origin, unauthenticated, and root-registration requests", async (t) => {
@@ -112,12 +193,13 @@ test("browser gateway reads the real IPC catalog and rejects cross-origin, unaut
     allowedOrigins: [origin],
   });
   t.after(() => gateway.close());
+  const cookie = await enroll(gateway.url, token);
   const call = (body: object, overrides: Record<string, string> = {}) =>
     fetch(`${gateway.url}/v1/rpc`, {
       method: "POST",
       headers: {
         Origin: origin,
-        Authorization: `Bearer ${token}`,
+        Cookie: cookie,
         "Content-Type": "application/json",
         ...overrides,
       },
@@ -141,8 +223,12 @@ test("browser gateway reads the real IPC catalog and rejects cross-origin, unaut
   assert.equal(body.result.projects.length, 1);
   assert.equal(body.result.projects[0].id, "pilot");
   assert.equal(
-    (await call({ kind: "list-projects" }, { Authorization: "Bearer invalid" }))
-      .status,
+    (
+      await call(
+        { kind: "list-projects" },
+        { Cookie: "vzn_code_owner=invalid" },
+      )
+    ).status,
     401,
   );
   assert.equal(

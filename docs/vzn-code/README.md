@@ -19,7 +19,7 @@ See [baseline.md](baseline.md) for reconciliation of the fork's existing build-c
 | Electron desktop | `packages/desktop-app`                 | Separate VZN app ID, URL scheme, profile, build configuration, and disabled upstream updater                        |
 | Host             | `packages/vzn-code-host`               | Private Unix IPC, SQLite ownership and operations journal, project catalog, task controller, event replay           |
 | Runtime          | `packages/vzn-code-runtime`            | Existing Agent-Native CLI execution, process-group cancellation, native session association, transcript replay      |
-| Browser gateway  | `packages/vzn-code-gateway`            | Loopback HTTP bridge, exact browser origin and authority checks, owner bearer authentication, optional task control |
+| Browser gateway  | `packages/vzn-code-gateway`            | Loopback HTTP bridge, exact RPC origin and authority checks, owner-token enrollment with HttpOnly session cookie, optional task control |
 | Web app          | sibling `vzn-code-workspace/apps/code` | Studio connection, projects/workspaces, task controls and transcript; capability-gated unavailable states           |
 | Gitea            | `packages/vzn-code-gitea`              | Idempotent private repo enrollment, deploy-key identity binding, revocation API, checkpoint protection readback     |
 | Checkpoints      | `packages/vzn-code-workspace`          | Separate index/worktree/untracked layers, digest verification, isolated restore, explicit immutable-ref transport   |
@@ -61,7 +61,7 @@ The browser bridge needs a locally generated, private owner-token file. It never
 node packages/vzn-code-gateway/src/cli.ts /tmp/vzn-code-host /absolute/private/owner-token http://localhost:PORT 45840 - allow-task-control
 ```
 
-Replace `PORT` with the actual web gateway origin (no path or trailing slash). The final argument explicitly enables task-control RPCs; omit it for a read-only gateway. The Code app accepts the token into memory only and clears it when disconnected. This is a single-owner development enrollment flow, not completed multi-device identity management.
+Replace `PORT` with the actual web gateway origin (no path or trailing slash). The final argument explicitly enables task-control RPCs; omit it for a read-only gateway. The owner opens the gateway's `/connect` page and enters the token there. The gateway issues a private HttpOnly browser session; the Code app never handles the owner token. This is a single-owner development enrollment flow, not completed multi-device identity management. For remote HTTPS, the cookie uses `Secure; SameSite=None`; third-party-cookie restrictions and private device ingress still need physical-browser validation.
 
 For another physical device, use an approved private HTTPS tunnel such as Tailscale Serve, preserve the configured public Host header, and configure that HTTPS origin as the gateway's fifth argument. The gateway itself always binds to 127.0.0.1. No public exposure or Tailscale configuration was performed by this implementation.
 

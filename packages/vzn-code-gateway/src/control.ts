@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import {
   createServer,
   type IncomingMessage,
@@ -29,6 +29,15 @@ export async function readJson(request: IncomingMessage): Promise<unknown> {
       "Content-Type must be application/json",
     );
   }
+  try {
+    return JSON.parse((await readBody(request)).toString("utf8"));
+  } catch (error) {
+    if (error instanceof HostError) throw error;
+    throw new HostError("INVALID_REQUEST", "Body must be valid JSON");
+  }
+}
+
+async function readBody(request: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let bytes = 0;
   for await (const chunk of request) {
@@ -38,11 +47,7 @@ export async function readJson(request: IncomingMessage): Promise<unknown> {
       throw new HostError("INVALID_REQUEST", "Request exceeds frame limit");
     chunks.push(buffer);
   }
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    throw new HostError("INVALID_REQUEST", "Body must be valid JSON");
-  }
+  return Buffer.concat(chunks);
 }
 
 function reply(response: ServerResponse, status: number, value: unknown): void {
@@ -96,17 +101,94 @@ export async function startControlGateway(options: {
       "Public gateway origin must be an HTTPS origin without a path",
     );
   let authority = "";
+  const sessions = new Set<string>();
+  const cookieName = "vzn_code_owner";
+  const cookieAttributes = publicUrl
+    ? "Path=/; HttpOnly; SameSite=None; Secure"
+    : "Path=/; HttpOnly; SameSite=Strict";
+  const gatewayOrigin = publicUrl?.origin;
   const server = createServer(async (request, response) => {
     let requestId = "invalid";
     const origin = request.headers.origin;
-    if (request.headers.host !== authority || !origin || !origins.has(origin)) {
+    if (request.headers.host !== authority) {
+      reply(response, 403, {
+        error: { code: "FORBIDDEN", message: "Host or origin is not allowed" },
+      });
+      return;
+    }
+    if (request.url === "/connect" && request.method === "GET") {
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        "referrer-policy": "no-referrer",
+        "content-security-policy":
+          "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+        "x-content-type-options": "nosniff",
+      });
+      response.end(
+        `<!doctype html><html lang="en"><meta charset="utf-8"><title>Connect VZN Code</title><style>body{font:16px system-ui;max-width:28rem;margin:12vh auto;padding:1rem}label,input,button{display:block;width:100%;box-sizing:border-box;margin:.8rem 0}input,button{padding:.7rem}</style><h1>Connect VZN Code</h1><p>Enter the Studio owner token here. It stays on this gateway and is not sent to the Code app.</p><form method="post" action="/v1/enroll"><label for="token">Owner token</label><input id="token" name="token" type="password" autocomplete="off" required><button type="submit">Connect</button></form></html>`,
+      );
+      return;
+    }
+    if (request.url === "/v1/enroll" && request.method === "POST") {
+      const expectedOrigin = gatewayOrigin ?? `http://${authority}`;
+      if (
+        // Embedded browsers can give a top-level form an opaque origin. The
+        // owner token still gates enrollment; RPC keeps exact origin checks.
+        (origin !== expectedOrigin && origin !== "null") ||
+        request.headers["content-type"]?.split(";")[0] !==
+          "application/x-www-form-urlencoded"
+      ) {
+        reply(response, 403, { error: { code: "FORBIDDEN" } });
+        return;
+      }
+      try {
+        const fields = new URLSearchParams(
+          (await readBody(request)).toString("utf8"),
+        );
+        if (!matchesSecret(fields.get("token") ?? undefined, options.token)) {
+          reply(response, 401, { error: { code: "UNAUTHORIZED" } });
+          return;
+        }
+        const session = randomBytes(32).toString("base64url");
+        sessions.add(session);
+        response.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+          "referrer-policy": "no-referrer",
+          "content-security-policy":
+            "default-src 'none'; frame-ancestors 'none'",
+          "set-cookie": `${cookieName}=${session}; ${cookieAttributes}`,
+        });
+        response.end(
+          '<!doctype html><html lang="en"><meta charset="utf-8"><title>Studio connected</title><h1>Studio connected</h1><p>Return to VZN Code and continue.</p></html>',
+        );
+      } catch {
+        reply(response, 400, { error: { code: "INVALID_REQUEST" } });
+      }
+      return;
+    }
+    if (!origin || !origins.has(origin)) {
       reply(response, 403, {
         error: { code: "FORBIDDEN", message: "Host or origin is not allowed" },
       });
       return;
     }
     response.setHeader("access-control-allow-origin", origin);
+    response.setHeader("access-control-allow-credentials", "true");
     response.setHeader("vary", "Origin");
+    const session = request.headers.cookie?.match(
+      /(?:^|;\s*)vzn_code_owner=([A-Za-z0-9_-]{43})(?:;|$)/,
+    )?.[1];
+    if (request.url === "/v1/disconnect" && request.method === "POST") {
+      if (session) sessions.delete(session);
+      response.setHeader(
+        "set-cookie",
+        `${cookieName}=; ${cookieAttributes}; Max-Age=0`,
+      );
+      reply(response, 200, { disconnected: true });
+      return;
+    }
     if (request.url !== "/v1/rpc") {
       reply(response, 404, { error: { code: "NOT_FOUND" } });
       return;
@@ -114,7 +196,7 @@ export async function startControlGateway(options: {
     if (request.method === "OPTIONS") {
       response.writeHead(204, {
         "access-control-allow-methods": "POST",
-        "access-control-allow-headers": "authorization,content-type",
+        "access-control-allow-headers": "content-type",
         "access-control-max-age": "600",
       });
       response.end();
@@ -124,13 +206,11 @@ export async function startControlGateway(options: {
       reply(response, 405, { error: { code: "METHOD_NOT_ALLOWED" } });
       return;
     }
-    if (
-      !matchesSecret(request.headers.authorization, `Bearer ${options.token}`)
-    ) {
+    if (!session || !sessions.has(session)) {
       reply(response, 401, {
         error: {
           code: "UNAUTHORIZED",
-          message: "A valid owner token is required",
+          message: "Connect to Studio before using the gateway",
         },
       });
       return;
@@ -240,6 +320,7 @@ export async function startControlGateway(options: {
     url,
     close: () =>
       new Promise<void>((resolve, reject) => {
+        sessions.clear();
         server.closeAllConnections();
         server.close((error) => (error ? reject(error) : resolve()));
       }),
