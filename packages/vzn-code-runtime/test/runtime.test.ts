@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -157,6 +163,45 @@ test("preserves nonzero runner failure and reports unavailable executable withou
       }),
       (error: unknown) =>
         error instanceof RuntimeError && error.code === "CLI_UNAVAILABLE",
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a confirmed credential-gap exit is retryable after restart", async () => {
+  const { directory, options, runtime } = setup();
+  try {
+    const launched = await runtime.start({
+      id: "missing-credentials",
+      sessionId: "session",
+      workspaceRoot: directory,
+      prompt: "credential-gap",
+    });
+    assert.deepEqual(await launched.completion, {
+      state: "errored",
+      nativeSessionId: "native-session",
+      exitCode: 0,
+      reason: "MISSING_CREDENTIALS",
+    });
+    const restarted = new AgentNativeRuntime(options);
+    assert.equal(
+      await restarted.inspect({ id: "missing-credentials" }),
+      "errored",
+    );
+    const associationPath = join(
+      directory,
+      "runtime",
+      "missing-credentials",
+      "association.json",
+    );
+    const legacy = JSON.parse(readFileSync(associationPath, "utf8"));
+    legacy.state = "paused";
+    legacy.result.state = "paused";
+    writeFileSync(associationPath, JSON.stringify(legacy));
+    assert.equal(
+      await restarted.inspect({ id: "missing-credentials" }),
+      "errored",
     );
   } finally {
     rmSync(directory, { recursive: true, force: true });

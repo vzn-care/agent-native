@@ -35,6 +35,8 @@ pnpm --filter @agent-native/desktop-app typecheck
 pnpm --filter @agent-native/desktop-app build:vzn
 ```
 
+For the branded Desktop development build, set `VZN_CODE_APP_URL` to the full Code page URL before the first launch, for example `http://127.0.0.1:8417/code/home` for the local workspace or an exact HTTPS preview URL. The VZN Code entry is then saved in the separate VZN Code Desktop profile. Existing profiles retain their saved URL; change it in Desktop app settings when switching between local and preview. The entry uses the web app's own sign-in and Studio gateway connection.
+
 When installation scripts are intentionally disabled, explicitly build the workspace prerequisites before the desktop:
 
 ```sh
@@ -65,7 +67,25 @@ Replace `PORT` with the actual web gateway origin (no path or trailing slash). T
 
 An HTTPS preview page must connect to a private HTTPS gateway origin, such as a Tailscale Serve address, configured as the fifth CLI argument. Keep the gateway listener on `127.0.0.1`, retain exact browser-origin checks, and use Tailscale Serve rather than Funnel. The preview browser may request local-network access before it can reach a tailnet address; grant it only for the trusted preview origin. The remote gateway cookie uses `Secure; SameSite=None`, so browser third-party-cookie policy must be verified in the intended browser. A local Code page may continue using a separate loopback gateway and cookie. Browser connection state is scoped to each Code page origin.
 
-For another physical device, use an approved private HTTPS tunnel such as Tailscale Serve, preserve the configured public Host header, and configure that HTTPS origin as the gateway's fifth argument. The gateway itself always binds to 127.0.0.1. No public exposure or Tailscale configuration was performed by this implementation.
+For another physical device, use an approved private HTTPS tunnel such as Tailscale Serve, preserve the configured public Host header, and configure that HTTPS origin as the gateway's fifth argument. The gateway itself always binds to 127.0.0.1. The Mac pilot uses private Tailscale Serve ingress; a second physical device has not been checked.
+
+### macOS login startup
+
+From a checkout that will remain at the same absolute path, install the host and each gateway as a user LaunchAgent. Stop a manually started process on the same port before installing its gateway agent. The installer checks ownership and mode of the token file, writes an owned 0600 plist, and does not put the token value in the plist or logs.
+
+```sh
+node packages/vzn-code-host/src/launchd-cli.ts install --state-dir "$HOME/.vzn-code-host" --runtime-executable "$PWD/packages/core/bin/agent-native.js" --agent-engine codex-cli
+node packages/vzn-code-gateway/src/launchd-cli.ts install local "$HOME/.vzn-code-host" "$HOME/.vzn-code-host/owner-token" http://127.0.0.1:8417 45840 - allow-task-control
+node packages/vzn-code-gateway/src/launchd-cli.ts install preview "$HOME/.vzn-code-host" "$HOME/.vzn-code-host/owner-token" https://code-preview.example 45841 https://studio.example:45841 allow-task-control
+
+node packages/vzn-code-host/src/launchd-cli.ts status
+node packages/vzn-code-gateway/src/launchd-cli.ts status local
+node packages/vzn-code-gateway/src/launchd-cli.ts status preview
+```
+
+Replace the example preview and private gateway origins with exact HTTPS origins. Multiple preview origins can be comma-separated in the third argument after the token file. The preview gateway still requires a separate private HTTPS ingress; LaunchAgent installation never enables Tailscale Serve or Funnel. Gateway restarts clear in-memory browser sessions, so sign in again on its `/connect` page after a restart. `uninstall <local|preview>` removes only that gateway's LaunchAgent, not the token, host journal, or private ingress configuration. Reinstall after moving the checkout or changing the Node binary.
+
+The optional `--agent-engine codex-cli` uses the Mac owner's existing Codex CLI sign-in without putting credentials in the plist. Verify `codex login status` locally before enabling it. Omit this option to use the CLI's normal provider selection; it may require a provider key through the deployment's secret manager. A terminated missing-credential run is recorded as a retryable error.
 
 The web workspace has its own app build and setup instructions. Set the framework's documented `DO_NOT_TRACK=1` and `AGENT_NATIVE_TELEMETRY_DISABLED=1` when building this private product. Its real development UI was launched with an isolated PGlite database and the framework's normal development auto-login; no authentication-disable flag was needed. Production authentication and persistent database configuration remain deployment requirements.
 
@@ -75,13 +95,13 @@ See [verification.md](verification.md) for the actual checks and their outcomes.
 
 The earlier cloud session denied local Unix socket listeners (`listen EPERM`). Those tests now pass on Mac, and a disposable browser-to-host task completed through the real Code app. See [verification.md](verification.md) for the local run, reconnect, and cancellation results.
 
-The actual built upstream CLI has been exercised through its explicit fixture engine without a paid provider call. Native provider authentication, approvals, steering, and provider-specific continuation still require live acceptance testing. A transcript is not migrated hidden model state. Restarted unknown processes retain uncertain ownership until their termination can be established.
+The actual built upstream CLI has completed both an explicit fixture run and one live read-only Codex CLI task using the Mac owner's existing sign-in. Browser-initiated provider execution, approvals, steering, and provider-specific continuation still require live acceptance testing. A transcript is not migrated hidden model state. Restarted unknown processes retain uncertain ownership until their termination can be established.
 
 ## Remaining plan scope
 
 The implementation supplies substantial source for C01–C12 and C17, with working local component tests. The milestone acceptance gates are still incomplete. In particular:
 
-1. Connect the branded desktop and browser to the same Studio host; install the included Mac LaunchAgent in a durable checkout, verify login-after-reboot, and establish real authenticated device enrollment. A disposable LaunchAgent passed install, health, crash restart, and uninstall checks on Studio. The new web app currently uses a small custom task interface; integration of the shared CodeAgentsApp surface remains open.
+1. Verify the branded Desktop's saved Code entry visually against the same Studio host, then verify login-after-reboot and establish real authenticated device enrollment. The host and both gateways are installed as Mac LaunchAgents in a durable checkout, and all three passed health and crash restart checks. The new web app currently uses a small custom task interface; integration of the shared CodeAgentsApp surface remains open.
 2. Run the host/gateway integrations with Unix socket access and a second physical device. The local web UI and HTTP/WebSocket preview component have been exercised separately. Preview registration must still be wired to durable workspace ownership and private HTTPS ingress.
 3. Install and pin Gitea privately on Studio; prove real SSH key isolation and protected immutable refs. API readback and a temporary bare Git repository do not establish Gitea server enforcement.
 4. Implement native/Dev Container environment recipes and readiness, then the complete **Run here**, **Work here**, and **Return to Studio** transactions and conflict review.

@@ -20,9 +20,11 @@ if (args.join(" ") === "code --help") {
     status:
       prompt === "fail"
         ? "errored"
-        : prompt === "wait"
-          ? "running"
-          : "completed",
+        : prompt === "credential-gap"
+          ? "paused"
+          : prompt === "wait"
+            ? "running"
+            : "completed",
   };
   writeFileSync(
     join(store, "runs", "native-session.json"),
@@ -34,10 +36,14 @@ if (args.join(" ") === "code --help") {
       schemaVersion: 1,
       id: "native-event",
       runId: "native-session",
-      kind: "note",
-      message: "Recorded response",
+      kind: prompt === "credential-gap" ? "status" : "note",
+      message:
+        prompt === "credential-gap"
+          ? "No provider key is configured"
+          : "Recorded response",
       createdAt: "2026-11-09T00:00:00.000Z",
       metadata: { role: "assistant" },
+      ...(prompt === "credential-gap" ? { signal: "credential-gap" } : {}),
     }) + "\n",
   );
   if (prompt === "partial")

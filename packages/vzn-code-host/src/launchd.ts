@@ -42,6 +42,7 @@ export function launchAgentPlist(options: {
   hostCli: string;
   stateDir: string;
   runtimeExecutable?: string;
+  agentEngine?: "codex-cli";
 }): string {
   const args = [
     options.nodeExecutable,
@@ -63,9 +64,10 @@ export function launchAgentPlist(options: {
   <key>KeepAlive</key><true/>
   <key>Umask</key><string>077</string>
   <key>EnvironmentVariables</key><dict>
-    <key>PATH</key><string>${xml(`${nodeDir}:/usr/bin:/bin:/usr/sbin:/sbin`)}</string>
+    <key>PATH</key><string>${xml(`${nodeDir}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`)}</string>
     <key>DO_NOT_TRACK</key><string>1</string>
     <key>AGENT_NATIVE_TELEMETRY_DISABLED</key><string>1</string>
+    ${options.agentEngine ? `<key>AGENT_ENGINE</key><string>${xml(options.agentEngine)}</string>` : ""}
   </dict>
   <key>StandardOutPath</key><string>${xml(join(options.stateDir, "host.stdout.log"))}</string>
   <key>StandardErrorPath</key><string>${xml(join(options.stateDir, "host.stderr.log"))}</string>
@@ -123,6 +125,7 @@ function loaded(): boolean {
 export function installLaunchAgent(options: {
   stateDir: string;
   runtimeExecutable?: string;
+  agentEngine?: "codex-cli";
 }): string {
   if (process.platform !== "darwin")
     throw new HostError(
@@ -139,6 +142,7 @@ export function installLaunchAgent(options: {
     runtimeExecutable: options.runtimeExecutable
       ? executable(options.runtimeExecutable)
       : undefined,
+    agentEngine: options.agentEngine,
   });
   const path = agentPath();
   if (existsSync(path))

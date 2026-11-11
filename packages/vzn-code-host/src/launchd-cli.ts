@@ -23,21 +23,24 @@ function main(): void {
   if (command !== "install")
     throw new HostError(
       "USAGE",
-      "Commands: install [--state-dir absolute-path] [--runtime-executable absolute-path], status, uninstall",
+      "Commands: install [--state-dir absolute-path] [--runtime-executable absolute-path] [--agent-engine codex-cli], status, uninstall",
     );
   let stateDir = join(homedir(), ".vzn-code-host");
   let runtimeExecutable: string | undefined;
+  let agentEngine: "codex-cli" | undefined;
   while (args.length) {
     const flag = args.shift();
     const value = args.shift();
     if (!value) throw new HostError("USAGE", `${flag} requires a value`);
     if (flag === "--state-dir") stateDir = value;
     else if (flag === "--runtime-executable") runtimeExecutable = value;
+    else if (flag === "--agent-engine" && value === "codex-cli")
+      agentEngine = value;
     else throw new HostError("USAGE", `Unknown option ${flag}`);
   }
   console.log(
     JSON.stringify({
-      path: installLaunchAgent({ stateDir, runtimeExecutable }),
+      path: installLaunchAgent({ stateDir, runtimeExecutable, agentEngine }),
     }),
   );
 }

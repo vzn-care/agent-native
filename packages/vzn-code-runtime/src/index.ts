@@ -292,6 +292,16 @@ export class AgentNativeRuntime {
         } catch {
           failure = "NATIVE_RECORD_INVALID";
         }
+        let credentialGap = false;
+        if (native?.status === "paused" && !failure) {
+          try {
+            credentialGap = this.transcript({ id: input.id }, true).some(
+              (event) => event.signal === "credential-gap",
+            );
+          } catch {
+            failure = "TRANSCRIPT_READ_FAILED";
+          }
+        }
         const state: RuntimeResult["state"] = failure
           ? "errored"
           : live?.cancelled
@@ -300,7 +310,7 @@ export class AgentNativeRuntime {
               ? "errored"
               : native?.status === "completed"
                 ? "completed"
-                : native?.status === "errored"
+                : native?.status === "errored" || credentialGap
                   ? "errored"
                   : native?.status === "paused" ||
                       native?.status === "needs-approval"
@@ -310,7 +320,11 @@ export class AgentNativeRuntime {
           state,
           nativeSessionId: association.nativeSessionId,
           exitCode,
-          ...(failure ? { reason: failure } : {}),
+          ...(failure
+            ? { reason: failure }
+            : credentialGap
+              ? { reason: "MISSING_CREDENTIALS" }
+              : {}),
         };
         association.state = state;
         association.result = result;
@@ -338,6 +352,23 @@ export class AgentNativeRuntime {
       association.state === "errored"
     )
       return association.state;
+    if (
+      association.state === "paused" &&
+      association.result?.state === "paused" &&
+      association.result.exitCode === 0
+    ) {
+      try {
+        if (
+          this.discover(association)?.status === "paused" &&
+          this.transcript(reference, true).some(
+            (event) => event.signal === "credential-gap",
+          )
+        )
+          return "errored";
+      } catch {
+        return "unknown";
+      }
+    }
     // A native status update can precede process exit; only our close handler proves termination.
     return "unknown";
   }
