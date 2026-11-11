@@ -35,7 +35,7 @@ pnpm --filter @agent-native/desktop-app typecheck
 pnpm --filter @agent-native/desktop-app build:vzn
 ```
 
-For the branded Desktop development build, set `VZN_CODE_APP_URL` to the full Code page URL before the first launch, for example `http://127.0.0.1:8417/code/home` for the local workspace or an exact HTTPS preview URL. The VZN Code entry is then saved in the separate VZN Code Desktop profile. Existing profiles retain their saved URL; change it in Desktop app settings when switching between local and preview. The entry uses the web app's own sign-in and Studio gateway connection.
+For the branded Desktop development build, set `VZN_CODE_APP_URL` to the full Code page URL before the first launch, for example `http://127.0.0.1:8417/code/home` for the local workspace or an exact HTTPS preview URL. The VZN Code entry is then saved in the separate VZN Code Desktop profile. Existing profiles retain their saved URL; change it in Desktop app settings when switching between local and preview. The entry uses the web app's own sign-in and Studio gateway connection. Its Studio sign-in link opens a restricted Desktop window sharing the Code webview's cookie session; a sign-in completed in Chrome cannot authorize that separate session.
 
 When installation scripts are intentionally disabled, explicitly build the workspace prerequisites before the desktop:
 
@@ -95,13 +95,13 @@ See [verification.md](verification.md) for the actual checks and their outcomes.
 
 The earlier cloud session denied local Unix socket listeners (`listen EPERM`). Those tests now pass on Mac, and a disposable browser-to-host task completed through the real Code app. See [verification.md](verification.md) for the local run, reconnect, and cancellation results.
 
-The actual built upstream CLI has completed both an explicit fixture run and one live read-only Codex CLI task using the Mac owner's existing sign-in. Browser-initiated provider execution, approvals, steering, and provider-specific continuation still require live acceptance testing. A transcript is not migrated hidden model state. Restarted unknown processes retain uncertain ownership until their termination can be established.
+The actual built upstream CLI has completed an explicit fixture run, one live read-only host task, and one read-only task initiated in the branded Desktop's embedded Code page using the Mac owner's existing Codex CLI sign-in. Remote-preview provider execution, approvals, steering, and provider-specific continuation still require live acceptance testing. A transcript is not migrated hidden model state. Restarted unknown processes retain uncertain ownership until their termination can be established.
 
 ## Remaining plan scope
 
 The implementation supplies substantial source for C01–C12 and C17, with working local component tests. The milestone acceptance gates are still incomplete. In particular:
 
-1. Verify the branded Desktop's saved Code entry visually against the same Studio host, then verify login-after-reboot and establish real authenticated device enrollment. The host and both gateways are installed as Mac LaunchAgents in a durable checkout, and all three passed health and crash restart checks. The new web app currently uses a small custom task interface; integration of the shared CodeAgentsApp surface remains open.
+1. Verify login-after-reboot and establish real authenticated device enrollment. The branded Desktop's Code entry connected to the same Studio host and completed a read-only task. The host and both gateways are installed as Mac LaunchAgents in a durable checkout, and all three passed health and crash restart checks. The new web app currently uses a small custom task interface; integration of the shared CodeAgentsApp surface remains open.
 2. Run the host/gateway integrations with Unix socket access and a second physical device. The local web UI and HTTP/WebSocket preview component have been exercised separately. Preview registration must still be wired to durable workspace ownership and private HTTPS ingress.
 3. Install and pin Gitea privately on Studio; prove real SSH key isolation and protected immutable refs. API readback and a temporary bare Git repository do not establish Gitea server enforcement.
 4. Implement native/Dev Container environment recipes and readiness, then the complete **Run here**, **Work here**, and **Return to Studio** transactions and conflict review.

@@ -343,6 +343,7 @@ import {
 } from "./sentry";
 import { setMailWebviewBackgroundThrottling } from "./webview-background-throttling.js";
 import { installWebviewNavigationListeners } from "./webview-navigation";
+import { isVznCodeGatewaySignInPopup } from "./vzn-code-gateway-popup";
 import { installWindowDragController } from "./window-drag";
 import { loadDesktopWorkspaceApps } from "./workspace-apps.js";
 
@@ -13759,6 +13760,49 @@ function handleWindowOpenForContents(
       parsed.protocol !== "http:" &&
       !canOpenDesktopExternalUrl(url, process.platform)
     ) {
+      return { action: "deny" as const };
+    }
+    if (
+      isVznCodeGatewaySignInPopup({
+        productAppId: DESKTOP_PRODUCT_IDENTITY?.appId,
+        sourceAppId: desktopWebviewAppIds.get(contents),
+        sourceUrl: contents.getURL(),
+        configuredAppUrl: AppStore.loadApps().find(
+          (item) => item.id === "vzn-code",
+        )?.url,
+        popupUrl: url,
+      })
+    ) {
+      const signInWindow = new BrowserWindow({
+        width: 480,
+        height: 560,
+        title: "Connect Studio",
+        parent: mainWindow ?? undefined,
+        webPreferences: {
+          session: contents.session,
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true,
+        },
+      });
+      signInWindow.webContents.setWindowOpenHandler(() => ({
+        action: "deny" as const,
+      }));
+      signInWindow.webContents.on("will-navigate", (event, nextUrl) => {
+        try {
+          const next = new URL(nextUrl);
+          if (
+            next.origin !== parsed.origin ||
+            !["/connect", "/v1/enroll"].includes(next.pathname)
+          )
+            event.preventDefault();
+        } catch {
+          event.preventDefault();
+        }
+      });
+      void signInWindow.loadURL(url).catch(() => {
+        if (!signInWindow.isDestroyed()) signInWindow.close();
+      });
       return { action: "deny" as const };
     }
     const provider = matchOAuthProvider(url, {
