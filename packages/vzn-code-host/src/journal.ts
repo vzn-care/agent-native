@@ -218,12 +218,7 @@ export class Journal {
     input: Omit<RepositoryIntent, "repositoryId" | "protectionVerified">,
   ): RepositoryIntent {
     return this.transaction(() => {
-      const project = this.project(input.projectId);
-      if (project.repository !== input.name)
-        throw new HostError(
-          "REPOSITORY_CONFLICT",
-          "Project repository identity differs from enrollment",
-        );
+      this.project(input.projectId);
       const previous = this.repositoryIntent(input.projectId);
       if (previous) {
         if (

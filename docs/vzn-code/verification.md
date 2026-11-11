@@ -34,7 +34,7 @@ The host now loads an owner-controlled private `gitea.json` and token file on st
 
 An isolated copy of the durable host's version-1 journal migrated to version 2 and retained its registered project count. The test copy was removed afterward; the running durable host was not restarted or migrated during the preview sign-in wait.
 
-An isolated host process connected to the private Gitea instance, enrolled a fourth disposable repository through the new CLI, and read back its protected binding. It added a device key, observed a successful pinned-SSH fetch, revoked the key, and observed the next fetch denied. After restarting that host process, enrollment returned the same repository ID and stale key enrollment failed with `DEVICE_KEY_CONFLICT`. The durable Studio host remains on its current configuration until the preview task finishes; this test did not enable live checkout or checkpoint transfer.
+An isolated host process connected to the private Gitea instance, enrolled a fourth disposable repository through the new CLI, and read back its protected binding. It added a device key, observed a successful pinned-SSH fetch, revoked the key, and observed the next fetch denied. After restarting that host process, enrollment returned the same repository ID and stale key enrollment failed with `DEVICE_KEY_CONFLICT`. The durable Studio journal was backed up privately, migrated from schema v1 to v2, and restarted with the private Gitea configuration. Its existing project and five run records remained. The `pilot` project kept its historical GitHub identity while enrollment pinned the separate Gitea repository name `vzn-native-team`; repository ID 5 and checkpoint protection were read back. Live checkout and checkpoint transfer are not yet enabled.
 
 ## Results
 
@@ -100,4 +100,4 @@ The branded desktop has not been launched as an installed application, signed or
 
 ## Next acceptance gate
 
-Verify login-after-reboot and reconnect after a gateway restart. Enable the tested Gitea integration on the durable host and complete a coordinated backup. Physical-device access and provider execution from the remote preview browser remain separate gates before handoff and environment milestones.
+Verify login-after-reboot and reconnect after a gateway restart. Complete an encrypted backup outside Studio and a restore rehearsal. The preview browser's owner-token sign-in and read-only provider task remain pending. Physical-device access and live checkout/checkpoint transfer remain separate gates before handoff and environment milestones.

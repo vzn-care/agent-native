@@ -74,11 +74,12 @@ token **path**, never the token value:
 
 The host rejects a shared, linked, or wrong-owner configuration/token file and
 an invalid HTTPS service URL. Restart the host after changing the configuration.
-Register the project with its intended Gitea repository **name** in the
-`repository` field, then use the local CLI:
+Register the project with its stable source identity. On first enrollment,
+provide the Gitea repository name if that identity is not already a valid
+Gitea name. The name is persisted; later retries may omit it:
 
 ```sh
-node packages/vzn-code-host/src/cli.ts gitea-enroll my-project
+node packages/vzn-code-host/src/cli.ts gitea-enroll my-project private-repository-name
 node packages/vzn-code-host/src/cli.ts gitea-status my-project
 node packages/vzn-code-host/src/cli.ts gitea-key-add my-project child-a /absolute/path/to/child-a.pub read
 node packages/vzn-code-host/src/cli.ts gitea-key-revoke my-project child-a
@@ -126,7 +127,7 @@ records. Idle connections close; callers reconnect and negotiate again.
 | `health`           | negotiated connection  | none                                                                           | Status, PID, schema/protocol version, device, runtime availability           |
 | `register-project` | `project-catalog`      | `operationId,projectId,root,repository`                                        | `{id,root,repository}` with canonical existing root                          |
 | `list-projects`    | `project-catalog`      | none                                                                           | `{projects}`                                                                 |
-| `enroll-repository` | `repository-provisioning` | `projectId` | Private Gitea repository binding after protection readback |
+| `enroll-repository` | `repository-provisioning` | `projectId,repositoryName?` | Private Gitea repository binding after protection readback |
 | `repository-status` | `repository-provisioning` | `projectId` | Persisted enrollment/protection intent |
 | `ensure-deploy-key` | `repository-provisioning` | `projectId,deviceId,publicKey,readOnly` | Verified device deploy key binding |
 | `revoke-deploy-key` | `repository-provisioning` | `projectId,deviceId` | Persisted revoked key record |

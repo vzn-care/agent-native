@@ -26,7 +26,7 @@ void test("repository, key, and revocation intents survive interrupted API calls
   journal.registerProject("register", {
     id: "pilot",
     root: dir,
-    repository: "pilot-git",
+    repository: "github.com/example/pilot-git",
   });
   let failRepository = true;
   let failKey = true;
@@ -97,7 +97,7 @@ void test("repository, key, and revocation intents survive interrupted API calls
       studioUsername: "studio",
     });
   try {
-    await assert.rejects(host().enrollProject("pilot"), {
+    await assert.rejects(host().enrollProject("pilot", "pilot-git"), {
       code: "GITEA_TRANSPORT",
     });
     const firstIntent = journal.repositoryIntent("pilot");
@@ -107,6 +107,9 @@ void test("repository, key, and revocation intents survive interrupted API calls
     journal = new Journal(db);
     failRepository = false;
     await host().enrollProject("pilot");
+    await assert.rejects(host().enrollProject("pilot", "other-git"), {
+      code: "REPOSITORY_CONFLICT",
+    });
     assert.deepEqual(enrollmentIds, [
       firstIntent.enrollmentId,
       firstIntent.enrollmentId,

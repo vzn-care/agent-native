@@ -27,7 +27,11 @@ export type Request = Envelope &
         root: string;
         repository: string;
       }
-    | { kind: "enroll-repository"; projectId: string }
+    | {
+        kind: "enroll-repository";
+        projectId: string;
+        repositoryName?: string;
+      }
     | { kind: "repository-status"; projectId: string }
     | {
         kind: "ensure-deploy-key";
@@ -146,12 +150,21 @@ export function parseRequest(input: unknown): Request {
         repository: string(r.repository, "repository"),
       };
       break;
-    case "enroll-repository":
     case "repository-status":
       result = {
         ...common,
         kind: r.kind,
         projectId: identifier(r.projectId, "projectId"),
+      };
+      break;
+    case "enroll-repository":
+      result = {
+        ...common,
+        kind: r.kind,
+        projectId: identifier(r.projectId, "projectId"),
+        ...(r.repositoryName === undefined
+          ? {}
+          : { repositoryName: string(r.repositoryName, "repositoryName") }),
       };
       break;
     case "ensure-deploy-key":

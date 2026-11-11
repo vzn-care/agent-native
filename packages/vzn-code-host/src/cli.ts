@@ -78,7 +78,7 @@ async function main(): Promise<void> {
   )
     throw new HostError(
       "USAGE",
-      "Commands: serve, health, list-projects, register-project <id> <absolute-root> <repository-identity> [operation-id], gitea-enroll <project-id>, gitea-status <project-id>, gitea-key-add <project-id> <device-id> <absolute-public-key-file> <read|write>, gitea-key-revoke <project-id> <device-id>; all accept --state-dir <absolute-directory>",
+      "Commands: serve, health, list-projects, register-project <id> <absolute-root> <repository-identity> [operation-id], gitea-enroll <project-id> [gitea-repository-name], gitea-status <project-id>, gitea-key-add <project-id> <device-id> <absolute-public-key-file> <read|write>, gitea-key-revoke <project-id> <device-id>; all accept --state-dir <absolute-directory>",
     );
   const client = new HostClient(join(stateDir, "host.sock"));
   try {
@@ -108,8 +108,8 @@ async function main(): Promise<void> {
         ),
       );
     } else if (command === "gitea-enroll" || command === "gitea-status") {
-      const [projectId] = args;
-      if (!projectId || args.length !== 1)
+      const [projectId, repositoryName] = args;
+      if (!projectId || args.length > (command === "gitea-enroll" ? 2 : 1))
         throw new HostError("USAGE", `${command} requires a project ID`);
       console.log(
         JSON.stringify(
@@ -119,6 +119,9 @@ async function main(): Promise<void> {
                 ? "enroll-repository"
                 : "repository-status",
             projectId,
+            ...(command === "gitea-enroll" && repositoryName
+              ? { repositoryName }
+              : {}),
           }),
         ),
       );

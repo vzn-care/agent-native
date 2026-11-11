@@ -173,18 +173,25 @@ export class HostGitea {
     return repository;
   }
 
-  enrollProject(projectId: string): Promise<ProjectRepository> {
+  enrollProject(
+    projectId: string,
+    repositoryName?: string,
+  ): Promise<ProjectRepository> {
     identifier(projectId, "projectId");
     return this.#serialize(projectId, async () => {
       validateGiteaSegment(projectId);
       const project = this.#journal.project(projectId);
-      validateGiteaSegment(project.repository);
+      const name = validateGiteaSegment(
+        repositoryName ??
+          this.#journal.repositoryIntent(projectId)?.name ??
+          project.repository,
+      );
       const intent = this.#journal.beginRepositoryIntent({
         projectId,
         instanceId: this.#instanceId,
         enrollmentId: randomUUID(),
         owner: this.#owner,
-        name: project.repository,
+        name,
       });
       const repository = await this.#adapter.enrollRepository({
         projectId,

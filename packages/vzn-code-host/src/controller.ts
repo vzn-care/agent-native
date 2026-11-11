@@ -111,7 +111,10 @@ export class HostController {
             "GITEA_UNAVAILABLE",
             "Private Git is not configured",
           );
-        return this.gitea.enrollProject(request.projectId);
+        return this.gitea.enrollProject(
+          request.projectId,
+          request.repositoryName,
+        );
       case "ensure-deploy-key":
         if (!this.gitea)
           throw new HostError(
