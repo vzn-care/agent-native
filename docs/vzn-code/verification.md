@@ -18,7 +18,15 @@ The `dev:vzn` Electron app opened on Studio after the pinned Electron binary was
 
 Both copied checkouts had incomplete Git object stores and hundreds of missing baseline files. Local object alternates now point to the original repositories, and only tracked files marked deleted were restored. The VZN Code work remains isolated from the original checkouts.
 
-These results distinguish source/build validation from deployment and two-device acceptance. No production deployment, live Gitea provisioning, or device ownership transfer was performed.
+These results distinguish source/build validation from deployment and two-device acceptance. No production deployment or device ownership transfer was performed.
+
+### Private Gitea Mac pilot
+
+Gitea 28.3.0 was installed through Homebrew and started as a user LaunchAgent with a pinned binary path. Its SQLite data, configuration, SSH host keys, and secrets live in a private local directory outside synchronized folders. HTTP and built-in SSH listen on loopback only; Tailscale Serve exposes separate private HTTPS and TCP endpoints without Funnel. Public registration and anonymous API access are disabled. The LaunchAgent restarted the server after termination, and both private endpoints remained reachable. The automation account is non-admin with a token scoped to repository and user API operations. The local configuration and token files have mode 0600, and the state directory has mode 0700. The tested release, configuration digest, host-key fingerprint, repository IDs, and command results are retained in the private compatibility record on Studio; no token or private key is recorded in this repository.
+
+Against that live instance, the adapter created two disposable private repositories and repeated enrollment with identical repository IDs. It refused to adopt an unrelated existing repository. It registered separate write and read-only keys for project A and a separate write key for B. A's write key could push an explicit `incoming/child/probe` ref, while A's read-only key could fetch but not push. A's key could not fetch B, and B's key could fetch B. A's key could not create a nested `handoff/task/probe` ref. After the Studio user created an accepted ref, A's key could not fast-forward, force-update, or delete it; the Studio user could not make a non-fast-forward force update. The accepted object ID remained unchanged. The adapter rejected A's key under B, revoked A's write key, confirmed a second revocation was safe, and observed the old key denied over a new SSH connection while A's other key still worked. The denial persisted after a Gitea restart; the host journal rejected cross-project reuse after reopening.
+
+These are disposable Mac-only probes. The pilot did not test child HTTPS/API credentials, interrupted transfer reconciliation, a coordinated off-Studio backup and isolated restore, or a real child checkout. Host integration must persist enrollment and revocation intent before enabling handoff. No checkpoint refs were sent to GitHub.
 
 ## Results
 
@@ -31,7 +39,7 @@ These results distinguish source/build validation from deployment and two-device
 | Host                             | 16 passed on Mac; no skipped tests; disposable LaunchAgent restart passed                        | SQLite transactions, durable grants, retry/cancel races, event replay, process-controller integration, SIGKILL lease recovery, live private IPC, and launchd restart  |
 | Runtime adapter                  | 6 real-subprocess tests passed; typecheck passed                                                 | Owned process cancellation, session linkage, transcript replay, orphan uncertainty, failed-exit recovery and credential-gap retry                                     |
 | Existing upstream runtime        | Actual built CLI fixture and one read-only Codex CLI task completed                              | Existing Mac owner sign-in completed one real provider request; browser and second-device provider flow remain open                                                   |
-| Gitea API adapter                | 20 tests passed; strict typecheck passed                                                         | HTTP contract/policy handling against controlled responses; not live SSH enforcement                                                                                  |
+| Gitea API adapter                | 20 tests passed; strict typecheck passed; live Mac pilot passed selected gates                   | Private repository enrollment, key isolation/revocation, and protected-ref enforcement on Gitea 28.3.0; backup, transfer, and second-device proof remain open         |
 | Checkpoint capture and transport | 18 real-Git tests passed; strict typecheck passed                                                | Staged/unstaged/untracked/binary/mode/symlink fidelity, source preservation, immutable refs, bare-remote transfer, retry, origin protection and URL-rewrite isolation |
 | Browser gateway                  | 4 tests passed on Mac; typecheck passed; both LaunchAgents crash-restarted                       | Real HTTP origin/authentication/mutation rejection and authenticated host reads through local and preview gateways                                                    |
 | Web app                          | 11 tests passed; app typecheck and production compilation passed; local browser task flow passed | Isolated PGlite with default development auto-login; connection, task start, transcript, reconnect, and cancellation verified against a disposable local host         |
@@ -84,4 +92,4 @@ The branded desktop has not been launched as an installed application, signed or
 
 ## Next acceptance gate
 
-Verify login-after-reboot and reconnect after a gateway restart. Live Gitea, physical-device access, and provider execution from the remote preview browser remain separate gates before handoff and environment milestones.
+Verify login-after-reboot and reconnect after a gateway restart. Complete private Gitea host integration and backup. Physical-device access and provider execution from the remote preview browser remain separate gates before handoff and environment milestones.

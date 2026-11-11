@@ -103,9 +103,9 @@ The implementation supplies substantial source for C01–C12 and C17, with worki
 
 1. Verify login-after-reboot and establish real authenticated device enrollment. The branded Desktop's Code entry connected to the same Studio host and completed a read-only task. The host and both gateways are installed as Mac LaunchAgents in a durable checkout, and all three passed health and crash restart checks. The new web app currently uses a small custom task interface; integration of the shared CodeAgentsApp surface remains open.
 2. Run the host/gateway integrations with Unix socket access and a second physical device. The local web UI and HTTP/WebSocket preview component have been exercised separately. Preview registration must still be wired to durable workspace ownership and private HTTPS ingress.
-3. Install and pin Gitea privately on Studio; prove real SSH key isolation and protected immutable refs. API readback and a temporary bare Git repository do not establish Gitea server enforcement.
+3. Integrate the privately installed Gitea service with the trusted host, then complete the remaining live handoff gates. The Mac pilot proved repository key isolation, revocation, and protected-ref enforcement on Gitea 28.3.0. Backup/restore, host-managed enrollment intent, and a real ownership transfer remain open.
 4. Implement native/Dev Container environment recipes and readiness, then the complete **Run here**, **Work here**, and **Return to Studio** transactions and conflict review.
 5. Finish Windows secure named pipes, process ownership, filesystem compatibility, and installer validation. Current host/runtime reject unsupported Windows execution.
 6. Add Codex App Server integration, provider continuation, child-browser control, coordinated backup/restore, retention, update draining, signed installers, and the fault-injection/two-device pilot suite.
 
-No production deployment, Gitea installation, provider credential migration, signed release, or automatic device handoff has been completed or claimed.
+No production deployment, provider credential migration, signed release, or automatic device handoff has been completed or claimed.

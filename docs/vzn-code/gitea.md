@@ -28,7 +28,7 @@ API readback verifies configuration, **not enforcement**. In particular, creatio
 
 Perform these steps on a disposable pilot before enabling private handoff. Record the tested Gitea version, Git versions on both operating systems, configuration digest, instance/repository IDs, public host-key fingerprint, timestamp, exact commands, exit statuses, and before/after ref IDs in the compatibility record. Never record provisioning tokens or private keys.
 
-1. Install and supervise the pinned Gitea release independently of Desktop, with local storage outside synchronized folders and its own SQLite database. Use the documented macOS package deployment path; this change has not run installation commands.
+1. Install and supervise the pinned Gitea release independently of Desktop, with local storage outside synchronized folders and its own SQLite database. Use the documented macOS package deployment path.
 2. Confirm private HTTPS and built-in SSH reachability only through the approved private network, valid TLS, pinned SSH host key, disabled public signup and anonymous repository access, and automatic service restart. Create a dedicated automation identity limited to managed repositories and required API operations. Token endpoint scopes alone do not establish repository isolation.
 3. Create two disposable private projects, A and B. Repeating enrollment must return the same repository ID. Attempt enrollment over an unrelated existing repository and confirm rejection without changes.
 4. Generate separate project-specific child keys. Register A's write key and a separate A read-only key. Keep B's key different. Verify the adapter refuses reusing A's key under B or another device identity. Restart the host and repeat this check to prove durable claims.
@@ -62,7 +62,7 @@ pnpm --filter @vzn-code/gitea test
 pnpm --filter @vzn-code/gitea typecheck
 ```
 
-Tests run using Node's built-in test runner and type stripping; there are no runtime or test dependency additions. Typechecking uses the workspace TypeScript compiler. Offline coverage exercises enrollment idempotency and collisions, private-repository guards, key ownership and read-only checks, pagination, cross-project claim rejection, confirmed revocation, interrupted creation, branch-policy drift, and redacted failures. It does not prove Gitea's live SSH behavior, service configuration, backup integrity, or cross-device checkpoint transfer.
+Tests run using Node's built-in test runner and type stripping; there are no runtime or test dependency additions. Typechecking uses the workspace TypeScript compiler. Offline coverage exercises enrollment idempotency and collisions, private-repository guards, key ownership and read-only checks, pagination, cross-project claim rejection, confirmed revocation, interrupted creation, branch-policy drift, and redacted failures. The separate Mac pilot in [verification.md](verification.md) proved selected live SSH and protection behavior. Backup integrity and cross-device checkpoint transfer remain unverified.
 
 ## API references
 
