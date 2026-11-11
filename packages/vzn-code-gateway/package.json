@@ -1,0 +1,17 @@
+{
+  "name": "@vzn-code/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test src/*.test.ts",
+    "start": "node --experimental-strip-types src/cli.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@vzn-care/code-host": "workspace:*"
+  },
+  "engines": {
+    "node": ">=26.0.0"
+  }
+}

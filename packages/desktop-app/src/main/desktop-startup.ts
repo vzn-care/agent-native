@@ -1,6 +1,11 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 
+import {
+  DESKTOP_PRODUCT_IDENTITY,
+  type DesktopProductIdentity,
+} from "@shared/product-identity";
+
 import { resolveDesktopUserDataDirectoryName } from "./ipc/update-policy.js";
 
 export interface DesktopStartupDependencies {
@@ -8,6 +13,7 @@ export interface DesktopStartupDependencies {
   version: string;
   appDataPath: string;
   defaultUserDataPath: string;
+  productIdentity?: DesktopProductIdentity | null;
   pathExists?: (directoryPath: string) => boolean;
   requestedUserDataPath?: string;
   createDirectory: (directoryPath: string) => void;
@@ -70,6 +76,7 @@ export function initializeDesktopStartup({
   version,
   appDataPath,
   defaultUserDataPath,
+  productIdentity = DESKTOP_PRODUCT_IDENTITY,
   pathExists,
   requestedUserDataPath,
   createDirectory,
@@ -79,10 +86,11 @@ export function initializeDesktopStartup({
   logError,
   logWarning,
 }: DesktopStartupDependencies): void {
-  const isolatedUserDataDirectoryName = resolveDesktopUserDataDirectoryName(
-    isPackaged,
-    version,
-  );
+  const isolatedUserDataDirectoryName = productIdentity
+    ? isPackaged
+      ? productIdentity.userDataDirectory
+      : productIdentity.developmentUserDataDirectory
+    : resolveDesktopUserDataDirectoryName(isPackaged, version);
   const stableUserDataPath =
     isPackaged && !requestedUserDataPath && !isolatedUserDataDirectoryName
       ? resolveStableUserDataPath(appDataPath, defaultUserDataPath, pathExists)
@@ -102,7 +110,7 @@ export function initializeDesktopStartup({
       createDirectory(isolatedUserDataPath);
       setUserDataPath(isolatedUserDataPath);
     } catch (error) {
-      if (isPackaged) {
+      if (isPackaged || productIdentity) {
         logError(
           "[main] failed to isolate packaged userData directory:",
           error,

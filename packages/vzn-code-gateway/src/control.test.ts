@@ -1,0 +1,176 @@
+import assert from "node:assert/strict";
+import { randomBytes, randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+import { HostClient } from "../../vzn-code-host/src/client.ts";
+import { startHost } from "../../vzn-code-host/src/service.ts";
+import { startControlGateway } from "./control.ts";
+
+test("gateway rejects unsafe credentials and non-TLS remote origins before opening a listener", async () => {
+  const valid = {
+    socketPath: "/unused.sock",
+    token: randomBytes(32).toString("base64url"),
+    allowedOrigins: ["http://localhost:3000"],
+  };
+  await assert.rejects(
+    startControlGateway({ ...valid, token: "short" }),
+    /random token/,
+  );
+  await assert.rejects(
+    startControlGateway({
+      ...valid,
+      allowedOrigins: ["http://studio.example"],
+    }),
+    /HTTPS/,
+  );
+  await assert.rejects(
+    startControlGateway({
+      ...valid,
+      publicOrigin: "https://studio.example/path",
+    }),
+    /without a path/,
+  );
+});
+
+test("HTTP admission rejects unauthenticated origins and disabled mutations before touching host IPC", async (t) => {
+  const origin = "http://localhost:3000";
+  const token = randomBytes(32).toString("base64url");
+  const gateway = await startControlGateway({
+    socketPath: "/unavailable-vzn-host.sock",
+    token,
+    allowedOrigins: [origin],
+  });
+  t.after(() => gateway.close());
+  const call = (body: object, overrides: Record<string, string> = {}) =>
+    fetch(`${gateway.url}/v1/rpc`, {
+      method: "POST",
+      headers: {
+        Origin: origin,
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        ...overrides,
+      },
+      body: JSON.stringify({
+        protocolVersion: 1,
+        requestId: "browser-1",
+        ...body,
+      }),
+    });
+  assert.equal(
+    (await call({ kind: "health" }, { Authorization: "Bearer wrong" })).status,
+    401,
+  );
+  const forbidden = await call(
+    { kind: "health" },
+    { Origin: "https://untrusted.example" },
+  );
+  assert.equal(forbidden.status, 403);
+  assert.equal(forbidden.headers.get("access-control-allow-origin"), null);
+  const mutation = await call({
+    kind: "register-project",
+    operationId: "enroll",
+    projectId: "untrusted",
+    root: "/tmp",
+    repository: "bad",
+  });
+  assert.equal(mutation.status, 403);
+  assert.equal((await mutation.json()).error.code, "FORBIDDEN");
+  const capability = await call({
+    kind: "hello",
+    capabilities: ["task-control"],
+  });
+  assert.equal(capability.status, 403);
+  assert.equal((await capability.json()).error.code, "FORBIDDEN");
+  const unavailable = await call({ kind: "health" });
+  assert.equal(unavailable.status, 503);
+  assert.equal((await unavailable.json()).error.code, "HOST_UNAVAILABLE");
+});
+
+test("browser gateway reads the real IPC catalog and rejects cross-origin, unauthenticated, and root-registration requests", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "vzn-gw-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const host = await startHost(dir);
+  t.after(() => host.close());
+  const local = new HostClient(host.socketPath);
+  t.after(() => local.close());
+  await local.request({ kind: "hello", capabilities: ["project-catalog"] });
+  await local.request({
+    kind: "register-project",
+    operationId: randomUUID(),
+    projectId: "pilot",
+    root: dir,
+    repository: "gitea:pilot",
+  });
+  const token = randomBytes(32).toString("base64url");
+  const origin = "http://localhost:3000";
+  const gateway = await startControlGateway({
+    socketPath: host.socketPath,
+    token,
+    allowedOrigins: [origin],
+  });
+  t.after(() => gateway.close());
+  const call = (body: object, overrides: Record<string, string> = {}) =>
+    fetch(`${gateway.url}/v1/rpc`, {
+      method: "POST",
+      headers: {
+        Origin: origin,
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        ...overrides,
+      },
+      body: JSON.stringify({
+        protocolVersion: 1,
+        requestId: "browser-1",
+        ...body,
+      }),
+    });
+  const hello = await call({
+    kind: "hello",
+    capabilities: ["project-catalog"],
+  });
+  assert.equal(hello.status, 200);
+  assert.equal((await hello.json()).result.protocolVersion, 1);
+  const catalog = await call({ kind: "list-projects" });
+  assert.equal(catalog.status, 200);
+  assert.equal(catalog.headers.get("access-control-allow-origin"), origin);
+  const body = await catalog.json();
+  assert.equal(body.requestId, "browser-1");
+  assert.equal(body.result.projects.length, 1);
+  assert.equal(body.result.projects[0].id, "pilot");
+  assert.equal(
+    (await call({ kind: "list-projects" }, { Authorization: "Bearer invalid" }))
+      .status,
+    401,
+  );
+  assert.equal(
+    (
+      await call(
+        { kind: "list-projects" },
+        { Origin: "https://attacker.example" },
+      )
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await call({
+        kind: "register-project",
+        operationId: "evil",
+        projectId: "untrusted",
+        root: dir,
+        repository: "bad",
+      })
+    ).status,
+    403,
+  );
+  const unchanged = (await local.request({ kind: "list-projects" })) as {
+    projects: { id: string }[];
+  };
+  assert.deepEqual(
+    unchanged.projects.map((project) => project.id),
+    ["pilot"],
+  );
+});

@@ -15,7 +15,10 @@ import {
   isDurableBackgroundFlagExplicitlyDisabled,
 } from "../agent/durable-background.js";
 import { getAppConfig } from "../app-config/index.js";
-import type { AgentNativeWorkspaceRootPage } from "../config.js";
+import {
+  normalizeBuildConcurrency,
+  type AgentNativeWorkspaceRootPage,
+} from "../config.js";
 import {
   INTEGRATION_RECOVERY_RUNTIME_MARKER,
   INTEGRATION_RETRY_SWEEP_PATH,
@@ -264,6 +267,8 @@ export interface WorkspaceDeployOptions {
   workspaceRoot?: string;
   buildOnly?: boolean;
   preset?: WorkspaceDeployPreset;
+  /** Overrides the CLI flag and resolved workspace configuration. */
+  concurrency?: number | "auto";
   /** @internal Override process execution in tests. */
   execFile?: typeof execFileSync;
 }
@@ -295,6 +300,11 @@ export async function runWorkspaceDeploy(
   const rawArgs = opts.args ?? [];
   const args = new Set(rawArgs);
   const buildOnly = opts.buildOnly ?? args.has("--build-only");
+  const concurrency = workspaceBuildConcurrency(
+    opts.concurrency,
+    rawArgs,
+    config.deployment?.workspace?.buildConcurrency,
+  );
 
   const apps = fs
     .readdirSync(appsDir, { withFileTypes: true })
@@ -356,7 +366,6 @@ export async function runWorkspaceDeploy(
     `[workspace-deploy] Building ${apps.length} app(s) for preset=${preset}`,
   );
 
-  const concurrency = workspaceBuildConcurrency();
   const runBuild: BuildRunner = opts.execFile ?? spawnBuild;
   await runWithConcurrency(apps, concurrency, (app) =>
     buildOneApp(
@@ -548,19 +557,39 @@ type BuildRunner = (
   options: { cwd: string; env: NodeJS.ProcessEnv; stdio: "inherit" | "pipe" },
 ) => unknown;
 
-function workspaceBuildConcurrency(): number {
-  const raw = process.env.AGENT_NATIVE_DEPLOY_CONCURRENCY?.trim();
-  if (raw) {
-    const parsed = Number(raw);
-    if (!Number.isInteger(parsed) || parsed < 1) {
-      throw new Error(
-        `AGENT_NATIVE_DEPLOY_CONCURRENCY must be a positive integer, got "${raw}"`,
-      );
-    }
-    return parsed;
-  }
-  // Each app build can use 1-2 GB, so stay well under typical CI memory limits.
-  return Math.min(3, os.availableParallelism());
+function workspaceBuildConcurrency(
+  option: WorkspaceDeployOptions["concurrency"],
+  args: string[],
+  configured: number | "auto" | undefined,
+): number {
+  const flagIndex = args.findIndex(
+    (arg) => arg === "--concurrency" || arg.startsWith("--concurrency="),
+  );
+  const flag =
+    flagIndex < 0
+      ? undefined
+      : args[flagIndex] === "--concurrency"
+        ? (args[flagIndex + 1] ?? "")
+        : args[flagIndex].slice("--concurrency=".length);
+  const value =
+    normalizeBuildConcurrency(option, "concurrency") ??
+    normalizeBuildConcurrency(flag, "--concurrency") ??
+    configured ??
+    1;
+  if (value !== "auto") return value;
+
+  // App builds peaked near 3.7 GiB in the VZN workspace. Respect container
+  // limits: totalmem() alone reports the host's memory inside a cgroup.
+  const total = os.totalmem();
+  const constrained = process.constrainedMemory();
+  const memory = constrained > 0 ? Math.min(total, constrained) : total;
+  return Math.max(
+    1,
+    Math.min(
+      os.availableParallelism() - 1,
+      Math.floor(memory / (4 * 1024 ** 3)),
+    ),
+  );
 }
 
 async function runWithConcurrency<T>(

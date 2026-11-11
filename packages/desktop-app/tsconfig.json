@@ -25,6 +25,7 @@
     "src/**/*",
     "shared/**/*",
     "electron.vite.config.ts",
+    "electron.vite.vzn.config.ts",
     "index.html"
   ]
 }

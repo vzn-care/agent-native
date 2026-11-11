@@ -515,6 +515,30 @@ describe("agent-native config environment aliases", () => {
     ).toThrow(/frameworkRoutePrefix must be a single absolute path segment/);
   });
 
+  it("reads workspace build concurrency through both config env names", () => {
+    expect(
+      readAgentNativeConfigEnv({
+        AGENT_NATIVE_CONFIG_DEPLOYMENT_WORKSPACE_BUILD_CONCURRENCY: "4",
+      }).deployment?.workspace?.buildConcurrency,
+    ).toBe(4);
+    expect(
+      readAgentNativeConfigEnv({
+        AGENT_NATIVE_DEPLOY_CONCURRENCY: "auto",
+      }).deployment?.workspace?.buildConcurrency,
+    ).toBe("auto");
+  });
+
+  it.each([0, -1, 1.5, "", "invalid", null, true, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid workspace build concurrency %s",
+    (value) => {
+      expect(() =>
+        normalizeAgentNativeConfig({
+          deployment: { workspace: { buildConcurrency: value } },
+        }),
+      ).toThrow(/buildConcurrency must be a positive integer or "auto"/);
+    },
+  );
+
   it("maps config paths to deterministic environment names", () => {
     expect(agentNativeConfigEnvName([])).toBe("AGENT_NATIVE_CONFIG");
     expect(agentNativeConfigEnvName(["runtime"])).toBe(

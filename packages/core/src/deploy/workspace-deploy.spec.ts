@@ -1687,19 +1687,107 @@ describe("workspace deploy", () => {
     expect(execFile).toHaveBeenCalledTimes(1);
   });
 
-  it("builds apps in parallel up to AGENT_NATIVE_DEPLOY_CONCURRENCY", async () => {
-    const apps = ["alpha", "beta", "gamma"];
-    for (const app of apps) makeWorkspaceApp(tmpDir, app);
-    vi.stubEnv("AGENT_NATIVE_DEPLOY_CONCURRENCY", "2");
-    let inFlight = 0;
-    let maxInFlight = 0;
-    const asyncBuild = vi.fn(async (_cmd: string, args: string[]) => {
-      maxInFlight = Math.max(maxInFlight, ++inFlight);
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      writeAppBuildOutput(tmpDir, String(args[1]));
-      inFlight--;
-    });
+  it.each([
+    { source: "sequential default", expected: 1 },
+    { source: "workspace config", configured: 3, expected: 3 },
+    { source: "legacy env over config", configured: 1, env: "2", expected: 2 },
+    {
+      source: "canonical env over alias",
+      configured: 1,
+      env: "2",
+      canonical: "3",
+      expected: 3,
+    },
+    {
+      source: "equals flag over config",
+      configured: 3,
+      args: ["--concurrency=2"],
+      expected: 2,
+    },
+    {
+      source: "separate flag over env",
+      configured: 3,
+      env: "2",
+      args: ["--concurrency", "1"],
+      expected: 1,
+    },
+    {
+      source: "API option over flag",
+      configured: 1,
+      env: "3",
+      args: ["--concurrency=1"],
+      option: 2,
+      expected: 2,
+    },
+  ])(
+    "bounds actual app builds using $source",
+    async (scenario: {
+      source: string;
+      configured?: number;
+      env?: string;
+      canonical?: string;
+      args?: string[];
+      option?: number;
+      expected: number;
+    }) => {
+      const apps = ["alpha", "beta", "gamma"];
+      for (const app of apps) makeWorkspaceApp(tmpDir, app);
+      fs.writeFileSync(
+        path.join(tmpDir, "agent-native.json"),
+        JSON.stringify({
+          deployment: { workspace: { buildConcurrency: scenario.configured } },
+        }),
+      );
+      vi.stubEnv("AGENT_NATIVE_DEPLOY_CONCURRENCY", scenario.env);
+      vi.stubEnv(
+        "AGENT_NATIVE_CONFIG_DEPLOYMENT_WORKSPACE_BUILD_CONCURRENCY",
+        scenario.canonical,
+      );
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const asyncBuild = vi.fn(async (_cmd: string, args: string[]) => {
+        maxInFlight = Math.max(maxInFlight, ++inFlight);
+        await Promise.resolve();
+        writeAppBuildOutput(tmpDir, String(args[1]));
+        inFlight--;
+      });
+      try {
+        await runWorkspaceDeploy({
+          workspaceRoot: tmpDir,
+          preset: "netlify",
+          buildOnly: true,
+          args: scenario.args,
+          concurrency: scenario.option,
+          execFile: asyncBuild as unknown as typeof execFileSync,
+        });
+      } finally {
+        vi.unstubAllEnvs();
+      }
+      expect(maxInFlight).toBe(scenario.expected);
+      for (const app of apps) {
+        expect(
+          fs.existsSync(path.join(tmpDir, "dist", "_workspace_static", app)),
+        ).toBe(true);
+      }
+    },
+  );
 
+  it("bounds auto builds by container memory even on a larger host", async () => {
+    for (const app of ["alpha", "beta", "gamma"]) makeWorkspaceApp(tmpDir, app);
+    vi.stubEnv("AGENT_NATIVE_DEPLOY_CONCURRENCY", "auto");
+    const cores = vi.spyOn(os, "availableParallelism").mockReturnValue(8);
+    const memory = vi.spyOn(os, "totalmem").mockReturnValue(64 * 1024 ** 3);
+    const container = vi
+      .spyOn(process, "constrainedMemory")
+      .mockReturnValue(8 * 1024 ** 3);
+    let active = 0;
+    let peak = 0;
+    const asyncBuild = vi.fn(async (_cmd: string, args: string[]) => {
+      peak = Math.max(peak, ++active);
+      await Promise.resolve();
+      writeAppBuildOutput(tmpDir, String(args[1]));
+      active--;
+    });
     try {
       await runWorkspaceDeploy({
         workspaceRoot: tmpDir,
@@ -1707,16 +1795,38 @@ describe("workspace deploy", () => {
         buildOnly: true,
         execFile: asyncBuild as unknown as typeof execFileSync,
       });
+      expect(peak).toBe(2);
     } finally {
+      cores.mockRestore();
+      memory.mockRestore();
+      container.mockRestore();
       vi.unstubAllEnvs();
     }
+  });
 
-    expect(maxInFlight).toBe(2);
-    for (const app of apps) {
-      expect(
-        fs.existsSync(path.join(tmpDir, "dist", "_workspace_static", app)),
-      ).toBe(true);
+  it("rejects invalid concurrency flags before deleting existing build output", async () => {
+    makeWorkspaceApp(tmpDir, "alpha");
+    fs.mkdirSync(path.join(tmpDir, "dist"));
+    const previous = path.join(tmpDir, "dist", "previous.txt");
+    fs.writeFileSync(previous, "existing artifact");
+    for (const args of [
+      ["--concurrency"],
+      ["--concurrency=0"],
+      ["--concurrency=2.5"],
+      ["--concurrency=unknown"],
+    ]) {
+      await expect(
+        runWorkspaceDeploy({
+          workspaceRoot: tmpDir,
+          preset: "netlify",
+          buildOnly: true,
+          args,
+          execFile: execFile as typeof execFileSync,
+        }),
+      ).rejects.toThrow(/--concurrency must be a positive integer or "auto"/);
+      expect(fs.readFileSync(previous, "utf8")).toBe("existing artifact");
     }
+    expect(execFile).not.toHaveBeenCalled();
   });
 
   it("waits for in-flight builds and reports every failure", async () => {

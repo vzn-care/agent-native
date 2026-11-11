@@ -122,7 +122,9 @@ import {
   type DesktopIdentitySettings,
   type DesktopIdentityMagicLinkRequest,
 } from "@shared/ipc-channels";
+import { DESKTOP_PRODUCT_IDENTITY } from "@shared/product-identity";
 import {
+  DESKTOP_ACCEPTED_DEEP_LINK_PROTOCOLS,
   DESKTOP_DEEP_LINK_PROTOCOL,
   DESKTOP_RELEASE_CHANNEL,
 } from "@shared/release-channel";
@@ -344,6 +346,13 @@ import { installWebviewNavigationListeners } from "./webview-navigation";
 import { installWindowDragController } from "./window-drag";
 import { loadDesktopWorkspaceApps } from "./workspace-apps.js";
 
+if (DESKTOP_PRODUCT_IDENTITY) {
+  app.setName(DESKTOP_PRODUCT_IDENTITY.productName);
+  if (process.platform === "win32") {
+    app.setAppUserModelId(DESKTOP_PRODUCT_IDENTITY.appId);
+  }
+}
+
 initializeDesktopStartup({
   isPackaged: app.isPackaged,
   version: app.getVersion(),
@@ -421,10 +430,9 @@ const desktopReleaseChannelMarker =
 app.userAgentFallback = `${app.userAgentFallback} AgentNativeDesktop/${app.getVersion()}${desktopSsoCanaryMarker}${desktopReleaseChannelMarker}`;
 
 const DEEP_LINK_PROTOCOL = DESKTOP_DEEP_LINK_PROTOCOL;
-const DESKTOP_DEEP_LINK_PROTOCOLS = new Set([
-  "agentnative",
-  "agentnative-nightly",
-]);
+const DESKTOP_DEEP_LINK_PROTOCOLS = new Set(
+  DESKTOP_ACCEPTED_DEEP_LINK_PROTOCOLS,
+);
 if (IS_DEV) {
   app.setAsDefaultProtocolClient(DEEP_LINK_PROTOCOL, process.execPath, [
     app.getAppPath(),
